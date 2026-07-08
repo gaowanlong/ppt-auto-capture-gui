@@ -52,7 +52,7 @@ fn gdi_enum() -> Result<Vec<MonitorInfo>> {
             let ms = &mut *(lp as *mut Vec<MonitorInfo>);
             let mut info = MONITORINFOEXW::default();
             info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
-            if GetMonitorInfoW(hmon, &mut info as *mut _ as *mut MONITORINFO).as_bool() {
+            if GetMonitorInfoW(hmon, &mut info as *mut _ as *mut MONITORINFO).0 != 0 {
                 let rc = info.monitorInfo.rcMonitor;
                 ms.push(MonitorInfo{hmonitor:hmon.0 as u64, adapter_name:String::new(),
                     output_name:String::from_utf16_lossy(&info.szDevice), description:"GDI".into(),
