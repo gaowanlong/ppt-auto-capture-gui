@@ -1,5 +1,5 @@
 use anyhow::Result;
-use windows::Win32::Foundation::{BOOL, HWND, RECT};
+use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::UI::WindowsAndMessaging::{
     SetWindowPos, SetForegroundWindow, ShowWindow, IsIconic, GetWindowRect,
     SWP_NOZORDER, SWP_SHOWWINDOW, SW_MAXIMIZE, SW_RESTORE,
@@ -12,9 +12,7 @@ pub fn move_window_to_monitor(hwnd: u64, mr: &Region) -> Result<()> {
         let mut r = RECT::default();
         GetWindowRect(h, &mut r)?;
         let (ww, wh) = (r.right-r.left, r.bottom-r.top);
-        let x = (mr.x + (mr.width as i32 - ww)/2).max(mr.x);
-        let y = (mr.y + (mr.height as i32 - wh)/2).max(mr.y);
-        SetWindowPos(h, HWND(0), x, y, ww, wh, SWP_NOZORDER | SWP_SHOWWINDOW)?;
+        SetWindowPos(h, HWND(0), mr.x, mr.y, ww, wh, SWP_NOZORDER | SWP_SHOWWINDOW)?;
         SetForegroundWindow(h);
     }
     Ok(())

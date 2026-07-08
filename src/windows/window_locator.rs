@@ -1,6 +1,10 @@
 use anyhow::{Context, Result};
-use windows::Win32::Foundation::*;
-use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::Win32::Foundation::{HWND, RECT};
+use windows::Win32::UI::WindowsAndMessaging::{
+    WNDENUMPROC, EnumWindows, GetWindowTextW, GetClassNameW,
+    GetWindowLongW, GetWindowRect, GetWindowThreadProcessId,
+    GWL_STYLE, WS_VISIBLE,
+};
 use crate::model::{WindowInfo, Region};
 
 pub fn enumerate_windows() -> Result<Vec<WindowInfo>> {
@@ -24,7 +28,6 @@ pub fn enumerate_windows() -> Result<Vec<WindowInfo>> {
             if !reg.is_valid() { return 1i32; }
             let mut pid: u32 = 0;
             let _ = GetWindowThreadProcessId(hwnd, Some(&mut pid));
-            // Compute is_powerpoint BEFORE moving title/class into struct
             let is_ppt = class.eq_ignore_ascii_case("screenClass")||title.contains("Slide Show");
             w.push(WindowInfo{
                 hwnd: hwnd.0 as u64, title, class_name:class, region:reg,
@@ -33,7 +36,8 @@ pub fn enumerate_windows() -> Result<Vec<WindowInfo>> {
             });
             1i32
         }
-        let cbf: WNDENUMPROC = std::mem::transmute(ep as extern "system" fn(_,_) -> i32);
+        let ptr: usize = ep as extern "system" fn(_,_) -> i32 as usize;
+        let cbf: WNDENUMPROC = std::mem::transmute(ptr);
         EnumWindows(cbf, &mut w as *mut _ as isize).ok().context("EnumWindows")?;
     }
     w.retain(|w| w.is_valid() && !w.title.is_empty());
