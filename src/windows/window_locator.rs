@@ -40,6 +40,6 @@ pub fn enumerate_windows() -> Result<Vec<WindowInfo>> {
         let ret = EnumWindows(Some(ep), &mut w as *mut _ as isize);
         if ret == 0 { return Err(anyhow::anyhow!("EnumWindows returned 0")); }
     }
-    w.retain(|x| x.is_valid() && !w.title.is_empty()&& !w.title.is_empty() !x.title.is_empty());
+    w.retain(|x| x.is_valid() && !x.title.is_empty());
     Ok(w)
 }
