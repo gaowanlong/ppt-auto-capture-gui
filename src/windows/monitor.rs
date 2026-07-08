@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use log::{info, warn};
-use windows::Win32::Foundation::*;
+use windows::Win32::Foundation::{BOOL, CloseHandle, FALSE, RECT, TRUE, IUnknown};
 use windows::Win32::Graphics::Direct3D::*;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::*;
@@ -75,7 +75,6 @@ pub fn enumerate_monitors() -> Result<Vec<MonitorInfo>> {
         adapter_index += 1;
     }
 
-    // GDI fallback to get HMONITOR handles using raw Win32 API
     let gdi_monitors = enumerate_monitors_gdi()?;
     for mon in &mut monitors {
         if let Some(gdi_mon) = gdi_monitors.iter().find(|gm| {
@@ -93,35 +92,23 @@ pub fn enumerate_monitors() -> Result<Vec<MonitorInfo>> {
 }
 
 fn detect_virtual_suspect(output_name: &str, adapter_name: &str, region: &Region, is_primary: bool) -> bool {
-    if is_primary {
-        return false;
-    }
-
+    if is_primary { return false; }
     let name_lower = output_name.to_lowercase();
     let adapter_lower = adapter_name.to_lowercase();
-
     let virtual_keywords = [
         "virtual", "dummy", "vga", "parsec", "teamviewer", "anydesk",
         "remote", "spacedesk", "duet", "airplay", "miracast", "idd",
         "usb display", "displaylink",
     ];
-
     for kw in &virtual_keywords {
-        if name_lower.contains(kw) || adapter_lower.contains(kw) {
-            return true;
-        }
+        if name_lower.contains(kw) || adapter_lower.contains(kw) { return true; }
     }
-
     let dummy_resolutions = [
         (1024, 768), (1280, 720), (1366, 768), (1920, 1080),
         (2560, 1440), (3840, 2160), (1600, 900), (1440, 900),
     ];
-
     let (w, h) = (region.width, region.height);
-    if dummy_resolutions.contains(&(w, h)) {
-        return true;
-    }
-
+    if dummy_resolutions.contains(&(w, h)) { return true; }
     false
 }
 
@@ -129,7 +116,6 @@ fn enumerate_monitors_gdi() -> Result<Vec<MonitorInfo>> {
     let mut monitors: Vec<MonitorInfo> = Vec::new();
 
     unsafe {
-        // Use raw function pointers for the enum callback
         extern "system" fn enum_proc(
             hmonitor: HMONITOR,
             _hdc: HDC,
@@ -151,18 +137,16 @@ fn enumerate_monitors_gdi() -> Result<Vec<MonitorInfo>> {
                 let dev_name = String::from_utf16_lossy(&info.szDevice);
                 let is_primary = (info.monitorInfo.dwFlags & MONITORINFOF_PRIMARY) != 0;
 
-                let region = Region::new(
-                    rc.left, rc.top,
-                    (rc.right - rc.left) as u32,
-                    (rc.bottom - rc.top) as u32,
-                );
-
                 monitors.push(MonitorInfo {
                     hmonitor: hmonitor.0 as u64,
                     adapter_name: String::new(),
                     output_name: dev_name,
-                    description: format!("GDI Monitor"),
-                    region,
+                    description: "GDI Monitor".into(),
+                    region: Region::new(
+                        rc.left, rc.top,
+                        (rc.right - rc.left) as u32,
+                        (rc.bottom - rc.top) as u32,
+                    ),
                     is_primary,
                     is_virtual_suspect: false,
                     output_index: 0,
