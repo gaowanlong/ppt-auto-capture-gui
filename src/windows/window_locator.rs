@@ -1,16 +1,18 @@
 use anyhow::{Context, Result};
-use windows::Win32::Foundation::{HWND, RECT};
-use windows::Win32::UI::WindowsAndMessaging::{
-    WNDENUMPROC, EnumWindows, GetWindowTextW, GetClassNameW,
-    GetWindowLongW, GetWindowRect, GetWindowThreadProcessId,
-    GWL_STYLE, WS_VISIBLE,
-};
+use windows::Win32::Foundation::HWND;
+use windows::Win32::UI::WindowsAndMessaging::{GetWindowTextW, GetClassNameW, GetWindowLongW, GetWindowRect, GetWindowThreadProcessId, GWL_STYLE};
 use crate::model::{WindowInfo, Region};
+
+// Raw FFI — BOOL return is i32 at the ABI level, avoids windows crate's WNDENUMPROC type
+#[link(name = "user32")]
+extern "system" {
+    fn EnumWindows(lpEnumFunc: Option<unsafe extern "system" fn(HWND, isize) -> i32>, lParam: isize) -> i32;
+}
 
 pub fn enumerate_windows() -> Result<Vec<WindowInfo>> {
     let mut w = Vec::new();
     unsafe {
-        unsafe extern "system" fn ep(hwnd: HWND, lp: isize) -> i32 {
+        extern "system" fn ep(hwnd: HWND, lp: isize) -> i32 {
             let w = &mut *(lp as *mut Vec<WindowInfo>);
             let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
             if style & 0x10000000 == 0 { return 1i32; }
@@ -22,7 +24,7 @@ pub fn enumerate_windows() -> Result<Vec<WindowInfo>> {
             let mut cb = [0u16; 256];
             let cl = GetClassNameW(hwnd, &mut cb);
             let class = if cl > 0 { String::from_utf16_lossy(&cb[..cl as usize]) } else { String::new() };
-            let mut r = RECT::default();
+            let mut r = windows::Win32::Foundation::RECT::default();
             GetWindowRect(hwnd, &mut r);
             let reg = Region::new(r.left,r.top,(r.right-r.left)as u32,(r.bottom-r.top)as u32);
             if !reg.is_valid() { return 1i32; }
@@ -36,9 +38,8 @@ pub fn enumerate_windows() -> Result<Vec<WindowInfo>> {
             });
             1i32
         }
-        let ptr: usize = ep as extern "system" fn(_,_) -> i32 as usize;
-        let cbf: WNDENUMPROC = std::mem::transmute(ptr);
-        EnumWindows(cbf, &mut w as *mut _ as isize).ok().context("EnumWindows")?;
+        let ret = EnumWindows(Some(ep), &mut w as *mut _ as isize);
+        if ret == 0 { return Err(anyhow::anyhow!("EnumWindows returned 0")); }
     }
     w.retain(|w| w.is_valid() && !w.title.is_empty());
     Ok(w)

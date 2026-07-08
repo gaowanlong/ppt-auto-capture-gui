@@ -1,12 +1,17 @@
 use anyhow::{Context, Result};
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Gdi::{
-    HMONITOR, HDC, EnumDisplayMonitors, GetMonitorInfoW,
-    MONITORINFOEXW, MONITORINFO, MONITORENUMPROC,
+    HMONITOR, HDC, GetMonitorInfoW, MONITORINFOEXW, MONITORINFO,
 };
 use windows::Win32::Graphics::Dxgi::{IDXGIFactory1, IDXGIAdapter, IDXGIOutput, CreateDXGIFactory1};
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use crate::model::{MonitorInfo, Region};
+
+// Raw FFI for EnumDisplayMonitors — avoids windows crate's MONITORENUMPROC type
+#[link(name = "user32")]
+extern "system" {
+    fn EnumDisplayMonitors(hdc: Option<HDC>, lprcClip: *const RECT, lpfnEnum: Option<unsafe extern "system" fn(HMONITOR, HDC, *mut RECT, isize) -> i32>, dwData: isize) -> i32;
+}
 
 pub fn enumerate_monitors() -> Result<Vec<MonitorInfo>> {
     let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
@@ -32,6 +37,7 @@ pub fn enumerate_monitors() -> Result<Vec<MonitorInfo>> {
             ai += 1;
         }
     }
+    // GDI enumeration via raw FFI
     let gdi = gdi_enum()?;
     for m in &mut ms {
         if let Some(g) = gdi.iter().find(|g| g.region.x==m.region.x && g.region.y==m.region.y) {
@@ -44,7 +50,7 @@ pub fn enumerate_monitors() -> Result<Vec<MonitorInfo>> {
 fn gdi_enum() -> Result<Vec<MonitorInfo>> {
     let mut ms = Vec::new();
     unsafe {
-        unsafe extern "system" fn ep(hmon: HMONITOR, _: HDC, _: *const std::ffi::c_void, lp: isize) -> i32 {
+        extern "system" fn ep(hmon: HMONITOR, _: HDC, _: *mut RECT, lp: isize) -> i32 {
             let ms = &mut *(lp as *mut Vec<MonitorInfo>);
             let mut info = MONITORINFOEXW::default();
             info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
@@ -57,12 +63,12 @@ fn gdi_enum() -> Result<Vec<MonitorInfo>> {
             }
             1i32
         }
-        let ptr: usize = ep as extern "system" fn(_,_,_,_) -> i32 as usize;
-        let cb: MONITORENUMPROC = std::mem::transmute(ptr);
-        EnumDisplayMonitors(None, None, cb, &mut ms as *mut _ as isize).ok().context("EnumDisplayMonitors")?;
+        let ret = EnumDisplayMonitors(None, std::ptr::null(), Some(ep), &mut ms as *mut _ as isize);
+        if ret == 0 { return Err(anyhow::anyhow!("EnumDisplayMonitors returned 0")); }
     }
     Ok(ms)
 }
-pub fn find_monitor(hmonitor: u64) -> Result<Option<MonitorInfo>> { 
+
+pub fn find_monitor(hmonitor: u64) -> Result<Option<MonitorInfo>> {
     Ok(enumerate_monitors()?.into_iter().find(|m| m.hmonitor == hmonitor))
 }
