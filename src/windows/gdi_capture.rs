@@ -1,6 +1,8 @@
 use anyhow::Result;
-use windows::Win32::Foundation::*;
-use windows::Win32::Graphics::Gdi::*;
+use windows::Win32::Graphics::Gdi::{
+    HDC, GetDC, ReleaseDC, CreateCompatibleDC, DeleteDC, CreateCompatibleBitmap,
+    SelectObject, DeleteObject, BitBlt, GetDIBits, BITMAPINFO, BITMAPINFOHEADER,
+};
 use crate::model::{Frame, MonitorInfo, Region};
 
 pub struct GdiCapturer {
@@ -23,9 +25,9 @@ impl GdiCapturer {
             let mut bi = BITMAPINFO::default();
             bi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
             bi.bmiHeader.biWidth = w as i32; bi.bmiHeader.biHeight = -(h as i32);
-            bi.bmiHeader.biPlanes = 1; bi.bmiHeader.biBitCount = 32; bi.bmiHeader.biCompression = 0; // BI_RGB
+            bi.bmiHeader.biPlanes = 1; bi.bmiHeader.biBitCount = 32; bi.bmiHeader.biCompression = 0;
             let mut data = vec![0u8; (w * h * 4) as usize];
-            GetDIBits(mdc, bmp, 0, h, Some(data.as_mut_ptr() as *mut _), &mut bi, 0); // DIB_RGB_COLORS=0
+            GetDIBits(mdc, bmp, 0, h, Some(data.as_mut_ptr() as *mut _), &mut bi, 0);
             let _ = DeleteObject(bmp); let _ = ReleaseDC(None, sdc); let _ = DeleteDC(mdc);
             self.frame_index += 1;
             Ok(Frame::new(data, w, h, w*4, self.frame_index, now_ms()))

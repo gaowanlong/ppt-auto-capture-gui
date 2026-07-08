@@ -1,15 +1,14 @@
 use anyhow::{Context, Result};
 use log::{info, warn};
-use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL};
 use windows::Win32::Graphics::Direct3D11::{
-    ID3D11Device, ID3D11DeviceContext, D3D11CreateDevice, D3D11_CREATE_DEVICE_FLAG, D3D11_SDK_VERSION,
+    ID3D11Device, ID3D11DeviceContext, D3D11CreateDevice,
+    D3D11_CREATE_DEVICE_FLAG, D3D11_SDK_VERSION,
 };
 use windows::Win32::Graphics::Dxgi::{
     IDXGIDevice, IDXGIAdapter, IDXGIOutput, IDXGIOutput1, IDXGIOutputDuplication,
     IDXGIResource, IDXGISurface1, DXGI_OUTDUPL_FRAME_INFO, DXGI_SURFACE_DESC,
-    DXGI_MAPPED_RECT,
-    DXGI_ERROR_WAIT_TIMEOUT, DXGI_ERROR_ACCESS_LOST,
+    DXGI_MAPPED_RECT, DXGI_ERROR_WAIT_TIMEOUT, DXGI_ERROR_ACCESS_LOST,
 };
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows::core::IUnknown;
@@ -27,7 +26,7 @@ impl DxgiCapturer {
     pub fn new() -> Self { Self { device: None, context: None, duplication: None, monitor_info: None, frame_index: 0 } }
 
     pub fn initialize(&mut self, monitor: &MonitorInfo) -> Result<()> {
-        unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok(); }
+        let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
         let mut dev: Option<ID3D11Device> = None;
         let mut ctx: Option<ID3D11DeviceContext> = None;
         unsafe {
@@ -41,12 +40,10 @@ impl DxgiCapturer {
         let device = dev.context("device")?;
         let context = ctx.context("context")?;
 
-        // COM casts via transmute_copy (both implement IUnknown with same vtable layout)
+        // COM interface casts via transmute_copy (same COM vtable base)
         let dxgi_device: IDXGIDevice = unsafe { std::mem::transmute_copy(&device) };
         let adapter = unsafe { dxgi_device.GetAdapter() }.context("GetAdapter")?;
         let output = find_output(&adapter, monitor)?;
-
-        // Cast output->output1, then device->IUnknown for DuplicateOutput
         let output1: IDXGIOutput1 = unsafe { std::mem::transmute_copy(&output) };
         let unknown: IUnknown = unsafe { std::mem::transmute_copy(&device) };
 
@@ -67,24 +64,23 @@ impl DxgiCapturer {
         match unsafe { dup.AcquireNextFrame(timeout_ms, &mut fi, &mut resource) } {
             Ok(()) => {}
             Err(e) => {
-                if e.0 == DXGI_ERROR_WAIT_TIMEOUT { return Ok(None); }
-                if e.0 == DXGI_ERROR_ACCESS_LOST { return Err(anyhow::anyhow!("DXGI access lost")); }
+                let hr = e.code(); // returns HRESULT
+                if hr == DXGI_ERROR_WAIT_TIMEOUT { return Ok(None); }
+                if hr == DXGI_ERROR_ACCESS_LOST { return Err(anyhow::anyhow!("DXGI access lost")); }
                 return Err(anyhow::anyhow!("AcquireNextFrame: {:?}", e));
             }
         }
-        let resource = resource.context("no resource")?;
-        // Cast resource to surface via raw transmute (same COM base)
-        let surface: IDXGISurface1 = unsafe { std::mem::transmute_copy(&resource) };
+        let r = resource.context("no resource")?;
+        let surface: IDXGISurface1 = unsafe { std::mem::transmute_copy(&r) };
         let mut sd = DXGI_SURFACE_DESC::default();
         unsafe { surface.GetDesc(&mut sd).ok(); }
-        // Map for CPU readback
         let mut mapped = DXGI_MAPPED_RECT::default();
         unsafe { surface.Map(&mut mapped, 1).ok().context("Map")?; }
-        let w = sd.Width; let h = sd.Height;
+        let (w, h) = (sd.Width, sd.Height);
         let data = unsafe {
             std::slice::from_raw_parts(mapped.pBits, (mapped.Pitch * h) as usize)
         }.to_vec();
-        unsafe { surface.Unmap().ok(); }
+        unsafe { surface.Unmap().ok(); } // Unmap() takes 0 args
         if unsafe { dup.ReleaseFrame().is_err() } { warn!("ReleaseFrame"); }
         self.frame_index += 1;
         Ok(Some(Frame::new(data, w, h, mapped.Pitch, self.frame_index, now_ms())))

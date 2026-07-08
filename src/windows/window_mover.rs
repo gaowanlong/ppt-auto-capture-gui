@@ -1,7 +1,9 @@
 use anyhow::Result;
-use log::info;
-use windows::Win32::Foundation::*;
-use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::Win32::Foundation::{HWND, RECT, GetWindowRect};
+use windows::Win32::UI::WindowsAndMessaging::{
+    SetWindowPos, SetForegroundWindow, ShowWindow, IsIconic,
+    SWP_NOZORDER, SWP_SHOWWINDOW, SW_MAXIMIZE, SW_RESTORE,
+};
 use crate::model::Region;
 
 pub fn move_window_to_monitor(hwnd: u64, mr: &Region) -> Result<()> {
