@@ -1,5 +1,4 @@
 use eframe::egui;
-use egui::*;
 use log::{error, info};
 
 use crossbeam_channel::{Receiver, Sender};
@@ -36,18 +35,11 @@ pub struct PptAutoCaptureApp {
 }
 
 #[derive(PartialEq)]
-enum Tab {
-    Dashboard,
-    Source,
-    Display,
-    Settings,
-    Output,
-}
+enum Tab { Dashboard, Source, Display, Settings, Output }
 
 impl PptAutoCaptureApp {
     pub fn new() -> Self {
         let config = AppConfig::load();
-
         let mut app = Self {
             config: config.clone(),
             dashboard: DashboardPanel::new(),
@@ -55,59 +47,38 @@ impl PptAutoCaptureApp {
             display_panel: DisplayPanel::new(),
             settings_panel: SettingsPanel::new(),
             output_panel: OutputPanel::new(),
-            worker: None,
-            cmd_tx: None,
-            event_rx: None,
-            monitors: Vec::new(),
-            windows: Vec::new(),
+            worker: None, cmd_tx: None, event_rx: None,
+            monitors: Vec::new(), windows: Vec::new(),
             active_tab: Tab::Dashboard,
-            pending_start: false,
-            pending_pause: false,
-            pending_stop: false,
-            pending_resume: false,
+            pending_start: false, pending_pause: false, pending_stop: false, pending_resume: false,
             output_dir: config.output_dir.clone(),
-            recovery_available: false,
-            recovery_slides: 0,
-            recovery_accepted: false,
-            recovery_declined: false,
+            recovery_available: false, recovery_slides: 0,
+            recovery_accepted: false, recovery_declined: false,
         };
-
         app.display_panel.selected_hmonitor = config.last_monitor_hmonitor;
         app.display_panel.selected_description = config.last_monitor_description.clone();
         app.source_panel.selected_hwnd = config.last_window_hwnd;
         app.source_panel.selected_title = config.last_window_title.clone();
         app.check_recovery();
-
         app
     }
 
     fn check_recovery(&mut self) {
-        let out_dir = std::path::Path::new(&self.output_dir);
-        match detect_incomplete_session(out_dir) {
-            Ok(Some(records)) => {
-                self.recovery_available = true;
-                self.recovery_slides = records.len() as u32;
-                info!("Incomplete session detected with {} slides", self.recovery_slides);
-            }
-            Ok(None) => self.recovery_available = false,
-            Err(e) => {
-                error!("Error checking for recovery: {}", e);
-                self.recovery_available = false;
-            }
+        if let Ok(Some(records)) = detect_incomplete_session(std::path::Path::new(&self.output_dir)) {
+            self.recovery_available = true;
+            self.recovery_slides = records.len() as u32;
+            info!("Recovery: {} slides", self.recovery_slides);
         }
     }
 
     fn start_capture(&mut self) {
-        info!("Starting capture worker");
+        info!("Starting capture");
         let worker = CaptureWorker::new();
         self.event_rx = Some(worker.event_rx());
         self.cmd_tx = Some(worker.command_tx());
-
         let source = CaptureSource::new(
-            self.source_panel.selected_hwnd,
-            self.source_panel.selected_title.clone(),
-            self.display_panel.selected_hmonitor,
-            self.display_panel.selected_description.clone(),
+            self.source_panel.selected_hwnd, self.source_panel.selected_title.clone(),
+            self.display_panel.selected_hmonitor, self.display_panel.selected_description.clone(),
         );
         let _ = self.cmd_tx.as_ref().map(|tx| tx.send(WorkerCommand::Start(source)));
         self.worker = Some(worker);
@@ -116,25 +87,12 @@ impl PptAutoCaptureApp {
         self.dashboard.monitor_description = self.display_panel.selected_description.clone();
     }
 
-    fn pause_capture(&mut self) {
-        if let Some(ref tx) = self.cmd_tx { let _ = tx.send(WorkerCommand::Pause); }
-    }
-
-    fn resume_capture(&mut self) {
-        if let Some(ref tx) = self.cmd_tx { let _ = tx.send(WorkerCommand::Resume); }
-    }
-
+    fn pause_capture(&mut self) { if let Some(ref tx) = self.cmd_tx { let _ = tx.send(WorkerCommand::Pause); } }
+    fn resume_capture(&mut self) { if let Some(ref tx) = self.cmd_tx { let _ = tx.send(WorkerCommand::Resume); } }
     fn stop_capture(&mut self) {
         if let Some(ref tx) = self.cmd_tx { let _ = tx.send(WorkerCommand::Stop); }
         if let Some(mut worker) = self.worker.take() { worker.stop(); }
         self.dashboard.session_active = false;
-    }
-
-    fn update_config(&self) {
-        if self.settings_panel.changed {
-            let cfg = self.settings_panel.get_config();
-            if let Some(ref tx) = self.cmd_tx { let _ = tx.send(WorkerCommand::UpdateConfig(cfg)); }
-        }
     }
 
     fn process_events(&mut self) {
@@ -144,232 +102,93 @@ impl PptAutoCaptureApp {
                 Ok(e) => e,
                 Err(crossbeam_channel::TryRecvError::Empty) => break,
                 Err(crossbeam_channel::TryRecvError::Disconnected) => {
-                    error!("Capture worker disconnected");
-                    self.dashboard.last_error = Some("Capture worker stopped unexpectedly".into());
+                    error!("Worker disconnected");
                     if let Some(mut worker) = self.worker.take() { worker.stop(); }
                     break;
                 }
             };
             match event {
-                WorkerEvent::StateChanged(state) => {
-                    self.dashboard.current_state = state;
-                    self.dashboard.state_message = state.label().to_string();
-                }
-                WorkerEvent::ChangeDetected { frame_index, diff_ratio } => {
-                    info!("Change: frame {} diff {:.3}", frame_index, diff_ratio);
-                }
-                WorkerEvent::FrameStable { frame_index } => info!("Stable: {}", frame_index),
-                WorkerEvent::SlideSaved { slide_number, png_filename } => {
-                    self.dashboard.saved_slides_count = slide_number;
-                    info!("Saved: {} ({})", slide_number, png_filename);
-                }
-                WorkerEvent::MonitorLost(msg) => {
-                    self.dashboard.last_error = Some(msg.clone());
-                    error!("Monitor lost: {}", msg);
-                }
-                WorkerEvent::Error(msg) => {
-                    self.dashboard.last_error = Some(msg.clone());
-                    error!("Worker error: {}", msg);
-                }
-                WorkerEvent::TestFrame(data, w, h) => {
-                    let mut rgba = Vec::with_capacity((w * h * 4) as usize);
-                    for y in 0..h {
-                        for x in 0..w {
-                            let idx = (y * w + x) as usize;
-                            if (idx * 3 + 2) < data.len() {
-                                rgba.push(data[idx * 3]);
-                                rgba.push(data[idx * 3 + 1]);
-                                rgba.push(data[idx * 3 + 2]);
-                                rgba.push(255);
-                            }
-                        }
-                    }
-                    self.dashboard.test_frame_rgba = Some(rgba);
-                    self.dashboard.test_frame_w = w;
-                    self.dashboard.test_frame_h = h;
-                }
-                WorkerEvent::Progress { saved_count, current_state } => {
-                    self.dashboard.saved_slides_count = saved_count;
-                    self.dashboard.current_state = current_state;
-                }
-                WorkerEvent::BlackFrameDetected => {
-                    self.dashboard.state_message = "Black/blank frame detected. Paused.".into();
-                }
-                WorkerEvent::ProtectedContent => {
-                    self.dashboard.state_message = "Protected content detected.".into();
-                }
+                WorkerEvent::StateChanged(s) => { self.dashboard.current_state = s; self.dashboard.state_message = s.label().to_string(); }
+                WorkerEvent::SlideSaved { slide_number, .. } => self.dashboard.saved_slides_count = slide_number,
+                WorkerEvent::Error(msg) => { self.dashboard.last_error = Some(msg); }
+                WorkerEvent::TestFrame(d, w, h) => { self.dashboard.test_frame_rgba = Some(d); self.dashboard.test_frame_w = w; self.dashboard.test_frame_h = h; }
+                WorkerEvent::BlackFrameDetected => self.dashboard.state_message = "Black frame".into();
                 _ => {}
             }
         }
     }
 
-    fn do_refresh_windows(&mut self) {
+    fn refresh_windows(&mut self) {
         self.source_panel.refresh_requested = false;
-        match enumerate_windows() {
-            Ok(windows) => {
-                self.windows = windows.clone();
-                self.source_panel.windows = windows;
-                self.source_panel.status_text = format!("Found {} windows", self.windows.len());
-            }
-            Err(e) => {
-                self.source_panel.status_text = format!("Error: {}", e);
-            }
-        }
+        if let Ok(w) = enumerate_windows() { self.windows = w.clone(); self.source_panel.windows = w; }
     }
 
-    fn do_refresh_displays(&mut self) {
+    fn refresh_displays(&mut self) {
         self.display_panel.refresh_requested = false;
-        match enumerate_monitors() {
-            Ok(monitors) => {
-                self.monitors = monitors.clone();
-                self.display_panel.monitors = monitors;
-                self.display_panel.status_text = format!("Found {} displays", self.monitors.len());
-            }
-            Err(e) => {
-                self.display_panel.status_text = format!("Error: {}", e);
-            }
-        }
+        if let Ok(m) = enumerate_monitors() { self.monitors = m.clone(); self.display_panel.monitors = m; }
     }
 }
 
 impl eframe::App for PptAutoCaptureApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.process_events();
-        self.update_config();
 
         if self.recovery_available && !self.recovery_accepted && !self.recovery_declined {
             let mut open = true;
-            egui::Window::new("Session Recovery")
-                .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
-                .open(&mut open)
-                .show(ctx, |ui| {
-                    ui.heading("Incomplete Session Detected");
-                    ui.label(format!("A previous session with {} slides was not completed.\nWould you like to recover?", self.recovery_slides));
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        if ui.button("✅ Recover").clicked() {
-                            let out_dir = std::path::Path::new(&self.output_dir);
-                            match recover_session(out_dir) {
-                                Ok(()) => {
-                                    self.dashboard.saved_slides_count = self.recovery_slides;
-                                    self.recovery_accepted = true;
-                                }
-                                Err(e) => {
-                                    self.dashboard.last_error = Some(format!("Recovery failed: {}", e));
-                                    self.recovery_accepted = true;
-                                }
-                            }
+            egui::Window::new("Session Recovery").anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).open(&mut open).show(ctx, |ui| {
+                ui.heading("Incomplete Session");
+                ui.label(format!("{} slides not completed. Recover?", self.recovery_slides));
+                ui.horizontal(|ui| {
+                    if ui.button("Recover").clicked() {
+                        if let Ok(()) = recover_session(std::path::Path::new(&self.output_dir)) {
+                            self.dashboard.saved_slides_count = self.recovery_slides;
+                            self.recovery_accepted = true;
                         }
-                        if ui.button("❌ Skip").clicked() { self.recovery_declined = true; }
-                    });
+                    }
+                    if ui.button("Skip").clicked() { self.recovery_declined = true; }
                 });
+            });
             if !open { self.recovery_declined = true; }
-            ctx.request_repaint();
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
             return;
         }
 
         if self.pending_start {
             self.pending_start = false;
-            if self.display_panel.selected_hmonitor == 0 {
-                self.dashboard.last_error = Some("Select a capture display first".into());
-            } else {
-                self.dashboard.last_error = None;
-                self.start_capture();
-            }
+            if self.display_panel.selected_hmonitor == 0 { self.dashboard.last_error = Some("Select a capture display".into()); }
+            else { self.dashboard.last_error = None; self.start_capture(); }
         }
         if self.pending_pause { self.pending_pause = false; self.pause_capture(); }
         if self.pending_stop { self.pending_stop = false; self.stop_capture(); }
         if self.pending_resume { self.pending_resume = false; self.resume_capture(); }
 
-        if self.source_panel.refresh_requested { self.do_refresh_windows(); }
+        if self.source_panel.refresh_requested { self.refresh_windows(); }
         if self.source_panel.move_requested && self.display_panel.selected_hmonitor != 0 {
             self.source_panel.move_requested = false;
             if let Some(mon) = self.monitors.iter().find(|m| m.hmonitor == self.display_panel.selected_hmonitor) {
-                match crate::windows::move_window_to_monitor(self.source_panel.selected_hwnd, &mon.region) {
-                    Ok(()) => self.source_panel.status_text = "Window moved".into(),
-                    Err(e) => self.source_panel.status_text = format!("Move failed: {}", e),
-                }
+                let _ = crate::windows::move_window_to_monitor(self.source_panel.selected_hwnd, &mon.region);
             }
         }
-        if self.source_panel.maximize_requested {
-            self.source_panel.maximize_requested = false;
-            match crate::windows::maximize_window(self.source_panel.selected_hwnd) {
-                Ok(()) => self.source_panel.status_text = "Maximized".into(),
-                Err(e) => self.source_panel.status_text = format!("Maximize failed: {}", e),
-            }
-        }
-        if self.source_panel.test_requested {
-            self.source_panel.test_requested = false;
-            let source = CaptureSource::new(
-                self.source_panel.selected_hwnd,
-                self.source_panel.selected_title.clone(),
-                self.display_panel.selected_hmonitor,
-                self.display_panel.selected_description.clone(),
-            );
-            if let Some(ref tx) = self.cmd_tx {
-                let _ = tx.send(WorkerCommand::TestCapture(source));
-            } else {
-                if let Some(mon) = self.monitors.iter().find(|m| m.hmonitor == source.monitor_hmonitor) {
-                    let mut capturer = crate::windows::DxgiCapturer::new();
-                    if capturer.initialize(mon).is_ok() {
-                        if let Ok(Some(frame)) = capturer.capture_frame(2000) {
-                            let thumb = frame.thumbnail(320, 240);
-                            let mut rgba = Vec::with_capacity((320 * 240 * 4) as usize);
-                            for y in 0..240 {
-                                for x in 0..320 {
-                                    let idx = (y * 320 + x) as usize * 4;
-                                    if (idx + 2) < thumb.len() {
-                                        rgba.push(thumb[idx]); rgba.push(thumb[idx+1]);
-                                        rgba.push(thumb[idx+2]); rgba.push(255);
-                                    }
-                                }
-                            }
-                            self.dashboard.test_frame_rgba = Some(rgba);
-                            self.dashboard.test_frame_w = 320;
-                            self.dashboard.test_frame_h = 240;
-                        }
-                        capturer.release();
-                    }
-                }
-            }
-        }
+        if self.source_panel.maximize_requested { self.source_panel.maximize_requested = false; let _ = crate::windows::maximize_window(self.source_panel.selected_hwnd); }
+        if self.display_panel.refresh_requested { self.refresh_displays(); }
 
-        if self.display_panel.refresh_requested { self.do_refresh_displays(); }
-
-        if self.output_panel.open_output_requested {
-            self.output_panel.open_output_requested = false;
-            let out_path = std::path::Path::new(&self.output_dir);
-            if out_path.exists() {
-                #[cfg(target_os = "windows")] { let _ = std::process::Command::new("explorer").arg(out_path).spawn(); }
-                #[cfg(target_os = "macos")] { let _ = std::process::Command::new("open").arg(out_path).spawn(); }
-                #[cfg(target_os = "linux")] { let _ = std::process::Command::new("xdg-open").arg(out_path).spawn(); }
-            }
-        }
-
-        egui::TopBottomPanel::top("tab_bar").show(ctx, |ui| {
+        egui::TopBottomPanel::top("bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.active_tab, Tab::Dashboard, "📊 Dashboard");
-                ui.selectable_value(&mut self.active_tab, Tab::Source, "🪟 Window");
-                ui.selectable_value(&mut self.active_tab, Tab::Display, "🖥️ Display");
-                ui.selectable_value(&mut self.active_tab, Tab::Settings, "⚙️ Settings");
-                ui.selectable_value(&mut self.active_tab, Tab::Output, "📁 Output");
+                ui.selectable_value(&mut self.active_tab, Tab::Dashboard, "Dashboard");
+                ui.selectable_value(&mut self.active_tab, Tab::Source, "Window");
+                ui.selectable_value(&mut self.active_tab, Tab::Display, "Display");
+                ui.selectable_value(&mut self.active_tab, Tab::Settings, "Settings");
+                ui.selectable_value(&mut self.active_tab, Tab::Output, "Output");
             });
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
             match self.active_tab {
                 Tab::Dashboard => self.dashboard.render(ui, &mut self.pending_start, &mut self.pending_pause, &mut self.pending_stop, &mut self.pending_resume),
-                Tab::Source => {
-                    let monitor_ready = self.display_panel.selected_hmonitor != 0;
-                    self.source_panel.render(ui, monitor_ready);
-                    if self.windows.is_empty() { self.do_refresh_windows(); }
-                }
-                Tab::Display => {
-                    self.display_panel.render(ui);
-                    if self.monitors.is_empty() { self.do_refresh_displays(); }
-                }
-                Tab::Settings => { self.settings_panel.render(ui); }
-                Tab::Output => { self.output_panel.render(ui); }
+                Tab::Source => { self.source_panel.render(ui, self.display_panel.selected_hmonitor != 0); if self.windows.is_empty() { self.refresh_windows(); } }
+                Tab::Display => { self.display_panel.render(ui); if self.monitors.is_empty() { self.refresh_displays(); } }
+                Tab::Settings => self.settings_panel.render(ui),
+                Tab::Output => self.output_panel.render(ui),
             }
         });
 
