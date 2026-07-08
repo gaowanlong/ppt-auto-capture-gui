@@ -3,7 +3,6 @@ use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{GetWindowTextW, GetClassNameW, GetWindowLongW, GetWindowRect, GetWindowThreadProcessId, GWL_STYLE};
 use crate::model::{WindowInfo, Region};
 
-// Raw FFI — BOOL return is i32 at the ABI level, avoids windows crate's WNDENUMPROC type
 #[link(name = "user32")]
 extern "system" {
     fn EnumWindows(lpEnumFunc: Option<unsafe extern "system" fn(HWND, isize) -> i32>, lParam: isize) -> i32;
@@ -12,7 +11,7 @@ extern "system" {
 pub fn enumerate_windows() -> Result<Vec<WindowInfo>> {
     let mut w = Vec::new();
     unsafe {
-        extern "system" fn ep(hwnd: HWND, lp: isize) -> i32 {
+        unsafe extern "system" fn ep(hwnd: HWND, lp: isize) -> i32 {
             let w = &mut *(lp as *mut Vec<WindowInfo>);
             let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
             if style & 0x10000000 == 0 { return 1i32; }
