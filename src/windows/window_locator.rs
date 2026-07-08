@@ -40,10 +40,7 @@ pub fn enumerate_windows() -> Result<Vec<WindowInfo>> {
         let ret = EnumWindows(Some(ep), &mut w as *mut _ as isize);
         if ret == 0 { return Err(anyhow::anyhow!("EnumWindows returned 0")); }
     }
-    let mut i = 0usize;
-    while i < w.len() {
-        if w[i].is_valid() && !w[i].title.is_empty() { i += 1; }
-        else { w.swap_remove(i); }
-    }
+    // Use drain+filter+collect to avoid Vec type inference issues with while loop
+    w = w.into_iter().filter(|x| x.is_valid() && !x.title.is_empty()).collect();
     Ok(w)
 }
