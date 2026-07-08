@@ -1,6 +1,3 @@
-//! DXGI Desktop Duplication API capture.
-//! This is the primary capture path on Windows 8+ systems.
-
 use anyhow::{Context, Result};
 use log::{error, info, warn};
 use windows::Win32::Foundation::*;
@@ -9,11 +6,9 @@ use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::System::Com::*;
-use windows::Win32::UI::DesktopDuplication::*;
 
 use crate::model::{Frame, MonitorInfo, Region};
 
-/// DXGI-based screen capturer using Desktop Duplication API.
 pub struct DxgiCapturer {
     device: Option<ID3D11Device>,
     context: Option<ID3D11DeviceContext>,
@@ -33,7 +28,6 @@ impl DxgiCapturer {
         }
     }
 
-    /// Initialize the capturer for a specific monitor (by adapter and output index).
     pub fn initialize(&mut self, monitor: &MonitorInfo) -> Result<()> {
         unsafe {
             CoInitializeEx(None, COINIT_APARTMENTTHREADED)
@@ -41,7 +35,6 @@ impl DxgiCapturer {
                 .unwrap_or_default();
         }
 
-        // Create D3D11 device
         let device = unsafe {
             D3D11CreateDevice(
                 None,
@@ -57,14 +50,11 @@ impl DxgiCapturer {
         let device: ID3D11Device = device;
         let context = unsafe { device.GetImmediateContext() }.context("Failed to get immediate context")?;
 
-        // Get DXGI device
         let dxgi_device: IDXGIDevice = device.cast().context("Failed to get DXGI device")?;
         let adapter = unsafe { dxgi_device.GetAdapter() }.context("Failed to get adapter")?;
 
-        // Get the output (monitor) by index or by matching region
         let output = find_output(&adapter, monitor)?;
 
-        // Create duplication interface
         let duplication = unsafe {
             output.DuplicateOutput(&device as *const ID3D11Device as *const IUnknown)
         };
@@ -72,7 +62,7 @@ impl DxgiCapturer {
         let duplication = match duplication {
             Ok(d) => d,
             Err(e) => {
-                return Err(anyhow::anyhow!("DuplicateOutput failed (DXGI). Is this monitor already duplicated? Error: {:?}", e));
+                return Err(anyhow::anyhow!("DuplicateOutput failed (DXGI): {:?}", e));
             }
         };
 
@@ -86,8 +76,6 @@ impl DxgiCapturer {
         Ok(())
     }
 
-    /// Capture a single frame. Blocks until a new frame is available or timeout.
-    /// Returns Some(Frame) on new frame, None on timeout.
     pub fn capture_frame(&mut self, timeout_ms: u32) -> Result<Option<Frame>> {
         let duplication = self.duplication.as_ref()
             .context("DXGI capturer not initialized")?;
@@ -101,8 +89,6 @@ impl DxgiCapturer {
         let mut frame_info = DXGI_OUTDUPL_FRAME_INFO::default();
         let mut desktop_resource: Option<IDXGIResource> = None;
 
-        let timeout = std::time::Duration::from_millis(timeout_ms as u64);
-
         let result = unsafe {
             duplication.AcquireNextFrame(
                 timeout_ms,
@@ -114,11 +100,9 @@ impl DxgiCapturer {
         match result {
             Ok(()) => {}
             Err(e) => {
-                // DXGI_ERROR_WAIT_TIMEOUT means no new frame
                 if e.code() == DXGI_ERROR_WAIT_TIMEOUT {
                     return Ok(None);
                 }
-                // DXGI_ERROR_ACCESS_LOST means desktop duplication was lost (lock screen, RDP disconnect, etc.)
                 if e.code() == DXGI_ERROR_ACCESS_LOST {
                     return Err(anyhow::anyhow!("DXGI access lost (screen locked or session disconnected)"));
                 }
@@ -126,7 +110,6 @@ impl DxgiCapturer {
             }
         }
 
-        // Get the actual texture
         let resource = desktop_resource.context("No desktop resource from AcquireNextFrame")?;
 
         let texture: ID3D11Texture2D = unsafe { resource.cast() }
@@ -135,7 +118,6 @@ impl DxgiCapturer {
         let mut desc = D3D11_TEXTURE2D_DESC::default();
         unsafe { texture.GetDesc(&mut desc) };
 
-        // Create a staging texture for CPU readback
         let staging_desc = D3D11_TEXTURE2D_DESC {
             Width: desc.Width,
             Height: desc.Height,
@@ -154,7 +136,7 @@ impl DxgiCapturer {
                 .context("Failed to create staging texture")?
         };
 
-        let src_box = windows::Win32::Graphics::Direct3D11::D3D11_BOX {
+        let src_box = D3D11_BOX {
             left: 0,
             top: 0,
             front: 0,
@@ -176,7 +158,6 @@ impl DxgiCapturer {
             );
         }
 
-        // Map the staging texture for reading
         let mapped = unsafe {
             context.Map(
                 &staging_texture,
@@ -197,9 +178,8 @@ impl DxgiCapturer {
             context.Unmap(&staging_texture, 0);
         }
 
-        // Release the frame
         if unsafe { duplication.ReleaseFrame().is_err() } {
-            warn!("Failed to release DXGI frame (this is usually non-fatal)");
+            warn!("Failed to release DXGI frame (non-fatal)");
         }
 
         self.frame_index += 1;
@@ -216,7 +196,6 @@ impl DxgiCapturer {
         Ok(Some(frame))
     }
 
-    /// Release the duplication interface (useful when pausing).
     pub fn release(&mut self) {
         self.duplication = None;
         self.context = None;
@@ -228,7 +207,6 @@ impl DxgiCapturer {
     }
 }
 
-/// Find the specific DXGI output matching our monitor info.
 fn find_output(adapter: &IDXGIAdapter, monitor: &MonitorInfo) -> Result<IDXGIOutput> {
     let mut output_index: u32 = 0;
     loop {
@@ -238,7 +216,6 @@ fn find_output(adapter: &IDXGIAdapter, monitor: &MonitorInfo) -> Result<IDXGIOut
                 let desc = unsafe { o.GetDesc() }.unwrap_or_default();
                 let rc = desc.DesktopCoordinates;
 
-                // Match by region
                 if rc.left == monitor.region.x
                     && rc.top == monitor.region.y
                     && (rc.right - rc.left) as u32 == monitor.region.width
@@ -247,7 +224,6 @@ fn find_output(adapter: &IDXGIAdapter, monitor: &MonitorInfo) -> Result<IDXGIOut
                     return Ok(o);
                 }
 
-                // Fallback: match by index
                 if output_index == monitor.output_index {
                     return Ok(o);
                 }
