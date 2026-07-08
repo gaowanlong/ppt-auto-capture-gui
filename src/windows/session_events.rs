@@ -1,17 +1,16 @@
 use log::info;
 use std::thread;
-use windows::Win32::Foundation::{BOOL, CloseHandle};
-use windows::Win32::System::StationsAndDesktops::{OpenInputDesktop, DESKTOP_READOBJECTS};
+use windows::Win32::Foundation::*;
+use windows::Win32::UI::WindowsAndMessaging::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SessionState { Unlocked, Locked, Disconnected, Reconnected }
+pub enum SessionState { Unlocked, Locked }
 
 pub struct SessionEventMonitor {
     tx: crossbeam_channel::Sender<SessionState>,
     rx: crossbeam_channel::Receiver<SessionState>,
     running: bool,
 }
-
 impl SessionEventMonitor {
     pub fn new() -> Self {
         let (tx, rx) = crossbeam_channel::unbounded();
@@ -24,13 +23,11 @@ impl SessionEventMonitor {
         thread::spawn(move || {
             let mut last = SessionState::Unlocked;
             loop {
-                let cur = if unsafe { OpenInputDesktop(0, false, DESKTOP_READOBJECTS).is_ok() } {
-                    SessionState::Unlocked
-                } else {
-                    SessionState::Locked
-                };
+                // Simple check: can we get the desktop window?
+                let unlocked = unsafe { GetDesktopWindow() != HWND(0) };
+                let cur = if unlocked { SessionState::Unlocked } else { SessionState::Locked };
                 if cur != last { let _ = tx.send(cur); last = cur; }
-                thread::sleep(std::time::Duration::from_secs(2));
+                thread::sleep(std::time::Duration::from_secs(5));
             }
         });
     }
