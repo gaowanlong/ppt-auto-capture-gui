@@ -1,11 +1,10 @@
 use anyhow::Result;
-use windows::Win32::Foundation::{HWND, RECT, GetWindowRect};
+use windows::Win32::Foundation::{BOOL, HWND, RECT};
 use windows::Win32::UI::WindowsAndMessaging::{
-    SetWindowPos, SetForegroundWindow, ShowWindow, IsIconic,
+    SetWindowPos, SetForegroundWindow, ShowWindow, IsIconic, GetWindowRect,
     SWP_NOZORDER, SWP_SHOWWINDOW, SW_MAXIMIZE, SW_RESTORE,
 };
 use crate::model::Region;
-
 pub fn move_window_to_monitor(hwnd: u64, mr: &Region) -> Result<()> {
     let h = HWND(hwnd as isize);
     unsafe {

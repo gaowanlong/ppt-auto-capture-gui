@@ -6,7 +6,6 @@ use crate::model::{WindowInfo, Region};
 pub fn enumerate_windows() -> Result<Vec<WindowInfo>> {
     let mut w = Vec::new();
     unsafe {
-        // transmute callback: i32 return instead of BOOL
         unsafe extern "system" fn ep(hwnd: HWND, lp: isize) -> i32 {
             let w = &mut *(lp as *mut Vec<WindowInfo>);
             let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
@@ -25,11 +24,12 @@ pub fn enumerate_windows() -> Result<Vec<WindowInfo>> {
             if !reg.is_valid() { return 1i32; }
             let mut pid: u32 = 0;
             let _ = GetWindowThreadProcessId(hwnd, Some(&mut pid));
+            // Compute is_powerpoint BEFORE moving title/class into struct
+            let is_ppt = class.eq_ignore_ascii_case("screenClass")||title.contains("Slide Show");
             w.push(WindowInfo{
                 hwnd: hwnd.0 as u64, title, class_name:class, region:reg,
                 monitor_hmonitor:0, is_visible:true, is_minimized:(style & 0x20000000)!=0,
-                is_powerpoint:class.eq_ignore_ascii_case("screenClass")||title.contains("Slide Show"),
-                process_id:pid, process_name:format!("{}",pid),
+                is_powerpoint:is_ppt, process_id:pid, process_name:format!("{}",pid),
             });
             1i32
         }
