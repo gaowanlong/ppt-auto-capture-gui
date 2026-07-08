@@ -24,15 +24,8 @@ pub use gdi_capture::*;
 #[cfg(target_os = "windows")]
 pub use session_events::*;
 
-// --- Stubs for non-Windows builds ---
 #[cfg(not(target_os = "windows"))]
-pub mod stub {
-    pub struct MonitorEnumerator;
-    pub struct WindowLocator;
-    pub struct WindowMover;
-    pub struct DxgiCapturer;
-    pub struct GdiCapturer;
-    pub struct SessionEventMonitor;
-}
+#[path = "stub.rs"]
+mod stub;
 #[cfg(not(target_os = "windows"))]
 pub use stub::*;
