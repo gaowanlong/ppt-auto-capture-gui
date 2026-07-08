@@ -1,12 +1,13 @@
 use anyhow::{Context, Result};
-use log::{error, info, warn};
+use log::{info, warn};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct3D::*;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
+use windows::Win32::Graphics::Gdi::HDC;
 use windows::Win32::System::Com::*;
-
+use windows::core::IUnknown;
 use crate::model::{Frame, MonitorInfo};
 
 pub struct DxgiCapturer {
@@ -18,106 +19,70 @@ pub struct DxgiCapturer {
 }
 
 impl DxgiCapturer {
-    pub fn new() -> Self {
-        Self { device: None, context: None, duplication: None, monitor_info: None, frame_index: 0 }
-    }
+    pub fn new() -> Self { Self { device: None, context: None, duplication: None, monitor_info: None, frame_index: 0 } }
 
     pub fn initialize(&mut self, monitor: &MonitorInfo) -> Result<()> {
         unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok().unwrap_or_default(); }
-
-        let device: ID3D11Device = unsafe {
-            D3D11CreateDevice(None, D3D_DRIVER_TYPE_HARDWARE, None,
-                D3D11_CREATE_DEVICE_FLAGS::default(), None, 0, D3D11_SDK_VERSION)
-        }.context("Failed to create D3D11 device")?;
-
-        let context = unsafe { device.GetImmediateContext() }.context("Failed to get immediate context")?;
-
-        let dxgi_device: IDXGIDevice = unsafe { device.cast() }.context("Failed to cast to IDXGIDevice")?;
-        let adapter = unsafe { dxgi_device.GetAdapter() }.context("Failed to get adapter")?;
+        let mut device: Option<ID3D11Device> = None;
+        let mut context: Option<ID3D11DeviceContext> = None;
+        let mut feature: D3D_FEATURE_LEVEL = D3D_FEATURE_LEVEL::default();
+        unsafe {
+            D3D11CreateDevice(
+                None, D3D_DRIVER_TYPE_HARDWARE, None, D3D11_CREATE_DEVICE_FLAG(0),
+                std::ptr::null(), 0, D3D11_SDK_VERSION,
+                &mut device as *mut Option<ID3D11Device>,
+                &mut feature as *mut D3D_FEATURE_LEVEL,
+                &mut context as *mut Option<ID3D11DeviceContext>,
+            )
+        }.ok().context("D3D11CreateDevice")?;
+        let device = device.context("device")?;
+        let context = context.context("context")?;
+        let dxgi_device: IDXGIDevice = unsafe { device.cast() }.context("cast DXGIDevice")?;
+        let adapter = unsafe { dxgi_device.GetAdapter() }.context("GetAdapter")?;
         let output = find_output(&adapter, monitor)?;
-
-        // Cast device to IUnknown for DuplicateOutput
-        let unknown: IUnknown = unsafe { device.cast() }.context("Failed to cast to IUnknown")?;
-
-        let duplication = unsafe {
-            output.DuplicateOutput(&unknown)
-        }.context("DuplicateOutput failed")?;
-
+        let output1: IDXGIOutput1 = unsafe { output.cast() }.context("cast Output1")?;
+        let unknown: IUnknown = unsafe { device.cast() }.context("cast IUnknown")?;
+        let duplication = unsafe { output1.DuplicateOutput(&unknown) }.context("DuplicateOutput")?;
         self.device = Some(device);
         self.context = Some(context);
         self.duplication = Some(duplication);
         self.monitor_info = Some(monitor.clone());
         self.frame_index = 0;
-        info!("DXGI capturer initialized for {}", monitor.output_name.trim());
+        info!("DXGI capturer initialized");
         Ok(())
     }
 
     pub fn capture_frame(&mut self, timeout_ms: u32) -> Result<Option<Frame>> {
-        let duplication = self.duplication.as_ref().context("Not initialized")?;
-        let device = self.device.as_ref().context("No device")?;
-        let context = self.context.as_ref().context("No context")?;
-
-        let mut frame_info = DXGI_OUTDUPL_FRAME_INFO::default();
-        let mut desktop_resource: Option<IDXGIResource> = None;
-
-        let result = unsafe {
-            duplication.AcquireNextFrame(timeout_ms, &mut frame_info, &mut desktop_resource)
-        };
-
-        match result {
+        let duplication = self.duplication.as_ref().context("not init")?;
+        let mut fi = DXGI_OUTDUPL_FRAME_INFO::default();
+        let mut resource: Option<IDXGIResource> = None;
+        match unsafe { duplication.AcquireNextFrame(timeout_ms, &mut fi, &mut resource) } {
             Ok(()) => {}
             Err(e) => {
-                if e.code() == DXGI_ERROR_WAIT_TIMEOUT { return Ok(None); }
-                if e.code() == DXGI_ERROR_ACCESS_LOST {
-                    return Err(anyhow::anyhow!("DXGI access lost"));
-                }
-                return Err(anyhow::anyhow!("AcquireNextFrame failed: {:?}", e));
+                if e.code() == DXGI_ERROR_WAIT_TIMEOUT.0 { return Ok(None); }
+                if e.code() == DXGI_ERROR_ACCESS_LOST.0 { return Err(anyhow::anyhow!("DXGI access lost")); }
+                return Err(anyhow::anyhow!("AcquireNextFrame: {:?}", e));
             }
         }
-
-        let resource = desktop_resource.context("No desktop resource")?;
-        let texture: ID3D11Texture2D = unsafe { resource.cast() }.context("Cast to texture failed")?;
-
-        let mut desc = D3D11_TEXTURE2D_DESC::default();
-        unsafe { texture.GetDesc(&mut desc); }
-
-        let staging_desc = D3D11_TEXTURE2D_DESC {
-            Width: desc.Width, Height: desc.Height, MipLevels: 1, ArraySize: 1,
-            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
-            Usage: D3D11_USAGE_STAGING, BindFlags: D3D11_BIND_FLAG(0),
-            CPUAccessFlags: D3D11_CPU_ACCESS_READ, MiscFlags: D3D11_RESOURCE_MISC_FLAG(0),
-        };
-
-        let staging_texture = unsafe {
-            device.CreateTexture2D(&staging_desc, None).context("Create staging texture failed")?
-        };
-
-        let src_box = D3D11_BOX {
-            left: 0, top: 0, front: 0, right: desc.Width, bottom: desc.Height, back: 1,
-        };
-        unsafe {
-            context.CopySubresourceRegion(&staging_texture, 0, 0, 0, 0, &texture, 0, Some(&src_box));
-        }
-
-        let mapped = unsafe {
-            context.Map(&staging_texture, 0, D3D11_MAP_READ, 0).context("Map staging texture failed")?
-        };
-
-        let stride = mapped.RowPitch;
-        let data_size = (stride * desc.Height) as usize;
-        let src_slice = std::slice::from_raw_parts(mapped.pData as *const u8, data_size);
-        let mut data = Vec::with_capacity(data_size);
-        data.extend_from_slice(src_slice);
-        unsafe { context.Unmap(&staging_texture, 0); }
-
-        if unsafe { duplication.ReleaseFrame().is_err() } {
-            warn!("ReleaseFrame failed (non-fatal)");
-        }
-
+        let resource = resource.context("no resource")?;
+        // Get surface from the shared resource for CPU readback
+        let surface: IDXGISurface1 = unsafe { resource.cast() }.context("cast surface")?;
+        // Get the desc for dimensions
+        let mut sdesc = DXGI_SURFACE_DESC::default();
+        unsafe { surface.GetDesc(&mut sdesc) }.ok()?;
+        // Map the surface for CPU read
+        let mut mapped = DXGI_MAPPED_RECT::default();
+        unsafe { surface.Map(&mut mapped, 1) }.ok().context("Map")?;
+        let w = sdesc.Width;
+        let h = sdesc.Height;
+        let pitch = mapped.Pitch;
+        let data_size = (pitch * h) as usize;
+        let src = unsafe { std::slice::from_raw_parts(mapped.pBits, data_size) };
+        let data = src.to_vec();
+        unsafe { surface.Unmap().ok(); }
+        if unsafe { duplication.ReleaseFrame().is_err() } { warn!("ReleaseFrame"); }
         self.frame_index += 1;
-        Ok(Some(Frame::new(data, desc.Width, desc.Height, stride,
-            self.frame_index, current_timestamp_ms())))
+        Ok(Some(Frame::new(data, w, h, pitch, self.frame_index, now_ms())))
     }
 
     pub fn release(&mut self) { self.duplication = None; self.context = None; self.device = None; }
@@ -130,21 +95,20 @@ fn find_output(adapter: &IDXGIAdapter, monitor: &MonitorInfo) -> Result<IDXGIOut
         let output = unsafe { adapter.EnumOutputs(i) };
         match output {
             Ok(o) => {
-                let desc = unsafe { o.GetDesc() }.unwrap_or_default();
-                let rc = desc.DesktopCoordinates;
-                if rc.left == monitor.region.x && rc.top == monitor.region.y
-                    && (rc.right - rc.left) as u32 == monitor.region.width
-                    && (rc.bottom - rc.top) as u32 == monitor.region.height
-                { return Ok(o); }
-                if i == monitor.output_index { return Ok(o); }
+                let d = unsafe { o.GetDesc() }.unwrap_or_default();
+                let rc = d.DesktopCoordinates;
+                if rc.left==monitor.region.x&&rc.top==monitor.region.y
+                    && (rc.right-rc.left)as u32==monitor.region.width
+                    && (rc.bottom-rc.top)as u32==monitor.region.height { return Ok(o); }
+                if i==monitor.output_index { return Ok(o); }
             }
             Err(_) => break,
         }
         i += 1;
     }
-    Err(anyhow::anyhow!("Could not find DXGI output"))
+    Err(anyhow::anyhow!("no output found"))
 }
 
-fn current_timestamp_ms() -> u64 {
+fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64
 }
