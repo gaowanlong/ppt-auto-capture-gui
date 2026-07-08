@@ -1,0 +1,9 @@
+/target/
+output/
+*.tmp
+*.tmp.pptx
+ppt-auto-capture-config.json
+.DS_Store
+*.swp
+*.swo
+*~
