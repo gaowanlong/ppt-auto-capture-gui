@@ -149,7 +149,7 @@ impl eframe::App for PptAutoCaptureApp {
                 });
             });
             if !open { self.recovery_declined = true; }
-            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+            ctx.request_repaint();
             return;
         }
 
@@ -192,7 +192,7 @@ impl eframe::App for PptAutoCaptureApp {
             }
         });
 
-        ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        ctx.request_repaint();
     }
 }
 

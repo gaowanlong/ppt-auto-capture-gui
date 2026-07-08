@@ -9,7 +9,7 @@ extern "system" {
 }
 
 pub fn enumerate_windows() -> Result<Vec<WindowInfo>> {
-    let mut w = Vec::new();
+    let mut w: Vec<WindowInfo> = Vec::new();
     unsafe {
         unsafe extern "system" fn ep(hwnd: HWND, lp: isize) -> i32 {
             let w = &mut *(lp as *mut Vec<WindowInfo>);

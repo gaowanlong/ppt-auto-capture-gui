@@ -14,7 +14,7 @@ extern "system" {
 
 pub fn enumerate_monitors() -> Result<Vec<MonitorInfo>> {
     let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
-    let mut ms = Vec::new();
+    let mut ms: Vec<MonitorInfo> = Vec::new();
     if let Ok(factory) = unsafe { CreateDXGIFactory1::<IDXGIFactory1>() } {
         let mut ai = 0u32;
         while let Ok(adapter) = unsafe { factory.EnumAdapters1(ai) } {
@@ -46,7 +46,7 @@ pub fn enumerate_monitors() -> Result<Vec<MonitorInfo>> {
 }
 
 fn gdi_enum() -> Result<Vec<MonitorInfo>> {
-    let mut ms = Vec::new();
+    let mut ms: Vec<MonitorInfo> = Vec::new();
     unsafe {
         unsafe extern "system" fn ep(hmon: HMONITOR, _: HDC, _: *mut RECT, lp: isize) -> i32 {
             let ms = &mut *(lp as *mut Vec<MonitorInfo>);
