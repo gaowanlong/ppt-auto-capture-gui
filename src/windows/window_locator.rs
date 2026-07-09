@@ -44,3 +44,4 @@ pub fn enumerate_windows() -> Result<Vec<WindowInfo>> {
     w = w.into_iter().filter(|x| x.is_valid() && !x.title.is_empty()).collect();
     Ok(w)
 }
+
