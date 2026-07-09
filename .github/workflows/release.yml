@@ -14,6 +14,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+permissions:
+  contents: write
+
 jobs:
   build-windows:
     name: Build Windows (x86_64-msvc)
@@ -81,11 +84,7 @@ jobs:
           name: ppt-auto-capture-gui-linux-x86_64
           path: artifacts/
 
-permissions:
-  contents: write
-
-jobs:
-  create-release:
+create-release:
     name: Create Release
     needs: [build-windows, build-linux]
     if: ${{ !cancelled() }}
