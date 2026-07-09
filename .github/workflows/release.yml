@@ -81,9 +81,14 @@ jobs:
           name: ppt-auto-capture-gui-linux-x86_64
           path: artifacts/
 
+permissions:
+  contents: write
+
+jobs:
   create-release:
     name: Create Release
     needs: [build-windows, build-linux]
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
