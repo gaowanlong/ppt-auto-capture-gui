@@ -40,10 +40,7 @@ pub fn enumerate_windows() -> Result<Vec<WindowInfo>> {
         let ret = EnumWindows(Some(ep), &mut w as *mut _ as isize);
         if ret == 0 { return Err(anyhow::anyhow!("EnumWindows returned 0")); }
     }
-    // Use drain+filter+collect to avoid Vec type inference issues with while loop
     
-        let tmp: Vec<WindowInfo> = std::mem::take(&mut w);
-        w = tmp.into_iter().filter(|x: &WindowInfo| x.is_valid() && !x.title.is_empty()).collect::<Vec<WindowInfo>>();
 
     Ok(w)
 }
