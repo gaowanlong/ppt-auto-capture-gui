@@ -14,8 +14,6 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
-jobs:
-  build-windows:
     name: Build Windows (x86_64-msvc)
     runs-on: windows-latest
     steps:
@@ -84,10 +82,7 @@ jobs:
 create-release:
     name: Create Release
     needs: [build-windows, build-linux]
-    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
 
