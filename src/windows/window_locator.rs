@@ -41,7 +41,7 @@ pub fn enumerate_windows() -> Result<Vec<WindowInfo>> {
         if ret == 0 { return Err(anyhow::anyhow!("EnumWindows returned 0")); }
     }
     // Use drain+filter+collect to avoid Vec type inference issues with while loop
-    w = w.into_iter().filter(|x| x.is_valid() && !x.title.is_empty()).collect();
+    w = w.into_iter().filter(|x: &WindowInfo| x.is_valid() && !x.title.is_empty()).collect::<Vec<WindowInfo>>();
     Ok(w)
 }
 
