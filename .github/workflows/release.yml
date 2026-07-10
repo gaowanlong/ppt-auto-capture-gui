@@ -14,28 +14,26 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+jobs:
+  build-windows:
     name: Build Windows (x86_64-msvc)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Install Rust (windows-msvc)
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
-
       - name: Build release
         run: cargo build --release --target x86_64-pc-windows-msvc
         env:
           RUSTFLAGS: ""
           CARGO_ENCODED_RUSTFLAGS: ""
-
       - name: Prepare artifacts
         run: |
           mkdir -p artifacts
           copy target\x86_64-pc-windows-msvc\release\ppt-auto-capture-gui.exe artifacts\
           copy README.md artifacts\
-
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -47,63 +45,45 @@ env:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-unknown-linux-gnu
-
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libxkbcommon-dev libssl-dev libgtk-3-dev
-
       - name: Build release
         run: cargo build --release
         env:
           RUSTFLAGS: ""
           CARGO_ENCODED_RUSTFLAGS: ""
-          RUSTC_FLAGS: ""
-
-
       - name: Prepare artifacts
         run: |
           mkdir -p artifacts
           cp target/release/ppt-auto-capture-gui artifacts/
           cp README.md artifacts/
-
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ppt-auto-capture-gui-linux-x86_64
           path: artifacts/
 
-create-release:
+  create-release:
     name: Create Release
     needs: [build-windows, build-linux]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: downloaded-artifacts
-
       - name: Create release tarballs
         run: |
           mkdir -p release-files
-          
-          # Windows
           cp downloaded-artifacts/ppt-auto-capture-gui-windows-x86_64-msvc/ppt-auto-capture-gui.exe release-files/
           cp downloaded-artifacts/ppt-auto-capture-gui-windows-x86_64-msvc/README.md release-files/README-windows.md
-          
-          # Linux
-          tar czf release-files/ppt-auto-capture-gui-linux-x86_64.tar.gz \
-            -C downloaded-artifacts/ppt-auto-capture-gui-linux-x86_64 \
-            ppt-auto-capture-gui README.md
-
+          tar czf release-files/ppt-auto-capture-gui-linux-x86_64.tar.gz -C downloaded-artifacts/ppt-auto-capture-gui-linux-x86_64 ppt-auto-capture-gui README.md
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
