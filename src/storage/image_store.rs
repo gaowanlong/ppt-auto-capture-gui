@@ -2,9 +2,9 @@
 
 use anyhow::{Context, Result};
 use log::info;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use crate::model::{Frame, SlideRecord};
+use crate::model::Frame;
 
 /// Manages the PNG image storage directory.
 pub struct ImageStore {

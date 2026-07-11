@@ -1,6 +1,5 @@
 //! Generates slide XML and slide relationships XML.
 
-use std::collections::HashMap;
 
 /// Generates slide XML and rels XML for a given slide number.
 pub struct SlideXml;

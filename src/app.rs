@@ -3,7 +3,7 @@ use log::{error, info};
 
 use crossbeam_channel::{Receiver, Sender};
 
-use crate::capture::{CaptureState, CaptureWorker, WorkerCommand, WorkerEvent, CaptureConfig, CaptureSource};
+use crate::capture::{CaptureWorker, WorkerCommand, WorkerEvent, CaptureSource};
 use crate::config::AppConfig;
 use crate::gui::*;
 use crate::model::{MonitorInfo, WindowInfo};
@@ -112,7 +112,7 @@ impl PptAutoCaptureApp {
                 WorkerEvent::SlideSaved { slide_number, .. } => self.dashboard.saved_slides_count = slide_number,
                 WorkerEvent::Error(msg) => { self.dashboard.last_error = Some(msg); }
                 WorkerEvent::TestFrame(d, w, h) => { self.dashboard.test_frame_rgba = Some(d); self.dashboard.test_frame_w = w; self.dashboard.test_frame_h = h; }
-                WorkerEvent::BlackFrameDetected => self.dashboard.state_message = "Black frame".into();
+                WorkerEvent::BlackFrameDetected => { self.dashboard.state_message = "Black frame".into(); }
                 _ => {}
             }
         }

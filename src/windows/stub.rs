@@ -20,7 +20,7 @@ pub struct SessionEventMonitor;
 impl SessionEventMonitor {
     pub fn new() -> Self { Self }
     pub fn start(&mut self) {}
-    pub fn get_receiver(&self) -> crossbeam_channel::Receiver<SessionState> { let (tx,rx)=crossbeam_channel::unbounded();rx }
+    pub fn get_receiver(&self) -> crossbeam_channel::Receiver<SessionState> { let (_tx,rx)=crossbeam_channel::unbounded();rx }
 }
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
 pub enum SessionState { Unlocked, Locked }

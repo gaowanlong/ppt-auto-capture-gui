@@ -1,6 +1,6 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use log::{info, warn};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::model::SlideRecord;
 use crate::pptx::PptxWriter;

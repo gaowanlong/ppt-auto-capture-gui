@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::{Sender};
 
 use crate::capture::capture_source::CaptureSource;
 use crate::capture::capture_state::CaptureState;

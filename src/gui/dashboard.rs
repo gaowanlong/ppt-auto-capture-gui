@@ -1,5 +1,5 @@
 use egui::*;
-use crate::capture::{CaptureState, WorkerEvent, CaptureConfig};
+use crate::capture::CaptureState;
 
 pub struct DashboardPanel {
     pub current_state: CaptureState,
