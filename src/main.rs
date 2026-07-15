@@ -28,6 +28,17 @@ mod windows;
 mod windows;
 
 fn main() -> Result<(), eframe::Error> {
+    // Set DPI awareness for high-resolution screenshots on Windows
+    #[cfg(target_os = "windows")]
+    {
+        // Make process DPI aware so GetDC(NULL) returns physical pixels
+        #[link(name = "user32")]
+        extern "system" {
+            fn SetProcessDPIAware() -> i32;
+        }
+        unsafe { SetProcessDPIAware(); }
+    }
+
     // Initialize logging
     env_logger::Builder::from_env(
         env_logger::Env::default().default_filter_or("info")

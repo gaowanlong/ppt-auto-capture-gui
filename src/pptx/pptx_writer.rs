@@ -63,9 +63,7 @@ impl PptxWriter {
 
         let mut existing_slides: Vec<(u32, String)> = Vec::new();
         if self.output_path.exists() && record.slide_number > 1 {
-            if let Ok(existing) = self.read_existing_slides() {
-                existing_slides = existing;
-            }
+            existing_slides = self.read_existing_slides();
         }
         existing_slides.push((slide_number, media_name.clone()));
 
@@ -153,26 +151,41 @@ impl PptxWriter {
         None
     }
 
-    fn read_existing_slides(&self) -> Result<Vec<(u32, String)>> {
-        let file = std::fs::File::open(&self.output_path)
-            .context("Failed to open existing PPTX")?;
-        let mut archive = ZipArchive::new(file)
-            .context("Failed to open existing PPTX as ZIP archive")?;
+    fn read_existing_slides(&self) -> Vec<(u32, String)> {
+        let file = match std::fs::File::open(&self.output_path) {
+            Ok(f) => f,
+            Err(e) => {
+                log::warn!("Cannot open existing PPTX: {}", e);
+                return Vec::new();
+            }
+        };
+        let mut archive = match ZipArchive::new(file) {
+            Ok(a) => a,
+            Err(e) => {
+                log::warn!("Cannot open existing PPTX as ZIP (corrupt?): {}", e);
+                return Vec::new();
+            }
+        };
         let mut slides = Vec::new();
         if let Ok(mut pres) = archive.by_name("ppt/presentation.xml") {
             let mut content = String::new();
-            pres.read_to_string(&mut content)?;
-            for line in content.lines() {
-                if line.contains("p:sldId") {
-                    if let Some(r_id) = extract_attr_value(line, "r:id=\"", "\"") {
-                        if let Ok(num) = r_id.trim_start_matches("rId").parse::<u32>() {
-                            if num > 0 { slides.push((num, format!("image{}.png", num))); }
+            if pres.read_to_string(&mut content).is_ok() {
+                for line in content.lines() {
+                    if line.contains("p:sldId") {
+                        // Use id attribute (255+slide_num) to find slide number
+                        if let Some(id_val) = extract_attr_value(line, "id=\"", "\"") {
+                            if let Ok(raw_id) = id_val.parse::<u32>() {
+                                if raw_id > 255 {
+                                    let num = raw_id - 255;
+                                    slides.push((num, format!("image{}.png", num)));
+                                }
+                            }
                         }
                     }
                 }
             }
         }
-        Ok(slides)
+        slides
     }
 }
 
