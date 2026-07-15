@@ -86,10 +86,12 @@ impl PptAutoCaptureApp {
         let worker = CaptureWorker::new();
         self.event_rx = Some(worker.event_rx());
         self.cmd_tx = Some(worker.command_tx());
-        let source = CaptureSource::new(
+        let mut source = CaptureSource::new(
             self.source_panel.selected_hwnd, self.source_panel.selected_title.clone(),
             self.display_panel.selected_hmonitor, self.display_panel.selected_description.clone(),
         );
+        source.output_dir = self.output_panel.output_dir.clone();
+        source.output_filename = self.output_panel.output_filename.clone();
         let _ = self.cmd_tx.as_ref().map(|tx| tx.send(WorkerCommand::Start(source)));
         self.worker = Some(worker);
         self.dashboard.session_active = true;
@@ -110,6 +112,24 @@ impl PptAutoCaptureApp {
         self.dashboard.current_state = CaptureState::Stopped;
         self.dashboard.state_message = CaptureState::Stopped.label().to_string();
         self.dashboard.session_active = false;
+    }
+
+    fn send_test_capture(&mut self) {
+        let mut source = CaptureSource::new(
+            self.source_panel.selected_hwnd, self.source_panel.selected_title.clone(),
+            self.display_panel.selected_hmonitor, self.display_panel.selected_description.clone(),
+        );
+        source.output_dir = self.output_panel.output_dir.clone();
+        source.output_filename = self.output_panel.output_filename.clone();
+
+        if let Some(ref tx) = self.cmd_tx {
+            let _ = tx.send(WorkerCommand::TestCapture(source));
+            info!("Test capture command sent");
+        } else {
+            self.dashboard.last_error = Some(
+                i18n::t_no_worker_error(self.language)
+            );
+        }
     }
 
     fn process_events(&mut self) {
@@ -235,8 +255,22 @@ impl eframe::App for PptAutoCaptureApp {
                         self.output_panel.output_filename);
                     self.dashboard.render(ui, self.language, &mut self.pending_start, &mut self.pending_pause, &mut self.pending_stop, &mut self.pending_resume);
                 }
-                Tab::Source => { self.source_panel.render(ui, self.language, self.display_panel.selected_hmonitor != 0); if self.windows.is_empty() { self.refresh_windows(); } }
-                Tab::Display => { self.display_panel.render(ui, self.language); if self.monitors.is_empty() { self.refresh_displays(); } }
+                Tab::Source => {
+                    self.source_panel.render(ui, self.language, self.display_panel.selected_hmonitor != 0);
+                    if self.source_panel.test_requested {
+                        self.source_panel.test_requested = false;
+                        self.send_test_capture();
+                    }
+                    if self.windows.is_empty() { self.refresh_windows(); }
+                }
+                Tab::Display => {
+                    self.display_panel.render(ui, self.language);
+                    if self.display_panel.test_capture_requested {
+                        self.display_panel.test_capture_requested = false;
+                        self.send_test_capture();
+                    }
+                    if self.monitors.is_empty() { self.refresh_displays(); }
+                }
                 Tab::Settings => self.settings_panel.render(ui, self.language),
                 Tab::Output => {
                     self.output_panel.render(ui, self.language);

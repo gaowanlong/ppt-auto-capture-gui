@@ -11,6 +11,10 @@ pub struct CaptureSource {
     pub monitor_description: String,
     /// Whether to use DXGI (preferred) or GDI (fallback).
     pub use_dxgi: bool,
+    /// Output directory for PNG/PPTX files.
+    pub output_dir: String,
+    /// Output PPTX filename.
+    pub output_filename: String,
 }
 
 impl CaptureSource {
@@ -26,6 +30,8 @@ impl CaptureSource {
             monitor_hmonitor,
             monitor_description,
             use_dxgi: true,
+            output_dir: String::from("output"),
+            output_filename: String::from("output.pptx"),
         }
     }
 
