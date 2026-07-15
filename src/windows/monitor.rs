@@ -1,13 +1,14 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Gdi::{
     HMONITOR, HDC, GetMonitorInfoW, MONITORINFOEXW, MONITORINFO,
 };
-use windows::Win32::Graphics::Dxgi::{IDXGIFactory1, IDXGIAdapter, IDXGIOutput, CreateDXGIFactory1};
+use windows::Win32::Graphics::Dxgi::{IDXGIFactory1, CreateDXGIFactory1};
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use crate::model::{MonitorInfo, Region};
 
 #[link(name = "user32")]
+#[allow(improper_ctypes)]
 extern "system" {
     fn EnumDisplayMonitors(hdc: Option<HDC>, lprcClip: *const RECT, lpfnEnum: Option<unsafe extern "system" fn(HMONITOR, HDC, *mut RECT, isize) -> i32>, dwData: isize) -> i32;
 }

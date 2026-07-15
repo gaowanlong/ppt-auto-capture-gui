@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{GetWindowTextW, GetClassNameW, GetWindowLongW, GetWindowRect, GetWindowThreadProcessId, GWL_STYLE};
 use crate::model::{WindowInfo, Region};
@@ -24,7 +24,7 @@ pub fn enumerate_windows() -> Result<Vec<WindowInfo>> {
             let cl = GetClassNameW(hwnd, &mut cb);
             let class = if cl > 0 { String::from_utf16_lossy(&cb[..cl as usize]) } else { String::new() };
             let mut r = windows::Win32::Foundation::RECT::default();
-            GetWindowRect(hwnd, &mut r);
+            let _ = GetWindowRect(hwnd, &mut r);
             let reg = Region::new(r.left,r.top,(r.right-r.left)as u32,(r.bottom-r.top)as u32);
             if !reg.is_valid() { return 1i32; }
             let mut pid: u32 = 0;

@@ -21,7 +21,7 @@ pub fn move_window_to_monitor(hwnd: u64, mr: &Region) -> Result<()> {
         GetWindowRect(h, &mut r as *mut MyRect as *mut u8);
         let ww = r.right - r.left;
         let wh = r.bottom - r.top;
-        SetWindowPos(h, 0isize, mr.x, mr.y, ww, wh, (0x0044u32));
+        SetWindowPos(h, 0isize, mr.x, mr.y, ww, wh, 0x0044u32);
         SetForegroundWindow(h);
     }
     Ok(())

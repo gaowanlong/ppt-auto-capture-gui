@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use crate::model::{Frame, MonitorInfo};
 /// DXGI capturer stub — always returns an error, forcing GDI fallback.
 /// The windows crate 0.60 on MSVC has type resolution issues with COM casting

@@ -21,8 +21,6 @@ pub use window_mover::*;
 pub use dxgi_capture::*;
 #[cfg(target_os = "windows")]
 pub use gdi_capture::*;
-#[cfg(target_os = "windows")]
-pub use session_events::*;
 
 #[cfg(not(target_os = "windows"))]
 #[path = "stub.rs"]
