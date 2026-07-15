@@ -1,12 +1,59 @@
 //! Generates slide XML and slide relationships XML.
 
 
+/// EMU constants
+const SLIDE_W_4_3: i64 = 9144000;   // 10 inches for 4:3
+const SLIDE_H_4_3: i64 = 6858000;   // 7.5 inches for 4:3
+const SLIDE_W_16_9: i64 = 9144000;  // 10 inches for 16:9
+const SLIDE_H_16_9: i64 = 5143500;  // 5.625 inches for 16:9
+const EMU_PER_PX: i64 = 12700;      // 1 pixel at 72 DPI ≈ 12700 EMU
+
+/// Compute slide dimensions in EMU from a ratio string like "16:9" or "4:3".
+pub fn slide_dimensions(ratio: &str) -> (i64, i64) {
+    match ratio {
+        "4:3" => (SLIDE_W_4_3, SLIDE_H_4_3),
+        "3:2" => (SLIDE_W_16_9 * 2 / 3, SLIDE_H_16_9),  // approximate
+        "16:10" => (SLIDE_W_16_9, SLIDE_H_4_3 * 10 / 15),
+        _ => (SLIDE_W_16_9, SLIDE_H_16_9),  // default 16:9
+    }
+}
+
+/// Compute image display position/size in EMU for "fit" mode (maintain aspect ratio, center).
+fn compute_image_fit(img_w_px: u32, img_h_px: u32, slide_w: i64, slide_h: i64) -> (i64, i64, i64, i64) {
+    let img_emu_w = (img_w_px as i64) * EMU_PER_PX;
+    let img_emu_h = (img_h_px as i64) * EMU_PER_PX;
+    
+    // Scale to fit within slide, maintaining aspect ratio
+    let scale_x = slide_w as f64 / img_emu_w as f64;
+    let scale_y = slide_h as f64 / img_emu_h as f64;
+    let scale = scale_x.min(scale_y).min(1.0);  // Don't upscale
+    
+    let disp_w = (img_emu_w as f64 * scale) as i64;
+    let disp_h = (img_emu_h as f64 * scale) as i64;
+    
+    // Center on slide
+    let off_x = (slide_w - disp_w) / 2;
+    let off_y = (slide_h - disp_h) / 2;
+    
+    (off_x, off_y, disp_w, disp_h)
+}
+
 /// Generates slide XML and rels XML for a given slide number.
 pub struct SlideXml;
 
 impl SlideXml {
     /// Returns (slide_xml, rels_xml) pair.
-    pub fn new(slide_number: u32, image_name: &str) -> (String, String) {
+    /// image_w/image_h are the pixel dimensions of the captured screenshot.
+    /// fit_mode is "fill" (stretch to fill) or "fit" (proportional, centered).
+    /// page_ratio is "16:9", "4:3", etc.
+    pub fn new(slide_number: u32, image_name: &str, image_w: u32, image_h: u32, fit_mode: &str, page_ratio: &str) -> (String, String) {
+        let (slide_w, slide_h) = slide_dimensions(page_ratio);
+        let (off_x, off_y, disp_w, disp_h) = if fit_mode == "fit" {
+            compute_image_fit(image_w, image_h, slide_w, slide_h)
+        } else {
+            (0i64, 0i64, slide_w, slide_h)
+        };
+        
         let slide_xml = format!(
             r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
@@ -41,8 +88,8 @@ impl SlideXml {
         </p:blipFill>
         <p:spPr>
           <a:xfrm>
-            <a:off x="0" y="0"/>
-            <a:ext cx="9144000" cy="6858000"/>
+            <a:off x="{}" y="{}"/>
+            <a:ext cx="{}" cy="{}"/>
           </a:xfrm>
           <a:prstGeom prst="rect">
             <a:avLst/>
@@ -55,7 +102,7 @@ impl SlideXml {
     <a:masterClrMapping/>
   </p:clrMapOvr>
 </p:sld>"#,
-            slide_number, image_name
+            slide_number, image_name, off_x, off_y, disp_w, disp_h
         );
 
         let rels_xml = format!(

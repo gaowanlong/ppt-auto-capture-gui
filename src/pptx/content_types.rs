@@ -1,12 +1,22 @@
-pub struct ContentTypesXml;
+pub struct ContentTypesXml {
+    slides: Vec<(u32, String)>,
+}
 
 impl ContentTypesXml {
-    pub fn new(_slides: &[(u32, String)]) -> Self {
-        Self
+    pub fn new(slides: &[(u32, String)]) -> Self {
+        Self { slides: slides.to_vec() }
     }
 
     pub fn to_string(&self) -> String {
-        String::from(
+        let mut entries = String::new();
+        // Per-slide Override entries (critical for PPTX validity!)
+        for (num, _) in &self.slides {
+            entries.push_str("  <Override PartName=\"/ppt/slides/slide");
+            entries.push_str(&num.to_string());
+            entries.push_str(".xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slide+xml\"/>
+");
+        }
+        format!(
             r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
@@ -21,7 +31,9 @@ impl ContentTypesXml {
   <Override PartName="/ppt/viewProps.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.viewProps+xml"/>
   <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
   <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
-</Types>"#
+{}
+</Types>"#,
+            entries
         )
     }
 }
