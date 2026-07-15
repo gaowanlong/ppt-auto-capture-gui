@@ -1,6 +1,6 @@
 [package]
 name = "ppt-auto-capture-gui"
-version = "0.1.0"
+version = "1.1.0"
 edition = "2021"
 description = "Automatic PowerPoint slide capture tool with GUI"
 authors = ["ppt-capture"]
