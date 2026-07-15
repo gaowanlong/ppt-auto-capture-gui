@@ -192,9 +192,9 @@ pub const SLIDE_MASTER_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" stand
              xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
              xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
   <p:cSld name="Slide Master"/>
-  <p:clrMap>
+  <p:clrMapOvr>
     <a:masterClrMapping/>
-  </p:clrMap>
+  </p:clrMapOvr>
 </p:sldMaster>"#;
 
 pub const SLIDE_MASTER_RELS_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>

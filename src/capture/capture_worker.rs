@@ -215,16 +215,28 @@ impl WorkerLoop {
                             // If window is selected, clip capture region to window bounds
                             if source.window_hwnd != 0 {
                                 if let Ok(window_rect) = crate::windows::get_window_rect(source.window_hwnd) {
-                                    let rx = mon.region.x.max(window_rect.x);
-                                    let ry = mon.region.y.max(window_rect.y);
-                                    let rr = (mon.region.x + mon.region.width as i32)
-                                        .min(window_rect.x + window_rect.width as i32);
-                                    let rb = (mon.region.y + mon.region.height as i32)
-                                        .min(window_rect.y + window_rect.height as i32);
-                                    if rr > rx && rb > ry {
-                                        mon.region = crate::model::Region::new(rx, ry, (rr - rx) as u32, (rb - ry) as u32);
-                                        log::info!("Capture clipped to window region: {}x{} @ ({},{})",
-                                            mon.region.width, mon.region.height, mon.region.x, mon.region.y);
+                                    // Validate window rect - skip if off-screen or too small
+                                    if window_rect.width > 10 && window_rect.height > 10
+                                        && window_rect.x > -32000 && window_rect.y > -32000
+                                        && window_rect.x < 50000 && window_rect.y < 50000
+                                    {
+                                        let rx = mon.region.x.max(window_rect.x);
+                                        let ry = mon.region.y.max(window_rect.y);
+                                        let rr = (mon.region.x + mon.region.width as i32)
+                                            .min(window_rect.x + window_rect.width as i32);
+                                        let rb = (mon.region.y + mon.region.height as i32)
+                                            .min(window_rect.y + window_rect.height as i32);
+                                        if rr > rx && rb > ry {
+                                            let new_w = (rr - rx) as u32;
+                                            let new_h = (rb - ry) as u32;
+                                            mon.region = crate::model::Region::new(rx, ry, new_w, new_h);
+                                            log::info!("Capture clipped to window: {}x{} @ ({},{})",
+                                                new_w, new_h, rx, ry);
+                                        } else {
+                                            log::warn!("Window is outside monitor bounds, capturing full monitor");
+                                        }
+                                    } else {
+                                        log::warn!("Window has invalid rect (minimized/off-screen), capturing full monitor");
                                     }
                                 }
                             }
@@ -317,7 +329,28 @@ impl WorkerLoop {
                 }
                 WorkerCommand::TestCapture(source) => {
                     info!("Test capture requested");
-                    let monitor = self.create_monitor_info_for_source(&source);
+                    let mut monitor = self.create_monitor_info_for_source(&source);
+                    // Also clip to window for test capture
+                    if let Ok(ref mut mon) = monitor {
+                        if source.window_hwnd != 0 {
+                            if let Ok(window_rect) = crate::windows::get_window_rect(source.window_hwnd) {
+                                if window_rect.width > 10 && window_rect.height > 10
+                                    && window_rect.x > -32000 && window_rect.y > -32000
+                                {
+                                    let rx = mon.region.x.max(window_rect.x);
+                                    let ry = mon.region.y.max(window_rect.y);
+                                    let rr = (mon.region.x + mon.region.width as i32)
+                                        .min(window_rect.x + window_rect.width as i32);
+                                    let rb = (mon.region.y + mon.region.height as i32)
+                                        .min(window_rect.y + window_rect.height as i32);
+                                    if rr > rx && rb > ry {
+                                        mon.region = crate::model::Region::new(rx, ry, (rr - rx) as u32, (rb - ry) as u32);
+                                        log::info!("Test capture clipped to window: {}x{}", mon.region.width, mon.region.height);
+                                    }
+                                }
+                            }
+                        }
+                    }
                     match monitor {
                         Ok(mon) => {
                             let mut test_dxgi = DxgiCapturer::new();
