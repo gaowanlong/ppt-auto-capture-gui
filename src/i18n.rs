@@ -245,3 +245,51 @@ pub fn t_none(lang: Language) -> &'static str {
 pub fn t_language_switch(lang: Language) -> &'static str {
     match lang { Language::English => "🌐 Language", Language::Chinese => "🌐 语言" }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_language_label() {
+        assert_eq!(Language::English.label(), "English");
+        assert_eq!(Language::Chinese.label(), "中文");
+    }
+
+    #[test]
+    fn test_language_next() {
+        assert_eq!(Language::English.next(), Language::Chinese);
+        assert_eq!(Language::Chinese.next(), Language::English);
+    }
+
+    #[test]
+    fn test_all_translations_non_empty() {
+        let langs = [Language::English, Language::Chinese];
+        // Spot-check several translations
+        for lang in &langs {
+            assert!(!t_main_title(*lang).is_empty());
+            assert!(!t_status(*lang).is_empty());
+            assert!(!t_start(*lang).is_empty());
+            assert!(!t_stop(*lang).is_empty());
+            assert!(!t_window_source(*lang).is_empty());
+            assert!(!t_capture_display(*lang).is_empty());
+            assert!(!t_settings_title(*lang).is_empty());
+            assert!(!t_output_settings(*lang).is_empty());
+        }
+    }
+
+    #[test]
+    fn test_chinese_and_english_different() {
+        assert_ne!(t_status(Language::English), t_status(Language::Chinese));
+        assert_ne!(t_start(Language::English), t_start(Language::Chinese));
+    }
+
+    #[test]
+    fn test_recovery_msg_formatting() {
+        let msg_en = t_recovery_msg(Language::English, 5);
+        assert!(msg_en.contains("5"));
+        let msg_cn = t_recovery_msg(Language::Chinese, 3);
+        assert!(msg_cn.contains("3"));
+    }
+}

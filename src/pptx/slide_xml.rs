@@ -123,16 +123,17 @@ impl SlideXml {
 pub struct PresentationXml;
 
 impl PresentationXml {
-    pub fn new(slides: &[(u32, String)]) -> String {
+    pub fn new(slides: &[(u32, String)], page_ratio: &str) -> String {
         let mut sld_ids = String::new();
         for (num, _media) in slides {
             sld_ids.push_str(&format!(
                 r#"        <p:sldId id="{}" r:id="rId{}"/>"#,
-                255 + num, num
+                255 + num, num + 1  // rId1 = master, slides start at rId2
             ));
             sld_ids.push('\n');
         }
 
+        let (sld_w, sld_h) = slide_dimensions(page_ratio);
         format!(
             r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
@@ -144,10 +145,10 @@ impl PresentationXml {
   <p:sldIdLst>
 {}
   </p:sldIdLst>
-  <p:sldSz cx="9144000" cy="6858000"/>
-  <p:notesSz cx="6858000" cy="9144000"/>
+  <p:sldSz cx="{}" cy="{}"/>
+  <p:notesSz cx="{}" cy="{}"/>
 </p:presentation>"#,
-            sld_ids
+            sld_ids, sld_w, sld_h, sld_h, sld_w
         )
     }
 }
@@ -276,3 +277,78 @@ pub const DOC_PROPS_CORE_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" sta
   <dcterms:created xsi:type="dcterms:W3CDTF">2025-01-01T00:00:00Z</dcterms:created>
   <dcterms:modified xsi:type="dcterms:W3CDTF">2025-01-01T00:00:00Z</dcterms:modified>
 </cp:coreProperties>"#;
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_slide_dimensions_16_9() {
+        let (w, h) = slide_dimensions("16:9");
+        assert_eq!(w, 9144000);
+        assert_eq!(h, 5143500);
+    }
+
+    #[test]
+    fn test_slide_dimensions_4_3() {
+        let (w, h) = slide_dimensions("4:3");
+        assert_eq!(w, 9144000);
+        assert_eq!(h, 6858000);
+    }
+
+    #[test]
+    fn test_slide_dimensions_default() {
+        let (w, h) = slide_dimensions("unknown");
+        assert_eq!(w, 9144000);
+        assert_eq!(h, 5143500);
+    }
+
+    #[test]
+    #[test]
+    fn test_compute_image_fit_fits_width() {
+        // 1x1 pixel in a 12700x25400 EMU slide → image exactly fits width, centered vertically
+        let (ox, oy, dw, dh) = compute_image_fit(1, 2, 12700, 25400);
+        assert_eq!(dw, 12700, "width fills slide");
+        assert_eq!(dh, 25400, "height fills slide (2x12700)");
+        assert_eq!(ox, 0);
+        assert_eq!(oy, 0);
+    }
+
+    #[test]
+    fn test_slide_xml_contains_image() {
+        let (xml, rels) = SlideXml::new(1, "image1", 1920, 1080, "fit", "16:9");
+        assert!(xml.contains("slide1") || xml.contains("Slide 1"));
+        assert!(xml.contains("image1"));
+        assert!(xml.contains("p:pic"));
+        assert!(rels.contains("rId2"));
+        assert!(rels.contains("../media/image1.png"));
+    }
+
+    #[test]
+    fn test_presentation_xml_contains_slides() {
+        let slides = vec![(1, "image1.png".into()), (2, "image2.png".into())];
+        let xml = PresentationXml::new(&slides, "16:9");
+        assert!(xml.contains("sldId"));
+        assert!(xml.contains("rId2"));  // slide 1 (rId1 is master)
+        assert!(xml.contains("rId3"));  // slide 2
+        assert!(xml.contains("rId1"));  // master reference
+        assert!(xml.contains(r#"cx="9144000""#));
+        assert!(xml.contains(r#"cy="5143500""#));
+    }
+
+    #[test]
+    fn test_presentation_rels_contains_slides() {
+        let slides = vec![(1, "image1.png".into())];
+        let rels = PresentationRelsXml::new(&slides);
+        assert!(rels.contains("rId1"));  // master
+        assert!(rels.contains("rId2"));  // slide 1 (offset)
+        assert!(rels.contains("slides/slide1.xml"));
+    }
+
+    #[test]
+    fn test_slide_rel_contains_image() {
+        let (_, rels) = SlideXml::new(1, "image1", 640, 480, "fill", "16:9");
+        assert!(rels.contains("../media/image1.png"));
+    }
+}

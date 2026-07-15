@@ -81,3 +81,95 @@ impl ChangeDetector {
         self.previous_frame = None;
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Frame;
+
+    fn make_frame(data: &[u8], w: u32, h: u32) -> Frame {
+        Frame::new(data.to_vec(), w, h, w * 4, 0, 0)
+    }
+
+    fn solid_frame(r: u8, g: u8, b: u8, w: u32, h: u32) -> Frame {
+        let mut data = vec![0u8; (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let i = (y * w * 4 + x * 4) as usize;
+                data[i] = b; data[i+1] = g; data[i+2] = r; data[i+3] = 255;
+            }
+        }
+        Frame::new(data, w, h, w * 4, 0, 0)
+    }
+
+    #[test]
+    fn test_no_change_on_identical_frames() {
+        let mut detector = ChangeDetector::new(0.01);
+        let f1 = solid_frame(128, 128, 128, 10, 10);
+        let f2 = solid_frame(128, 128, 128, 10, 10);
+        // First frame sets reference
+        detector.detect_change(&f1);
+        detector.update_reference(&f1);
+        // Second frame should be no change
+        let (changed, ratio) = detector.detect_change(&f2);
+        assert!(!changed, "Identical frames should not trigger change");
+        assert!(ratio < 0.01, "Diff ratio should be near 0");
+    }
+
+    #[test]
+    fn test_change_on_different_frames() {
+        let mut detector = ChangeDetector::new(0.01);
+        let f1 = solid_frame(0, 0, 0, 10, 10);
+        let f2 = solid_frame(255, 255, 255, 10, 10);
+        detector.detect_change(&f1);
+        detector.update_reference(&f1);
+        let (changed, ratio) = detector.detect_change(&f2);
+        assert!(changed, "Different frames should trigger change");
+        assert!(ratio > 0.01, "Diff ratio should be significant");
+    }
+
+    #[test]
+    fn test_high_threshold_ignores_small_changes() {
+        let mut detector = ChangeDetector::new(0.50);
+        let f1 = solid_frame(0, 0, 0, 100, 100);
+        let mut data = vec![0u8; 100 * 100 * 4];
+        // Only change 1000 pixels out of 10000
+        for i in 0..1000 {
+            let idx = (i * 4) as usize;
+            if idx < data.len() {
+                data[idx] = 255; data[idx+1] = 255; data[idx+2] = 255; data[idx+3] = 255;
+            }
+        }
+        let f2 = Frame::new(data, 100, 100, 400, 0, 0);
+        detector.detect_change(&f1);
+        detector.update_reference(&f1);
+        let (changed, _) = detector.detect_change(&f2);
+        // 10% change should be below 50% threshold
+        assert!(!changed, "Small change should be filtered by high threshold");
+    }
+
+    #[test]
+    fn test_reset_clears_state() {
+        let mut detector = ChangeDetector::new(0.01);
+        let f = solid_frame(128, 128, 128, 10, 10);
+        detector.detect_change(&f);
+        detector.update_reference(&f);
+        detector.reset();
+        // After reset, first detect again sets reference
+        let (changed, _) = detector.detect_change(&f);
+        assert!(!changed, "After reset, first frame sets reference");
+    }
+
+    #[test]
+    fn test_set_threshold() {
+        let mut detector = ChangeDetector::new(0.01);
+        detector.set_threshold(0.90);
+        let f1 = solid_frame(0, 0, 0, 10, 10);
+        let f2 = solid_frame(255, 255, 255, 10, 10);
+        detector.detect_change(&f1);
+        detector.update_reference(&f1);
+        let (changed, _) = detector.detect_change(&f2);
+        assert!(changed, "100% pixel change should exceed 90% threshold");
+    }
+}

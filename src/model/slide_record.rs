@@ -55,3 +55,28 @@ impl SlideRecord {
         }
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_slide_record_new() {
+        let r = SlideRecord::new(
+            1, "slide_0001.png".into(), "slides/slide_0001.png".into(),
+            42, 1920, 1080, "abc123".into(),
+            "TestWindow".into(), "Monitor1".into(),
+        );
+        assert_eq!(r.slide_number, 1);
+        assert_eq!(r.png_filename, "slide_0001.png");
+        assert_eq!(r.png_relative_path, "slides/slide_0001.png");
+        assert_eq!(r.frame_index, 42);
+        assert_eq!(r.width, 1920);
+        assert_eq!(r.height, 1080);
+        assert_eq!(r.content_hash, "abc123");
+        assert_eq!(r.source_name, "TestWindow");
+        assert_eq!(r.monitor_name, "Monitor1");
+        assert!(!r.slide_id.is_empty());
+    }
+}

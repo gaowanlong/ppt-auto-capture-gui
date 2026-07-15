@@ -37,3 +37,46 @@ impl ContentTypesXml {
         )
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_content_types_contains_slide_overrides() {
+        let slides = vec![(1, "image1.png".into())];
+        let ct = ContentTypesXml::new(&slides);
+        let xml = ct.to_string();
+        assert!(xml.contains("slide1.xml"));
+        assert!(xml.contains("presentationml.slide+xml"));
+        assert!(xml.contains("image/png"));
+        assert!(xml.contains(r#"Default Extension="png""#));
+    }
+
+    #[test]
+    fn test_multiple_slides() {
+        let slides = vec![(1, "img1.png".into()), (2, "img2.png".into()), (3, "img3.png".into())];
+        let ct = ContentTypesXml::new(&slides);
+        let xml = ct.to_string();
+        assert!(xml.contains("slide1.xml"));
+        assert!(xml.contains("slide2.xml"));
+        assert!(xml.contains("slide3.xml"));
+    }
+
+    #[test]
+    fn test_empty_slides_no_overrides() {
+        let ct = ContentTypesXml::new(&[]);
+        let xml = ct.to_string();
+        assert!(!xml.contains("slide0.xml"));
+        assert!(xml.contains("<Types"));
+        assert!(xml.contains("</Types>"));
+    }
+
+    #[test]
+    fn test_png_default_extension() {
+        let ct = ContentTypesXml::new(&[]);
+        let xml = ct.to_string();
+        assert!(xml.contains(r#"Default Extension="png" ContentType="image/png""#));
+    }
+}

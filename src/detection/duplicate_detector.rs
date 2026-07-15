@@ -49,3 +49,56 @@ impl DuplicateDetector {
         self.last_hash = Some(hash);
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Frame;
+
+    fn make_frame(data: &[u8], w: u32, h: u32) -> Frame {
+        Frame::new(data.to_vec(), w, h, w * 4, 0, 0)
+    }
+
+    #[test]
+    fn test_duplicate_detection() {
+        let detector = DuplicateDetector::new();
+        let f = make_frame(&vec![128u8; 100], 5, 5);
+        let hash = detector.compute_hash(&f);
+        assert_eq!(hash.len(), 64, "SHA256 hex should be 64 chars");
+        // First check with no previous hash — not a duplicate
+        assert!(!detector.is_duplicate(&hash));
+    }
+
+    #[test]
+    fn test_update_last_then_duplicate() {
+        let mut detector = DuplicateDetector::new();
+        let f = make_frame(&[100u8; 400], 10, 10);
+        let hash = detector.compute_hash(&f);
+        detector.update_last(hash.clone());
+        assert!(detector.is_duplicate(&hash), "Same hash should be duplicate");
+    }
+
+    #[test]
+    fn test_different_hashes_not_duplicate() {
+        let mut detector = DuplicateDetector::new();
+        // Frame 1
+        let f1 = make_frame(&[100u8; 400], 10, 10);
+        let h1 = detector.compute_hash(&f1);
+        detector.update_last(h1);
+        // Frame 2 (different data)
+        let f2 = make_frame(&[200u8; 400], 10, 10);
+        let h2 = detector.compute_hash(&f2);
+        assert!(!detector.is_duplicate(&h2), "Different hash should not be duplicate");
+    }
+
+    #[test]
+    fn test_sha256_consistency() {
+        let detector = DuplicateDetector::new();
+        let f1 = make_frame(&[50u8; 400], 10, 10);
+        let f2 = make_frame(&[50u8; 400], 10, 10);
+        let h1 = detector.compute_hash(&f1);
+        let h2 = detector.compute_hash(&f2);
+        assert_eq!(h1, h2, "Identical frames should produce same hash");
+    }
+}

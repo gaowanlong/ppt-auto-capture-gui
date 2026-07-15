@@ -52,7 +52,7 @@ impl Default for AppConfig {
             output_dir: "output".to_string(),
             output_filename: format!("ppt-capture-{}.pptx", chrono::Local::now().format("%Y%m%d-%H%M%S")),
             page_ratio: "16:9".to_string(),
-            image_fit: "fill".to_string(),
+            image_fit: "fit".to_string(),
             keep_previous: true,
             last_window_hwnd: 0,
             last_window_title: String::new(),
@@ -96,5 +96,34 @@ impl AppConfig {
         std::fs::write(path, content)
             .context("Failed to write config file")?;
         Ok(())
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_config_values() {
+        let cfg = AppConfig::default();
+        assert_eq!(cfg.sample_interval_ms, 500);
+        assert_eq!(cfg.stability_frames, 3);
+        assert_eq!(cfg.animation_timeout_ms, 10000);
+        assert_eq!(cfg.change_threshold, 0.15);
+        assert_eq!(cfg.black_threshold, 0.95);
+        assert!(cfg.filter_duplicates);
+        assert_eq!(cfg.page_ratio, "16:9");
+        assert_eq!(cfg.image_fit, "fit");
+        assert_eq!(cfg.keep_previous, true);
+    }
+
+    #[test]
+    fn test_config_serialize_roundtrip() {
+        let cfg = AppConfig::default();
+        let json = serde_json::to_string(&cfg).expect("Serialization failed");
+        let deserialized: AppConfig = serde_json::from_str(&json).expect("Deserialization failed");
+        assert_eq!(deserialized.sample_interval_ms, cfg.sample_interval_ms);
+        assert_eq!(deserialized.change_threshold, cfg.change_threshold);
     }
 }

@@ -81,7 +81,7 @@ impl PptxWriter {
             ContentTypesXml::new(&existing_slides).to_string().as_bytes())?;
         zip_write(&mut zip, "_rels/.rels", options, RELS_DOT_RELS.as_bytes())?;
         zip_write(&mut zip, "ppt/presentation.xml", options,
-            PresentationXml::new(&existing_slides).to_string().as_bytes())?;
+            PresentationXml::new(&existing_slides, &self.page_ratio).to_string().as_bytes())?;
         zip_write(&mut zip, "ppt/_rels/presentation.xml.rels", options,
             PresentationRelsXml::new(&existing_slides).to_string().as_bytes())?;
         zip_write(&mut zip, "ppt/slideMasters/slideMaster1.xml", options, SLIDE_MASTER_XML.as_bytes())?;

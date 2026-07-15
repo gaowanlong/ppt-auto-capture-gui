@@ -55,3 +55,59 @@ impl BlackFrameDetector {
         ratio >= self.threshold
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Frame;
+
+    fn all_black_frame(w: u32, h: u32) -> Frame {
+        let data = vec![0u8; (w * h * 4) as usize];
+        Frame::new(data, w, h, w * 4, 0, 0)
+    }
+
+    fn all_white_frame(w: u32, h: u32) -> Frame {
+        let data = vec![255u8; (w * h * 4) as usize];
+        Frame::new(data, w, h, w * 4, 0, 0)
+    }
+
+    fn mixed_frame() -> Frame {
+        let mut data = vec![0u8; 100 * 100 * 4];
+        // Make half black, half white
+        let half = (100 * 100 * 4) / 2;
+        for i in half..data.len() {
+            data[i] = 255;
+        }
+        Frame::new(data, 100, 100, 400, 0, 0)
+    }
+
+    #[test]
+    fn test_all_black_is_black() {
+        let detector = BlackFrameDetector::new(0.95);
+        let frame = all_black_frame(100, 100);
+        assert!(detector.is_black(&frame), "All-black frame should be detected");
+    }
+
+    #[test]
+    fn test_all_white_is_not_black() {
+        let detector = BlackFrameDetector::new(0.95);
+        let frame = all_white_frame(100, 100);
+        assert!(!detector.is_black(&frame), "All-white frame should not be black");
+    }
+
+    #[test]
+    fn test_low_threshold_detects_mixed() {
+        let detector = BlackFrameDetector::new(0.40);
+        let frame = mixed_frame(); // 50% black
+        assert!(detector.is_black(&frame), "Mixed 50% black should be detected with 40% threshold");
+    }
+
+    #[test]
+    fn test_set_threshold() {
+        let mut detector = BlackFrameDetector::new(0.95);
+        detector.set_threshold(0.05);
+        let frame = all_white_frame(10, 10);
+        assert!(!detector.is_black(&frame), "All-white frame should not be black even with 5% threshold");
+    }
+}

@@ -69,3 +69,77 @@ impl Frame {
         thumb
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper: create a simple colored frame
+    fn make_frame(r_val: u8, g_val: u8, b_val: u8, w: u32, h: u32) -> Frame {
+        let stride = w * 4;
+        let mut data = vec![0u8; (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let idx = (y * stride + x * 4) as usize;
+                data[idx] = b_val;     // B
+                data[idx+1] = g_val;   // G
+                data[idx+2] = r_val;   // R
+                data[idx+3] = 255;     // A
+            }
+        }
+        Frame::new(data, w, h, stride, 1, 1000)
+    }
+
+    #[test]
+    fn test_frame_new() {
+        let f = make_frame(255, 0, 0, 10, 10);
+        assert_eq!(f.width, 10);
+        assert_eq!(f.height, 10);
+        assert_eq!(f.stride, 40);
+        assert_eq!(f.data.len(), 400);
+        assert_eq!(f.frame_index, 1);
+        assert_eq!(f.timestamp_ms, 1000);
+    }
+
+    #[test]
+    fn test_luminance_at() {
+        // White frame → luminance ~255
+        let white = make_frame(255, 255, 255, 5, 5);
+        assert_eq!(white.luminance_at(2, 2), 255);
+        // Black frame → luminance ~0
+        let black = make_frame(0, 0, 0, 5, 5);
+        assert_eq!(black.luminance_at(2, 2), 0);
+        // Red frame → R=255, G=0, B=0 → luminance = 255*0.299 ≈ 76
+        let red = make_frame(255, 0, 0, 5, 5);
+        assert_eq!(red.luminance_at(2, 2), 76);
+        // Green frame → R=0, G=255, B=0 → luminance = 255*0.587 ≈ 149
+        let green = make_frame(0, 255, 0, 5, 5);
+        assert_eq!(green.luminance_at(2, 2), 149);
+    }
+
+    #[test]
+    fn test_luminance_out_of_bounds() {
+        let f = make_frame(128, 128, 128, 10, 10);
+        assert_eq!(f.luminance_at(100, 100), 0);
+        assert_eq!(f.luminance_at(10, 10), 0);
+    }
+
+    #[test]
+    fn test_thumbnail_downscale() {
+        let f = make_frame(255, 0, 0, 100, 50);
+        let thumb = f.thumbnail(20, 20);
+        // 100x50 scaled to fit within 20x20: scale = min(20/100, 20/50) = 0.2
+        // new_w = 100 * 0.2 = 20, new_h = 50 * 0.2 = 10
+        // size = 20 * 10 * 4 = 800
+        assert_eq!(thumb.len(), 800, "Expected 20x10x4 = 800 bytes");
+    }
+
+    #[test]
+    fn test_thumbnail_upscale_not_happens() {
+        let f = make_frame(0, 255, 0, 10, 10);
+        let thumb = f.thumbnail(100, 100);
+        // Scale is capped at 1.0, so thumb should be same size: 10x10x4 = 400
+        assert_eq!(thumb.len(), 400, "Should not upscale");
+    }
+}

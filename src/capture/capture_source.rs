@@ -53,3 +53,43 @@ impl CaptureSource {
         }
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_capture_source_defaults() {
+        let s = CaptureSource::new(100, "TestWin".into(), 200, "Display1".into());
+        assert_eq!(s.window_hwnd, 100);
+        assert_eq!(s.window_title, "TestWin");
+        assert_eq!(s.monitor_hmonitor, 200);
+        assert_eq!(s.monitor_description, "Display1");
+        assert!(s.use_dxgi);
+    }
+
+    #[test]
+    fn test_is_window_selected() {
+        let s = CaptureSource::new(0, "".into(), 0, "".into());
+        assert!(!s.is_window_selected());
+        let s = CaptureSource::new(12345, "PPT".into(), 0, "".into());
+        assert!(s.is_window_selected());
+    }
+
+    #[test]
+    fn test_display_name_with_window() {
+        let s = CaptureSource::new(100, "My Window".into(), 200, "Display 1".into());
+        let name = s.display_name();
+        assert!(name.contains("My Window"));
+        assert!(name.contains("Display 1"));
+    }
+
+    #[test]
+    fn test_display_name_without_window() {
+        let s = CaptureSource::new(0, "".into(), 200, "Display 1".into());
+        let name = s.display_name();
+        assert!(name.contains("Full monitor"));
+        assert!(name.contains("Display 1"));
+    }
+}
