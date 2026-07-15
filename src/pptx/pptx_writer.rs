@@ -105,7 +105,10 @@ impl PptxWriter {
         for (num, _) in &existing_slides {
             // Get image dimensions from the existing PNG file
             let img_dimensions = get_png_dimensions(&slides_dir, *num);
-            let (img_w, img_h) = img_dimensions.unwrap_or((1920, 1080));
+            // If PNG not found on disk, fall back to the record's stored dimensions
+            let (img_w, img_h) = img_dimensions.unwrap_or_else(|| {
+                (record.width.max(1), record.height.max(1))
+            });
             let (slide_xml, rels_xml) = SlideXml::new(*num, &format!("image{}", num), img_w, img_h, &self.image_fit, &self.page_ratio);
             zip_write(&mut zip, &format!("ppt/slides/slide{}.xml", num), options, slide_xml.as_bytes())?;
             zip_write(&mut zip, &format!("ppt/slides/_rels/slide{}.xml.rels", num), options, rels_xml.as_bytes())?;

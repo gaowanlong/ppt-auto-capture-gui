@@ -24,6 +24,11 @@ impl SessionEventMonitor {
 }
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
 pub enum SessionState { Unlocked, Locked }
+
+/// Stub: returns error on non-Windows platforms.
+pub fn get_window_rect(_hwnd: u64) -> anyhow::Result<crate::model::Region> {
+    Err(anyhow::anyhow!("get_window_rect not available on this platform"))
+}
 pub fn enumerate_monitors() -> Result<Vec<MonitorInfo>> {
     Ok(vec![MonitorInfo{
         hmonitor:1, adapter_name:"Mock".into(), output_name:"DISPLAY1".into(),

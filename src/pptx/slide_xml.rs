@@ -161,7 +161,7 @@ impl PresentationRelsXml {
         for (num, _media) in slides {
             slide_rels.push_str(&format!(
                 r#"  <Relationship Id="rId{}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide{}.xml"/>"#,
-                num, num
+                num + 1, num  // rId1 = master, slides start at rId2
             ));
             slide_rels.push('\n');
         }

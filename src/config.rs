@@ -46,7 +46,7 @@ impl Default for AppConfig {
             sample_interval_ms: 500,
             stability_frames: 3,
             animation_timeout_ms: 10000,
-            change_threshold: 0.01,
+            change_threshold: 0.15,
             black_threshold: 0.95,
             filter_duplicates: true,
             output_dir: "output".to_string(),

@@ -10,7 +10,7 @@ use crossbeam_channel::{Sender};
 use crate::capture::capture_source::CaptureSource;
 use crate::capture::capture_state::CaptureState;
 use crate::detection::{ChangeDetector, StabilityDetector, DuplicateDetector, BlackFrameDetector};
-use crate::model::{Frame, MonitorInfo};
+use crate::model::{Frame, MonitorInfo, Region};
 use crate::pptx::PptxWriter;
 use crate::storage::{ImageStore, ManifestStore};
 use crate::windows::{DxgiCapturer, GdiCapturer};
@@ -138,7 +138,7 @@ impl WorkerLoop {
             event_tx,
             dxgi_capturer: DxgiCapturer::new(),
             gdi_capturer: GdiCapturer::new(),
-            change_detector: ChangeDetector::new(0.01),
+            change_detector: ChangeDetector::new(0.15),
             stability_detector: StabilityDetector::new(3),
             duplicate_detector: DuplicateDetector::new(),
             black_frame_detector: BlackFrameDetector::new(0.95),
@@ -211,7 +211,23 @@ impl WorkerLoop {
 
                     let monitor = self.create_monitor_info_for_source(&source);
                     match monitor {
-                        Ok(mon) => {
+                        Ok(mut mon) => {
+                            // If window is selected, clip capture region to window bounds
+                            if source.window_hwnd != 0 {
+                                if let Ok(window_rect) = crate::windows::get_window_rect(source.window_hwnd) {
+                                    let rx = mon.region.x.max(window_rect.x);
+                                    let ry = mon.region.y.max(window_rect.y);
+                                    let rr = (mon.region.x + mon.region.width as i32)
+                                        .min(window_rect.x + window_rect.width as i32);
+                                    let rb = (mon.region.y + mon.region.height as i32)
+                                        .min(window_rect.y + window_rect.height as i32);
+                                    if rr > rx && rb > ry {
+                                        mon.region = crate::model::Region::new(rx, ry, (rr - rx) as u32, (rb - ry) as u32);
+                                        log::info!("Capture clipped to window region: {}x{} @ ({},{})",
+                                            mon.region.width, mon.region.height, mon.region.x, mon.region.y);
+                                    }
+                                }
+                            }
                             if source.use_dxgi {
                                 match self.dxgi_capturer.initialize(&mon) {
                                     Ok(()) => info!("DXGI capturer initialized"),

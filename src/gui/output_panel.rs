@@ -21,7 +21,7 @@ impl OutputPanel {
             output_dir: "output".into(),
             output_filename: filename.to_string(),
             page_ratio: "16:9".into(),
-            image_fit: "fill".into(),
+            image_fit: "fit".into(),
             keep_previous: true,
             open_output_requested: false,
             status_text: String::new(),

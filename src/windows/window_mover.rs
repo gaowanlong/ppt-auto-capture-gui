@@ -31,3 +31,16 @@ pub fn maximize_window(hwnd: u64) -> Result<()> {
     unsafe { ShowWindow(hwnd as isize, 3i32); }
     Ok(())
 }
+
+/// Get the bounding rectangle of a window in screen coordinates.
+pub fn get_window_rect(hwnd: u64) -> Result<Region> {
+    unsafe {
+        let mut r = MyRect { left: 0, top: 0, right: 0, bottom: 0 };
+        let ret = GetWindowRect(hwnd as isize, &mut r as *mut MyRect as *mut u8);
+        if ret != 0 {
+            Ok(Region::new(r.left, r.top, (r.right - r.left) as u32, (r.bottom - r.top) as u32))
+        } else {
+            Err(anyhow::anyhow!("GetWindowRect failed for HWND 0x{:X}", hwnd))
+        }
+    }
+}
