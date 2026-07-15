@@ -45,7 +45,7 @@ pub fn recover_session(output_dir: &Path) -> Result<()> {
 
     info!("Recovering session with {} slides…", records.len());
 
-    let pptx_writer = PptxWriter::new(&output_dir.join("output.pptx"));
+    let pptx_writer = PptxWriter::new(&output_dir.join("output.pptx"), "16:9", "fit");
 
     let slides_dir = output_dir.join("slides");
     for record in &records {

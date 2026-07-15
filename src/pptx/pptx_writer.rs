@@ -12,7 +12,8 @@ use super::slide_xml::*;
 
 pub struct PptxWriter {
     output_path: PathBuf,
-    _media_count: u32,
+    page_ratio: String,
+    image_fit: String,
 }
 
 /// Read PNG dimensions from file (parses IHDR chunk).
@@ -43,13 +44,13 @@ fn zip_write<W: Write + std::io::Seek>(
 }
 
 impl PptxWriter {
-    pub fn new(output_path: &Path) -> Self {
+    pub fn new(output_path: &Path, page_ratio: &str, image_fit: &str) -> Self {
         if output_path.exists() {
             let backup = output_path.with_extension("previous.pptx");
             let _ = std::fs::copy(output_path, &backup);
             info!("Backed up existing PPTX to {:?}", backup);
         }
-        Self { output_path: output_path.to_path_buf(), _media_count: 0 }
+        Self { output_path: output_path.to_path_buf(), page_ratio: page_ratio.to_string(), image_fit: image_fit.to_string() }
     }
 
     pub fn add_slide(&self, record: &SlideRecord, _png_path: &Path) -> Result<()> {
@@ -105,7 +106,7 @@ impl PptxWriter {
             // Get image dimensions from the existing PNG file
             let img_dimensions = get_png_dimensions(&slides_dir, *num);
             let (img_w, img_h) = img_dimensions.unwrap_or((1920, 1080));
-            let (slide_xml, rels_xml) = SlideXml::new(*num, &format!("image{}", num), img_w, img_h, "fit", "16:9");
+            let (slide_xml, rels_xml) = SlideXml::new(*num, &format!("image{}", num), img_w, img_h, &self.image_fit, &self.page_ratio);
             zip_write(&mut zip, &format!("ppt/slides/slide{}.xml", num), options, slide_xml.as_bytes())?;
             zip_write(&mut zip, &format!("ppt/slides/_rels/slide{}.xml.rels", num), options, rels_xml.as_bytes())?;
         }

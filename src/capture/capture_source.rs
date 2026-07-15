@@ -15,6 +15,10 @@ pub struct CaptureSource {
     pub output_dir: String,
     /// Output PPTX filename.
     pub output_filename: String,
+    /// Slide aspect ratio ("16:9" or "4:3").
+    pub page_ratio: String,
+    /// Image fit mode: "fill" or "fit".
+    pub image_fit: String,
 }
 
 impl CaptureSource {
@@ -32,6 +36,8 @@ impl CaptureSource {
             use_dxgi: true,
             output_dir: String::from("output"),
             output_filename: String::from("output.pptx"),
+            page_ratio: String::from("16:9"),
+            image_fit: String::from("fit"),
         }
     }
 

@@ -246,7 +246,7 @@ impl WorkerLoop {
                             let _ = std::fs::create_dir_all(&out_dir);
                             self.image_store = Some(ImageStore::new(out_dir.clone()));
                             self.manifest_store = Some(ManifestStore::new(out_dir.join("manifest.jsonl")));
-                            self.pptx_writer = Some(PptxWriter::new(&out_dir.join(&source.output_filename)));
+                            self.pptx_writer = Some(PptxWriter::new(&out_dir.join(&source.output_filename), &source.page_ratio, &source.image_fit));
 
                             let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
                         }

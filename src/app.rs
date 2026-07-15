@@ -86,12 +86,17 @@ impl PptAutoCaptureApp {
         let worker = CaptureWorker::new();
         self.event_rx = Some(worker.event_rx());
         self.cmd_tx = Some(worker.command_tx());
+        // Regenerate output filename with current timestamp
+        self.output_panel.output_filename = format!("ppt-capture-{}.pptx",
+            chrono::Local::now().format("%Y%m%d-%H%M%S"));
         let mut source = CaptureSource::new(
             self.source_panel.selected_hwnd, self.source_panel.selected_title.clone(),
             self.display_panel.selected_hmonitor, self.display_panel.selected_description.clone(),
         );
         source.output_dir = self.output_panel.output_dir.clone();
         source.output_filename = self.output_panel.output_filename.clone();
+        source.page_ratio = self.output_panel.page_ratio.clone();
+        source.image_fit = self.output_panel.image_fit.clone();
         let _ = self.cmd_tx.as_ref().map(|tx| tx.send(WorkerCommand::Start(source)));
         self.worker = Some(worker);
         self.dashboard.session_active = true;
@@ -121,6 +126,8 @@ impl PptAutoCaptureApp {
         );
         source.output_dir = self.output_panel.output_dir.clone();
         source.output_filename = self.output_panel.output_filename.clone();
+        source.page_ratio = self.output_panel.page_ratio.clone();
+        source.image_fit = self.output_panel.image_fit.clone();
 
         if let Some(ref tx) = self.cmd_tx {
             let _ = tx.send(WorkerCommand::TestCapture(source));
