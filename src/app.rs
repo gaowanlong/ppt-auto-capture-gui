@@ -3,7 +3,7 @@ use log::{error, info};
 
 use crossbeam_channel::{Receiver, Sender};
 
-use crate::capture::{CaptureWorker, WorkerCommand, WorkerEvent, CaptureSource};
+use crate::capture::{CaptureState, CaptureWorker, WorkerCommand, WorkerEvent, CaptureSource};
 use crate::i18n::{self, Language};
 use crate::gui::dashboard::DashboardPanel;
 use crate::gui::source_panel::SourcePanel;
@@ -93,6 +93,9 @@ impl PptAutoCaptureApp {
         let _ = self.cmd_tx.as_ref().map(|tx| tx.send(WorkerCommand::Start(source)));
         self.worker = Some(worker);
         self.dashboard.session_active = true;
+        self.dashboard.output_path = format!("{}/{}",
+                        self.output_panel.output_dir.trim_end_matches('/').trim_end_matches('\\'),
+                        self.output_panel.output_filename);
         self.dashboard.source_window_title = self.source_panel.selected_title.clone();
         self.dashboard.monitor_description = self.display_panel.selected_description.clone();
     }
@@ -102,6 +105,10 @@ impl PptAutoCaptureApp {
     fn stop_capture(&mut self) {
         if let Some(ref tx) = self.cmd_tx { let _ = tx.send(WorkerCommand::Stop); }
         if let Some(mut worker) = self.worker.take() { worker.stop(); }
+        self.cmd_tx = None;
+        self.event_rx = None;
+        self.dashboard.current_state = CaptureState::Stopped;
+        self.dashboard.state_message = CaptureState::Stopped.label().to_string();
         self.dashboard.session_active = false;
     }
 
@@ -130,7 +137,27 @@ impl PptAutoCaptureApp {
 
     fn refresh_windows(&mut self) {
         self.source_panel.refresh_requested = false;
-        if let Ok(w) = enumerate_windows() { self.windows = w.clone(); self.source_panel.windows = w; }
+        if let Ok(w) = enumerate_windows() { 
+            self.windows = w.clone(); 
+            self.source_panel.windows = w.clone();
+            
+            // Auto-select the best window: prefer slideshow, then PPT window
+            if self.source_panel.selected_hwnd == 0 {
+                // Sort by priority: slideshow first, then PPT
+                let mut candidates: Vec<&WindowInfo> = w.iter().collect();
+                candidates.sort_by(|a, b| {
+                    let a_score = if a.is_powerpoint { 2 } else if a.title.to_lowercase().contains("powerpoint") || a.title.to_lowercase().contains("ppt") { 1 } else { 0 };
+                    let b_score = if b.is_powerpoint { 2 } else if b.title.to_lowercase().contains("powerpoint") || b.title.to_lowercase().contains("ppt") { 1 } else { 0 };
+                    b_score.cmp(&a_score)
+                });
+                if let Some(best) = candidates.first() {
+                    self.source_panel.selected_hwnd = best.hwnd;
+                    self.source_panel.selected_title = best.title.clone();
+                    self.source_panel.status_text = format!("Auto-selected: {}", best.title);
+                    info!("Auto-selected window: {} (0x{:X})", best.title, best.hwnd);
+                }
+            }
+        }
     }
 
     fn refresh_displays(&mut self) {
@@ -169,8 +196,8 @@ impl eframe::App for PptAutoCaptureApp {
             else { self.dashboard.last_error = None; self.start_capture(); }
         }
         if self.pending_pause { self.pending_pause = false; self.pause_capture(); }
-        if self.pending_stop { self.pending_stop = false; self.stop_capture(); }
         if self.pending_resume { self.pending_resume = false; self.resume_capture(); }
+        if self.pending_stop { self.pending_stop = false; self.stop_capture(); }
 
         if self.source_panel.refresh_requested { self.refresh_windows(); }
         if self.source_panel.move_requested && self.display_panel.selected_hmonitor != 0 {
@@ -201,11 +228,23 @@ impl eframe::App for PptAutoCaptureApp {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             match self.active_tab {
-                Tab::Dashboard => self.dashboard.render(ui, self.language, &mut self.pending_start, &mut self.pending_pause, &mut self.pending_stop, &mut self.pending_resume),
+                Tab::Dashboard => {
+                    // Sync output info to dashboard
+                    self.dashboard.output_path = format!("{}/{}",
+                        self.output_panel.output_dir.trim_end_matches('/').trim_end_matches('\\'),
+                        self.output_panel.output_filename);
+                    self.dashboard.render(ui, self.language, &mut self.pending_start, &mut self.pending_pause, &mut self.pending_stop, &mut self.pending_resume);
+                }
                 Tab::Source => { self.source_panel.render(ui, self.language, self.display_panel.selected_hmonitor != 0); if self.windows.is_empty() { self.refresh_windows(); } }
                 Tab::Display => { self.display_panel.render(ui, self.language); if self.monitors.is_empty() { self.refresh_displays(); } }
                 Tab::Settings => self.settings_panel.render(ui, self.language),
-                Tab::Output => self.output_panel.render(ui, self.language),
+                Tab::Output => {
+                    self.output_panel.render(ui, self.language);
+                    // Sync output filename to dashboard
+                    self.dashboard.output_path = format!("{}/{}",
+                        self.output_panel.output_dir.trim_end_matches('/').trim_end_matches('\\'),
+                        self.output_panel.output_filename);
+                }
             }
         });
 

@@ -281,9 +281,16 @@ impl WorkerLoop {
                                 let _ = self.gdi_capturer.initialize(&mon);
                             }
                             self.state = CaptureState::Running;
-                            let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
+                        } else {
+                            // Monitor no longer available — try GDI fallback
+                            log::warn!("Monitor unavailable on resume, trying GDI");
+                            self.state = CaptureState::Running;
                         }
+                    } else {
+                        log::warn!("No source set on resume");
+                        self.state = CaptureState::Stopped;
                     }
+                    let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
                 }
                 WorkerCommand::UpdateConfig(cfg) => {
                     info!("Updating capture config");

@@ -31,6 +31,10 @@ impl SourcePanel {
         let has_selection = self.selected_hwnd != 0;
         ui.vertical(|ui| {
             ui.heading(i18n::t_window_source(language));
+            ui.label(RichText::new(match language {
+                Language::English => "Select the meeting or slideshow window. 📊 = PPT slideshow recommended.",
+                Language::Chinese => "选择会议窗口或幻灯片放映窗口。📊 = 推荐的PPT放映窗口。",
+            }).size(11.0).color(egui::Color32::GRAY));
 
             if ui.button(i18n::t_refresh_windows(language)).clicked() {
                 self.refresh_requested = true;
@@ -53,11 +57,13 @@ impl SourcePanel {
                         });
 
                         for win in sorted {
-                            let label = format!("{} ({}) [{}x{}] {}",
+                            let pos_label = format!("({},{})", win.region.x, win.region.y);
+                            let label = format!("{} [{}x{} @{}] {} {}",
                                 win.title,
-                                win.process_name,
                                 win.region.width, win.region.height,
-                                if win.is_powerpoint { "📊" } else { "" }
+                                pos_label,
+                                if win.is_powerpoint { "📊" } else { "" },
+                                if win.is_minimized { "(minimized)" } else { "" }
                             );
 
                             if self.selected_hwnd == win.hwnd {
