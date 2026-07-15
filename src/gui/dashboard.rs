@@ -1,4 +1,5 @@
 use egui::*;
+use crate::i18n::{self, Language};
 use crate::capture::CaptureState;
 
 pub struct DashboardPanel {
@@ -36,11 +37,11 @@ impl DashboardPanel {
         }
     }
 
-    pub fn render(&mut self, ui: &mut Ui, start_btn: &mut bool, pause_btn: &mut bool,
+    pub fn render(&mut self, ui: &mut Ui, language: Language, start_btn: &mut bool, pause_btn: &mut bool,
                   stop_btn: &mut bool, resume_btn: &mut bool) {
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Status:").strong());
+                ui.label(RichText::new(i18n::t_status(language)).strong());
                 let state_color = match self.current_state {
                     CaptureState::Idle => Color32::GRAY,
                     CaptureState::Running => Color32::GREEN,
@@ -58,10 +59,10 @@ impl DashboardPanel {
             ui.separator();
 
             let info_rows: [(&str, &str); 4] = [
-                ("Capture Source:", &self.source_window_title),
-                ("Display:", &self.monitor_description),
-                ("Output:", &self.output_path),
-                ("Slides Saved:", &format!("{}", self.saved_slides_count)),
+                (i18n::t_capture_source(language), &self.source_window_title),
+                (i18n::t_display(language), &self.monitor_description),
+                (i18n::t_output(language), &self.output_path),
+                (i18n::t_slides_saved(language), &format!("{}", self.saved_slides_count)),
             ];
 
             egui::Grid::new("dashboard_info")
@@ -88,7 +89,7 @@ impl DashboardPanel {
                     self.current_state == CaptureState::Idle
                         || self.current_state == CaptureState::Stopped
                         || self.current_state == CaptureState::Error,
-                    Button::new(RichText::new("▶ Start").size(16.0)),
+                    Button::new(RichText::new(i18n::t_start(language)).size(16.0)),
                 ).clicked() {
                     *start_btn = true;
                 }
@@ -97,14 +98,14 @@ impl DashboardPanel {
                     self.current_state == CaptureState::Running
                         || self.current_state == CaptureState::WaitingForStable
                         || self.current_state == CaptureState::Stable,
-                    Button::new(RichText::new("⏸ Pause").size(16.0)),
+                    Button::new(RichText::new(i18n::t_pause(language)).size(16.0)),
                 ).clicked() {
                     *pause_btn = true;
                 }
 
                 if ui.add_enabled(
                     self.current_state.is_paused(),
-                    Button::new(RichText::new("▶ Resume").size(16.0)),
+                    Button::new(RichText::new(i18n::t_resume(language)).size(16.0)),
                 ).clicked() {
                     *resume_btn = true;
                 }
@@ -113,7 +114,7 @@ impl DashboardPanel {
                     self.current_state.is_active()
                         || self.current_state.is_paused()
                         || self.current_state == CaptureState::ProtectedOrBlack,
-                    Button::new(RichText::new("⏹ Stop").size(16.0)),
+                    Button::new(RichText::new(i18n::t_stop(language)).size(16.0)),
                 ).clicked() {
                     *stop_btn = true;
                 }
@@ -135,7 +136,7 @@ impl DashboardPanel {
             if let Some(ref rgba_data) = self.test_frame_rgba {
                 if self.test_frame_w > 0 && self.test_frame_h > 0 {
                     ui.separator();
-                    ui.label(RichText::new("Test Capture Preview:").strong());
+                    ui.label(RichText::new(i18n::t_test_preview(language)).strong());
 
                     // Show as a raw image created from byte data
                     let available = ui.available_size();

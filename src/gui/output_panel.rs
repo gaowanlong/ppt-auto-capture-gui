@@ -1,4 +1,5 @@
 use egui::*;
+use crate::i18n::{self, Language};
 
 pub struct OutputPanel {
     pub output_dir: String,
@@ -12,9 +13,13 @@ pub struct OutputPanel {
 
 impl OutputPanel {
     pub fn new() -> Self {
+        Self::new_with_filename("output.pptx")
+    }
+
+    pub fn new_with_filename(filename: &str) -> Self {
         Self {
             output_dir: "output".into(),
-            output_filename: "output.pptx".into(),
+            output_filename: filename.to_string(),
             page_ratio: "16:9".into(),
             image_fit: "fill".into(),
             keep_previous: true,
@@ -23,17 +28,17 @@ impl OutputPanel {
         }
     }
 
-    pub fn render(&mut self, ui: &mut Ui) {
+    pub fn render(&mut self, ui: &mut Ui, language: Language) {
         ui.vertical(|ui| {
-            ui.heading("Output Settings");
+            ui.heading(i18n::t_output_settings(language));
 
             // --- Editable fields ---
             ui.horizontal(|ui| {
-                ui.label("Output Directory:");
+                ui.label(i18n::t_output_dir(language));
                 ui.add(TextEdit::singleline(&mut self.output_dir));
             });
             ui.horizontal(|ui| {
-                ui.label("PPTX Filename:");
+                ui.label(i18n::t_pptx_filename(language));
                 ui.add(TextEdit::singleline(&mut self.output_filename));
             });
 
@@ -41,7 +46,7 @@ impl OutputPanel {
 
             // --- Aspect ratio ---
             ui.horizontal(|ui| {
-                ui.label("Slide Aspect Ratio:");
+                ui.label(i18n::t_slide_aspect(language));
                 let ratios = ["16:9", "4:3", "3:2", "16:10"];
                 egui::ComboBox::from_id_salt("page_ratio_selector")
                     .selected_text(&self.page_ratio)
@@ -54,7 +59,7 @@ impl OutputPanel {
 
             // --- Image fit ---
             ui.horizontal(|ui| {
-                ui.label("Image Fit:");
+                ui.label(i18n::t_image_fit(language));
                 let fits = ["fill", "fit"];
                 egui::ComboBox::from_id_salt("image_fit_selector")
                     .selected_text(&self.image_fit)
@@ -66,11 +71,11 @@ impl OutputPanel {
             });
 
             // --- Keep previous checkbox ---
-            ui.checkbox(&mut self.keep_previous, "Keep Previous.pptx");
+            ui.checkbox(&mut self.keep_previous, i18n::t_keep_previous(language));
 
             ui.separator();
 
-            if ui.button("📂 Open Output Directory").clicked() {
+            if ui.button(i18n::t_open_output(language)).clicked() {
                 self.open_output_requested = true;
             }
 
@@ -80,11 +85,11 @@ impl OutputPanel {
             }
 
             ui.separator();
-            ui.label(RichText::new("Output notes:").strong());
-            ui.label("• PNG files are saved to output/slides/ directory.");
-            ui.label("• output.pptx is rebuilt with each new slide.");
-            ui.label("• output.previous.pptx keeps the last version for safety.");
-            ui.label("• manifest.jsonl tracks all captured slides for recovery.");
+            ui.label(RichText::new(i18n::t_output_notes(language)).strong());
+            ui.label(i18n::t_output_notes_1(language));
+            ui.label(i18n::t_output_notes_2(language));
+            ui.label(i18n::t_output_notes_3(language));
+            ui.label(i18n::t_output_notes_4(language));
         });
     }
 }

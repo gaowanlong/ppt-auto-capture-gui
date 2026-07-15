@@ -1,4 +1,5 @@
 use egui::*;
+use crate::i18n::{self, Language};
 use crate::capture::CaptureConfig;
 
 pub struct SettingsPanel {
@@ -25,11 +26,11 @@ impl SettingsPanel {
         }
     }
 
-    pub fn render(&mut self, ui: &mut Ui) {
+    pub fn render(&mut self, ui: &mut Ui, language: Language) {
         self.changed = false;
 
         ui.vertical(|ui| {
-            ui.heading("Capture Settings");
+            ui.heading(i18n::t_settings_title(language));
 
             egui::Grid::new("settings_grid")
                 .num_columns(2)

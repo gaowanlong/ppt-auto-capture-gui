@@ -4,8 +4,14 @@ use log::{error, info};
 use crossbeam_channel::{Receiver, Sender};
 
 use crate::capture::{CaptureWorker, WorkerCommand, WorkerEvent, CaptureSource};
+use crate::i18n::{self, Language};
+use crate::gui::dashboard::DashboardPanel;
+use crate::gui::source_panel::SourcePanel;
+use crate::gui::display_panel::DisplayPanel;
+use crate::gui::settings_panel::SettingsPanel;
+use crate::gui::output_panel::OutputPanel;
+
 use crate::config::AppConfig;
-use crate::gui::*;
 use crate::model::{MonitorInfo, WindowInfo};
 use crate::storage::{detect_incomplete_session, recover_session};
 use crate::windows::{enumerate_monitors, enumerate_windows};
@@ -28,10 +34,12 @@ pub struct PptAutoCaptureApp {
     pending_stop: bool,
     pending_resume: bool,
     output_dir: String,
+    output_filename: String,
     recovery_available: bool,
     recovery_slides: u32,
     recovery_accepted: bool,
     recovery_declined: bool,
+    language: Language,
 }
 
 #[derive(PartialEq)]
@@ -46,14 +54,16 @@ impl PptAutoCaptureApp {
             source_panel: SourcePanel::new(),
             display_panel: DisplayPanel::new(),
             settings_panel: SettingsPanel::new(),
-            output_panel: OutputPanel::new(),
+            output_panel: OutputPanel::new_with_filename(&config.output_filename),
             worker: None, cmd_tx: None, event_rx: None,
             monitors: Vec::new(), windows: Vec::new(),
             active_tab: Tab::Dashboard,
             pending_start: false, pending_pause: false, pending_stop: false, pending_resume: false,
             output_dir: config.output_dir.clone(),
+            output_filename: config.output_filename.clone(),
             recovery_available: false, recovery_slides: 0,
             recovery_accepted: false, recovery_declined: false,
+            language: config.language,
         };
         app.display_panel.selected_hmonitor = config.last_monitor_hmonitor;
         app.display_panel.selected_description = config.last_monitor_description.clone();
@@ -136,16 +146,16 @@ impl eframe::App for PptAutoCaptureApp {
         if self.recovery_available && !self.recovery_accepted && !self.recovery_declined {
             let mut open = true;
             egui::Window::new("Session Recovery").anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).open(&mut open).show(ctx, |ui| {
-                ui.heading("Incomplete Session");
-                ui.label(format!("{} slides not completed. Recover?", self.recovery_slides));
+                ui.heading(i18n::t_session_recovery_title(self.language));
+                ui.label(i18n::t_recovery_msg(self.language, self.recovery_slides));
                 ui.horizontal(|ui| {
-                    if ui.button("Recover").clicked() {
+                    if ui.button(i18n::t_recover(self.language)).clicked() {
                         if let Ok(()) = recover_session(std::path::Path::new(&self.output_dir)) {
                             self.dashboard.saved_slides_count = self.recovery_slides;
                             self.recovery_accepted = true;
                         }
                     }
-                    if ui.button("Skip").clicked() { self.recovery_declined = true; }
+                    if ui.button(i18n::t_skip(self.language)).clicked() { self.recovery_declined = true; }
                 });
             });
             if !open { self.recovery_declined = true; }
@@ -155,7 +165,7 @@ impl eframe::App for PptAutoCaptureApp {
 
         if self.pending_start {
             self.pending_start = false;
-            if self.display_panel.selected_hmonitor == 0 { self.dashboard.last_error = Some("Select a capture display".into()); }
+            if self.display_panel.selected_hmonitor == 0 { self.dashboard.last_error = Some(i18n::t_no_display_selected(self.language).to_string()); }
             else { self.dashboard.last_error = None; self.start_capture(); }
         }
         if self.pending_pause { self.pending_pause = false; self.pause_capture(); }
@@ -174,21 +184,28 @@ impl eframe::App for PptAutoCaptureApp {
 
         egui::TopBottomPanel::top("bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.active_tab, Tab::Dashboard, "Dashboard");
-                ui.selectable_value(&mut self.active_tab, Tab::Source, "Window");
-                ui.selectable_value(&mut self.active_tab, Tab::Display, "Display");
-                ui.selectable_value(&mut self.active_tab, Tab::Settings, "Settings");
-                ui.selectable_value(&mut self.active_tab, Tab::Output, "Output");
+                ui.selectable_value(&mut self.active_tab, Tab::Dashboard, i18n::t_tab_dashboard(self.language));
+                ui.selectable_value(&mut self.active_tab, Tab::Source, i18n::t_tab_source(self.language));
+                ui.selectable_value(&mut self.active_tab, Tab::Display, i18n::t_tab_display(self.language));
+                ui.selectable_value(&mut self.active_tab, Tab::Settings, i18n::t_tab_settings(self.language));
+                ui.selectable_value(&mut self.active_tab, Tab::Output, i18n::t_tab_output(self.language));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button(i18n::t_language_switch(self.language)).clicked() {
+                        self.language = self.language.next();
+                        let _ = self.config.save();
+                    }
+                    ui.label(format!("  {}", self.language.label()));
+                });
             });
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
             match self.active_tab {
-                Tab::Dashboard => self.dashboard.render(ui, &mut self.pending_start, &mut self.pending_pause, &mut self.pending_stop, &mut self.pending_resume),
-                Tab::Source => { self.source_panel.render(ui, self.display_panel.selected_hmonitor != 0); if self.windows.is_empty() { self.refresh_windows(); } }
-                Tab::Display => { self.display_panel.render(ui); if self.monitors.is_empty() { self.refresh_displays(); } }
-                Tab::Settings => self.settings_panel.render(ui),
-                Tab::Output => self.output_panel.render(ui),
+                Tab::Dashboard => self.dashboard.render(ui, self.language, &mut self.pending_start, &mut self.pending_pause, &mut self.pending_stop, &mut self.pending_resume),
+                Tab::Source => { self.source_panel.render(ui, self.language, self.display_panel.selected_hmonitor != 0); if self.windows.is_empty() { self.refresh_windows(); } }
+                Tab::Display => { self.display_panel.render(ui, self.language); if self.monitors.is_empty() { self.refresh_displays(); } }
+                Tab::Settings => self.settings_panel.render(ui, self.language),
+                Tab::Output => self.output_panel.render(ui, self.language),
             }
         });
 
@@ -199,10 +216,12 @@ impl eframe::App for PptAutoCaptureApp {
 impl Drop for PptAutoCaptureApp {
     fn drop(&mut self) {
         self.config.output_dir = self.output_dir.clone();
+        self.config.output_filename = self.output_panel.output_filename.clone();
         self.config.last_window_hwnd = self.source_panel.selected_hwnd;
         self.config.last_window_title = self.source_panel.selected_title.clone();
         self.config.last_monitor_hmonitor = self.display_panel.selected_hmonitor;
         self.config.last_monitor_description = self.display_panel.selected_description.clone();
+        self.config.language = self.language;
         let _ = self.config.save();
         if let Some(mut worker) = self.worker.take() { worker.stop(); }
     }

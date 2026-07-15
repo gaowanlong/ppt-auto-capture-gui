@@ -1,12 +1,6 @@
-mod dashboard;
-mod source_panel;
-mod display_panel;
-mod settings_panel;
-mod output_panel;
-mod preview_panel;
-
-pub use dashboard::*;
-pub use source_panel::*;
-pub use display_panel::*;
-pub use settings_panel::*;
-pub use output_panel::*;
+pub mod dashboard;
+pub mod source_panel;
+pub mod display_panel;
+pub mod settings_panel;
+pub mod output_panel;
+pub mod preview_panel;

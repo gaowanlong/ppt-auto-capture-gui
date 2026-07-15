@@ -1,4 +1,5 @@
 use egui::*;
+use crate::i18n::{self, Language};
 use crate::model::WindowInfo;
 
 pub struct SourcePanel {
@@ -26,12 +27,12 @@ impl SourcePanel {
         }
     }
 
-    pub fn render(&mut self, ui: &mut Ui, monitor_ready: bool) {
+    pub fn render(&mut self, ui: &mut Ui, language: Language, monitor_ready: bool) {
         let has_selection = self.selected_hwnd != 0;
         ui.vertical(|ui| {
-            ui.heading("Window Source");
+            ui.heading(i18n::t_window_source(language));
 
-            if ui.button("🔄 Refresh Window List").clicked() {
+            if ui.button(i18n::t_refresh_windows(language)).clicked() {
                 self.refresh_requested = true;
             }
 
@@ -41,7 +42,7 @@ impl SourcePanel {
                 .max_height(200.0)
                 .show(ui, |ui| {
                     if self.windows.is_empty() {
-                        ui.label("No windows found. Click Refresh.");
+                        ui.label(i18n::t_no_windows(language));
                     } else {
                         let mut sorted: Vec<&WindowInfo> = self.windows.iter().collect();
                         sorted.sort_by(|a, b| {
@@ -77,21 +78,21 @@ impl SourcePanel {
                 });
 
             ui.separator();
-            ui.label(format!("Selected: {}", self.selected_title));
+            ui.label(format!("{} {}", i18n::t_selected(language), self.selected_title));
             ui.label(format!("HWND: {}", if has_selection { format!("0x{:X}", self.selected_hwnd) } else { "None".into() }));
 
             ui.separator();
 
             ui.horizontal(|ui| {
-                if ui.add_enabled(has_selection && monitor_ready, Button::new("↗ Move to Display")).clicked() {
+                if ui.add_enabled(has_selection && monitor_ready, Button::new(i18n::t_move_to_display(language))).clicked() {
                     self.move_requested = true;
                 }
-                if ui.add_enabled(has_selection, Button::new("⬜ Maximize")).clicked() {
+                if ui.add_enabled(has_selection, Button::new(i18n::t_maximize(language))).clicked() {
                     self.maximize_requested = true;
                 }
             });
 
-            if ui.add_enabled(has_selection, Button::new("📷 Test Screenshot")).clicked() {
+            if ui.add_enabled(has_selection, Button::new(i18n::t_test_screenshot(language))).clicked() {
                 self.test_requested = true;
             }
 

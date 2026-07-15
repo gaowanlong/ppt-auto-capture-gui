@@ -1,6 +1,7 @@
 //! Application configuration, persisted to disk as JSON.
 
 use anyhow::{Context, Result};
+use crate::i18n::Language;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -35,6 +36,8 @@ pub struct AppConfig {
     pub last_monitor_description: String,
     /// Whether to use DXGI (vs GDI).
     pub use_dxgi: bool,
+    /// UI language
+    pub language: Language,
 }
 
 impl Default for AppConfig {
@@ -47,7 +50,7 @@ impl Default for AppConfig {
             black_threshold: 0.95,
             filter_duplicates: true,
             output_dir: "output".to_string(),
-            output_filename: "output.pptx".to_string(),
+            output_filename: format!("ppt-capture-{}.pptx", chrono::Local::now().format("%Y%m%d-%H%M%S")),
             page_ratio: "16:9".to_string(),
             image_fit: "fill".to_string(),
             keep_previous: true,
@@ -56,6 +59,7 @@ impl Default for AppConfig {
             last_monitor_hmonitor: 0,
             last_monitor_description: String::new(),
             use_dxgi: true,
+            language: Language::English,
         }
     }
 }
@@ -77,7 +81,11 @@ impl AppConfig {
                 Err(e) => log::warn!("Failed to read config file: {}", e),
             }
         }
-        Self::default()
+        let mut cfg = Self::default();
+        // Generate a fresh timestamp-based filename on first run
+        cfg.output_filename = format!("ppt-capture-{}.pptx",
+            chrono::Local::now().format("%Y%m%d-%H%M%S"));
+        cfg
     }
 
     /// Save config to default location.

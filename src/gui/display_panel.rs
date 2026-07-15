@@ -1,6 +1,7 @@
 //! Display Panel — monitor enumeration and selection.
 
 use egui::*;
+use crate::i18n::{self, Language};
 use crate::model::MonitorInfo;
 
 pub struct DisplayPanel {
@@ -24,11 +25,11 @@ impl DisplayPanel {
         }
     }
 
-    pub fn render(&mut self, ui: &mut Ui) {
+    pub fn render(&mut self, ui: &mut Ui, language: Language) {
         ui.vertical(|ui| {
-            ui.heading("Capture Display");
+            ui.heading(i18n::t_capture_display(language));
 
-            if ui.button("🔄 Refresh Displays").clicked() {
+            if ui.button(i18n::t_refresh_displays(language)).clicked() {
                 self.refresh_requested = true;
             }
 
@@ -38,7 +39,7 @@ impl DisplayPanel {
                 .max_height(200.0)
                 .show(ui, |ui| {
                     if self.monitors.is_empty() {
-                        ui.label("No displays found. Click Refresh.");
+                        ui.label(i18n::t_no_displays(language));
                     } else {
                         for mon in &self.monitors {
                             let virtual_label = if mon.is_virtual_suspect { "🖥️" } else { "" };
@@ -61,13 +62,13 @@ impl DisplayPanel {
                             // Show details
                             if selected {
                                 ui.indent("mon_details", |ui| {
-                                    ui.label(format!("Adapter: {}", mon.adapter_name));
+                                    ui.label(format!("{} {}", i18n::t_adapter(language), mon.adapter_name));
                                     ui.colored_label(
                                         if mon.is_virtual_suspect { Color32::YELLOW } else { Color32::GREEN },
-                                        if mon.is_virtual_suspect { "⚠ Suspected virtual/dummy display" } else { "✅ Physical display" }
+                                        if mon.is_virtual_suspect { i18n::t_virtual_suspect(language) } else { i18n::t_physical_display(language) }
                                     );
                                     if mon.is_primary {
-                                        ui.colored_label(Color32::GREEN, "★ Primary monitor");
+                                        ui.colored_label(Color32::GREEN, i18n::t_primary_monitor(language));
                                     }
                                 });
                             }
@@ -83,7 +84,7 @@ impl DisplayPanel {
 
             if ui.add_enabled(
                 self.selected_hmonitor != 0,
-                Button::new("📷 Test Capture")
+                Button::new(i18n::t_test_capture(language))
             ).clicked() {
                 self.test_capture_requested = true;
             }
