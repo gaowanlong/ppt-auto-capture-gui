@@ -214,7 +214,8 @@ impl WorkerLoop {
                         Ok(mut mon) => {
                             // If window is selected, clip capture region to window bounds
                             if source.window_hwnd != 0 {
-                                if let Ok(window_rect) = crate::windows::get_window_rect(source.window_hwnd) {
+                                // Use client rect for accurate content capture (excludes title bar, borders, shadow)
+                                if let Ok(window_rect) = crate::windows::get_client_window_rect(source.window_hwnd) {
                                     // Validate window rect - skip if off-screen or too small
                                     if window_rect.width > 10 && window_rect.height > 10
                                         && window_rect.x > -32000 && window_rect.y > -32000
@@ -333,7 +334,7 @@ impl WorkerLoop {
                     // Also clip to window for test capture
                     if let Ok(ref mut mon) = monitor {
                         if source.window_hwnd != 0 {
-                            if let Ok(window_rect) = crate::windows::get_window_rect(source.window_hwnd) {
+                            if let Ok(window_rect) = crate::windows::get_client_window_rect(source.window_hwnd) {
                                 if window_rect.width > 10 && window_rect.height > 10
                                     && window_rect.x > -32000 && window_rect.y > -32000
                                 {

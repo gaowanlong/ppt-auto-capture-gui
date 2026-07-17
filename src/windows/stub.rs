@@ -26,6 +26,12 @@ impl SessionEventMonitor {
 pub enum SessionState { Unlocked, Locked }
 
 /// Stub: returns error on non-Windows platforms.
+/// Stub: returns error on non-Windows platforms.
+pub fn get_client_window_rect(_hwnd: u64) -> anyhow::Result<crate::model::Region> {
+    Err(anyhow::anyhow!("get_client_window_rect not available on this platform"))
+}
+
+/// Stub: returns error on non-Windows platforms.
 pub fn get_window_rect(_hwnd: u64) -> anyhow::Result<crate::model::Region> {
     Err(anyhow::anyhow!("get_window_rect not available on this platform"))
 }
