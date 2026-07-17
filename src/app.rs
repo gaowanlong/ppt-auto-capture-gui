@@ -65,6 +65,18 @@ impl PptAutoCaptureApp {
             recovery_accepted: false, recovery_declined: false,
             language: config.language,
         };
+        // Load saved settings into settings panel
+        {
+            let cfg = crate::capture::CaptureConfig {
+                sample_interval_ms: config.sample_interval_ms,
+                stability_frames: config.stability_frames,
+                animation_timeout_ms: config.animation_timeout_ms,
+                change_threshold: config.change_threshold,
+                black_threshold: config.black_threshold,
+                filter_duplicates: config.filter_duplicates,
+            };
+            app.settings_panel.load_from_config(&cfg);
+        }
         app.display_panel.selected_hmonitor = config.last_monitor_hmonitor;
         app.display_panel.selected_description = config.last_monitor_description.clone();
         app.source_panel.selected_hwnd = config.last_window_hwnd;
@@ -281,6 +293,19 @@ impl eframe::App for PptAutoCaptureApp {
                 Tab::Settings => self.settings_panel.render(ui, self.language),
                 Tab::Output => {
                     self.output_panel.render(ui, self.language);
+                    // Handle open output directory button
+                    if self.output_panel.open_output_requested {
+                        self.output_panel.open_output_requested = false;
+                        let dir = self.output_panel.output_dir.trim();
+                        let dir = if dir.is_empty() { "." } else { dir };
+                        log::info!("Opening output directory: {}", dir);
+                        #[cfg(target_os = "windows")]
+                        { let _ = std::process::Command::new("explorer").arg(dir).spawn(); }
+                        #[cfg(target_os = "macos")]
+                        { let _ = std::process::Command::new("open").arg(dir).spawn(); }
+                        #[cfg(target_os = "linux")]
+                        { let _ = std::process::Command::new("xdg-open").arg(dir).spawn(); }
+                    }
                     // Sync output filename to dashboard
                     self.dashboard.output_path = format!("{}/{}",
                         self.output_panel.output_dir.trim_end_matches('/').trim_end_matches('\\'),
@@ -297,6 +322,14 @@ impl Drop for PptAutoCaptureApp {
     fn drop(&mut self) {
         self.config.output_dir = self.output_dir.clone();
         self.config.output_filename = self.output_panel.output_filename.clone();
+        // Save settings panel values
+        let scfg = self.settings_panel.get_config();
+        self.config.sample_interval_ms = scfg.sample_interval_ms;
+        self.config.stability_frames = scfg.stability_frames;
+        self.config.animation_timeout_ms = scfg.animation_timeout_ms;
+        self.config.change_threshold = scfg.change_threshold;
+        self.config.black_threshold = scfg.black_threshold;
+        self.config.filter_duplicates = scfg.filter_duplicates;
         self.config.last_window_hwnd = self.source_panel.selected_hwnd;
         self.config.last_window_title = self.source_panel.selected_title.clone();
         self.config.last_monitor_hmonitor = self.display_panel.selected_hmonitor;

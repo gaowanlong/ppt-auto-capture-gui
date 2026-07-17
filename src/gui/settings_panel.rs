@@ -26,6 +26,15 @@ impl SettingsPanel {
         }
     }
 
+    pub fn load_from_config(&mut self, cfg: &CaptureConfig) {
+        self.sample_interval_ms = cfg.sample_interval_ms;
+        self.stability_frames = cfg.stability_frames;
+        self.animation_timeout_ms = cfg.animation_timeout_ms;
+        self.change_threshold = cfg.change_threshold;
+        self.black_threshold = cfg.black_threshold;
+        self.filter_duplicates = cfg.filter_duplicates;
+    }
+
     pub fn render(&mut self, ui: &mut Ui, language: Language) {
         self.changed = false;
 
