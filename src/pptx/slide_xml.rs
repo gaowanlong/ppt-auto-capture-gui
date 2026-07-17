@@ -146,9 +146,9 @@ impl PresentationXml {
 {}
   </p:sldIdLst>
   <p:sldSz cx="{}" cy="{}"/>
-  <p:notesSz cx="{}" cy="{}"/>
+  <p:notesSz cx="6858000" cy="9144000"/>
 </p:presentation>"#,
-            sld_ids, sld_w, sld_h, sld_h, sld_w
+            sld_ids, sld_w, sld_h
         )
     }
 }

@@ -10,6 +10,8 @@ extern "system" {
     fn SetWindowPos(hWnd: isize, hWndInsertAfter: isize, x: i32, y: i32, cx: i32, cy: i32, uFlags: u32) -> i32;
     fn SetForegroundWindow(hWnd: isize) -> i32;
     fn ShowWindow(hWnd: isize, nCmdShow: i32) -> i32;
+    fn PrintWindow(hWnd: isize, hDCBlt: isize, nFlags: u32) -> i32;
+    fn GetWindowDC(hWnd: isize) -> isize;
 }
 
 #[repr(C)]

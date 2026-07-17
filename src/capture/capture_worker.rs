@@ -399,7 +399,7 @@ impl WorkerLoop {
                 None => return Ok(()),
             }
         } else if self.gdi_capturer.is_initialized() {
-            self.gdi_capturer.capture_frame()?
+self.gdi_capturer.capture_frame()?
         } else {
             return Err(anyhow::anyhow!("No capturer initialized"));
         };

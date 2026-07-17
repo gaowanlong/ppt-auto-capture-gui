@@ -2,19 +2,81 @@ use anyhow::Result;
 use windows::Win32::Graphics::Gdi::{
     GetDC, ReleaseDC, CreateCompatibleDC, DeleteDC, CreateCompatibleBitmap,
     SelectObject, DeleteObject, BitBlt, GetDIBits, BITMAPINFO, BITMAPINFOHEADER,
-    ROP_CODE, DIB_USAGE,
+    ROP_CODE, DIB_USAGE, HDC,
 };
 use crate::model::{Frame, MonitorInfo, Region};
+
+#[link(name = "user32")]
+extern "system" {
+    fn PrintWindow(hWnd: isize, hDCBlt: isize, nFlags: u32) -> i32;
+    fn GetWindowDC(hWnd: isize) -> isize;
+}
+
+/// Capture a specific window's content using PrintWindow (ignores overlapping windows).
+/// This is the preferred capture method when a window is selected.
+pub fn capture_window_content(hwnd: u64, width: u32, height: u32) -> Result<Vec<u8>> {
+    anyhow::ensure!(width > 0 && height > 0, "Invalid capture dimensions for PrintWindow");
+    unsafe {
+        let hwnd_i = hwnd as isize;
+        let wdc_val = GetWindowDC(hwnd_i);
+        if wdc_val == 0 {
+            return Err(anyhow::anyhow!("GetWindowDC failed for HWND 0x{:X}", hwnd));
+        }
+        let wdc = HDC(wdc_val as *mut std::ffi::c_void);
+        
+        let mdc = CreateCompatibleDC(Some(wdc));
+        if mdc.is_invalid() {
+            let _ = ReleaseDC(None, wdc);
+            return Err(anyhow::anyhow!("CreateCompatibleDC failed"));
+        }
+        
+        let bmp = CreateCompatibleBitmap(wdc, width as i32, height as i32);
+        if bmp.is_invalid() {
+            let _ = ReleaseDC(None, wdc);
+            let _ = DeleteDC(mdc);
+            return Err(anyhow::anyhow!("CreateCompatibleBitmap failed"));
+        }
+        SelectObject(mdc, bmp.into());
+        
+        // PrintWindow captures only the target window content
+        let pw_ret = PrintWindow(hwnd_i, mdc.0 as isize, 0);
+        if pw_ret == 0 {
+            let _ = ReleaseDC(None, wdc);
+            let _ = DeleteObject(bmp.into());
+            let _ = DeleteDC(mdc);
+            return Err(anyhow::anyhow!("PrintWindow failed for HWND 0x{:X}", hwnd));
+        }
+        
+        // Read pixel data from the bitmap
+        let mut bi = BITMAPINFO::default();
+        bi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+        bi.bmiHeader.biWidth = width as i32;
+        bi.bmiHeader.biHeight = -(height as i32);
+        bi.bmiHeader.biPlanes = 1;
+        bi.bmiHeader.biBitCount = 32;
+        bi.bmiHeader.biCompression = 0;
+        
+        let mut data = vec![0u8; (width * height * 4) as usize];
+        GetDIBits(mdc, bmp, 0, height, Some(data.as_mut_ptr() as *mut _), &mut bi, DIB_USAGE(0));
+        
+        let _ = ReleaseDC(None, wdc);
+        let _ = DeleteObject(bmp.into());
+        let _ = DeleteDC(mdc);
+        Ok(data)
+    }
+}
 
 /// The SRCCOPY raster operation code (0x00CC0020).
 const SRCCOPY: ROP_CODE = ROP_CODE(0x00CC0020u32);
 
 pub struct GdiCapturer {
-    region: Region, frame_index: u64,
+    region: Region, frame_index: u64, window_hwnd: u64,
 }
 impl GdiCapturer {
-    pub fn new() -> Self { Self { region: Region::new(0,0,0,0), frame_index: 0 } }
+    pub fn new() -> Self { Self { region: Region::new(0,0,0,0), frame_index: 0, window_hwnd: 0 } }
     pub fn initialize(&mut self, mon: &MonitorInfo) -> Result<()> { self.region = mon.region; self.frame_index = 0; Ok(()) }
+    pub fn set_window_hwnd(&mut self, hwnd: u64) { self.window_hwnd = hwnd; }
+    pub fn region(&self) -> &Region { &self.region }
     pub fn capture_frame(&mut self) -> Result<Frame> {
         let (w, h) = (self.region.width, self.region.height);
         unsafe {
