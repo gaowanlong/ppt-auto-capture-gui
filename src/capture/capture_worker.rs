@@ -126,6 +126,7 @@ struct WorkerLoop {
     slide_count: u32,
     last_slide_hash: Option<String>,
     animation_timer: Option<std::time::Instant>,
+    first_frame_saved: bool,
 }
 
 impl WorkerLoop {
@@ -151,6 +152,7 @@ impl WorkerLoop {
             slide_count: 0,
             last_slide_hash: None,
             animation_timer: None,
+            first_frame_saved: false,
         }
     }
 
@@ -419,6 +421,18 @@ self.gdi_capturer.capture_frame()?
             let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
         }
 
+        // Save first frame immediately on starting capture
+        if !self.first_frame_saved {
+            self.first_frame_saved = true;
+            self.change_detector.detect_change(&frame);
+            self.change_detector.update_reference(&frame);
+            if let Err(e) = self.save_frame(&frame) {
+                error!("Failed to save first frame: {}", e);
+                let _ = self.event_tx.send(WorkerEvent::Error(format!("First frame save failed: {}", e)));
+            }
+            // Still continue with normal detection after the first save
+        }
+        
         let (changed, diff_ratio) = self.change_detector.detect_change(&frame);
         let _ = self.event_tx.send(WorkerEvent::FrameCaptured {
             frame_index: frame.frame_index,

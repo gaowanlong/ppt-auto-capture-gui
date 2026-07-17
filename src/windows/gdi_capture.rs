@@ -39,12 +39,17 @@ pub fn capture_window_content(hwnd: u64, width: u32, height: u32) -> Result<Vec<
         SelectObject(mdc, bmp.into());
         
         // PrintWindow captures only the target window content
-        let pw_ret = PrintWindow(hwnd_i, mdc.0 as isize, 0);
+        // PW_CLIENT_ONLY = 0x1 captures only the window client area (excludes title bar)
+        let pw_ret = PrintWindow(hwnd_i, mdc.0 as isize, 0x1);
         if pw_ret == 0 {
-            let _ = ReleaseDC(None, wdc);
-            let _ = DeleteObject(bmp.into());
-            let _ = DeleteDC(mdc);
-            return Err(anyhow::anyhow!("PrintWindow failed for HWND 0x{:X}", hwnd));
+            // Try without PW_CLIENT_ONLY as fallback
+            let pw_ret2 = PrintWindow(hwnd_i, mdc.0 as isize, 0);
+            if pw_ret2 == 0 {
+                let _ = ReleaseDC(None, wdc);
+                let _ = DeleteObject(bmp.into());
+                let _ = DeleteDC(mdc);
+                return Err(anyhow::anyhow!("PrintWindow failed for HWND 0x{:X}", hwnd));
+            }
         }
         
         // Read pixel data from the bitmap
