@@ -93,10 +93,10 @@ impl GdiCapturer {
             if sdc.is_invalid() { return Err(anyhow::anyhow!("GetDC")); }
 
             // DPI diagnostic: log the screen DC dimensions vs capture region
-            let dc_w = GetDeviceCaps(Some(sdc), GET_DEVICE_CAPS_INDEX::HORZRES) as u32;
-            let dc_h = GetDeviceCaps(Some(sdc), GET_DEVICE_CAPS_INDEX::VERTRES) as u32;
-            let dpi_x = GetDeviceCaps(Some(sdc), GET_DEVICE_CAPS_INDEX::LOGPIXELSX);
-            let dpi_y = GetDeviceCaps(Some(sdc), GET_DEVICE_CAPS_INDEX::LOGPIXELSY);
+            let dc_w = GetDeviceCaps(Some(sdc), GET_DEVICE_CAPS_INDEX(8)) as u32;
+            let dc_h = GetDeviceCaps(Some(sdc), GET_DEVICE_CAPS_INDEX(10)) as u32;
+            let dpi_x = GetDeviceCaps(Some(sdc), GET_DEVICE_CAPS_INDEX(88));
+            let dpi_y = GetDeviceCaps(Some(sdc), GET_DEVICE_CAPS_INDEX(90));
             if dpi_x != 96 || dpi_y != 96 {
                 log::debug!(
                     "GDI capture: region={}x{}@{},{} DC={}x{} DPI={}x{}",

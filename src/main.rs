@@ -31,14 +31,14 @@ fn main() -> Result<(), eframe::Error> {
     // Set DPI awareness for high-resolution screenshots on Windows
     #[cfg(target_os = "windows")]
     {
-        // Modern per-monitor DPI awareness via windows crate API.
-        // Makes GetDC(NULL), GetClientRect, and DXGI use consistent
-        // physical-pixel coordinates on Windows 10+ with >100% scaling.
-        let _ = unsafe {
-            windows::Win32::UI::HiDpi::SetProcessDpiAwareness(
-                windows::Win32::UI::HiDpi::PROCESS_DPI_AWARENESS::PROCESS_PER_MONITOR_DPI_AWARE,
-            )
-        };
+        // Make process DPI aware so GetDC(NULL) returns physical pixels.
+        // Calls legacy SetProcessDPIAware() which works with the windows crate 0.60.
+        // High-DPI scaling correction is handled inside GdiCapturer::capture_frame().
+        #[link(name = "user32")]
+        extern "system" {
+            fn SetProcessDPIAware() -> i32;
+        }
+        { let _ = unsafe { SetProcessDPIAware() }; }
     }
 
     // Initialize logging
