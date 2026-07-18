@@ -1,7 +1,7 @@
 use anyhow::Result;
 use windows::Win32::Graphics::Gdi::{
     GetDC, ReleaseDC, CreateCompatibleDC, DeleteDC, CreateCompatibleBitmap,
-    SelectObject, DeleteObject, BitBlt, GetDIBits, GetDeviceCaps, BITMAPINFO, BITMAPINFOHEADER,
+    SelectObject, DeleteObject, BitBlt, GetDIBits, GetDeviceCaps, GET_DEVICE_CAPS_INDEX, BITMAPINFO, BITMAPINFOHEADER,
     ROP_CODE, DIB_USAGE, HDC,
 };
 use crate::model::{Frame, MonitorInfo, Region};
@@ -74,15 +74,6 @@ pub fn capture_window_content(hwnd: u64, width: u32, height: u32) -> Result<Vec<
 /// The SRCCOPY raster operation code (0x00CC0020).
 const SRCCOPY: ROP_CODE = ROP_CODE(0x00CC0020u32);
 
-const LOGPIXELSX: i32 = 88;
-/// LOGPIXELSY constant for GetDeviceCaps
-const LOGPIXELSY: i32 = 90;
-
-/// HORZRES / VERTRES constants for GetDeviceCaps
-const HORZRES: i32 = 8;
-const VERTRES: i32 = 10;
-const DESKTOPHORZRES: i32 = 118;
-const DESKTOPVERTRES: i32 = 117;
 
 pub struct GdiCapturer {
     region: Region, frame_index: u64, window_hwnd: u64,
@@ -102,10 +93,10 @@ impl GdiCapturer {
             if sdc.is_invalid() { return Err(anyhow::anyhow!("GetDC")); }
 
             // DPI diagnostic: log the screen DC dimensions vs capture region
-            let dc_w = GetDeviceCaps(sdc, HORZRES) as u32;
-            let dc_h = GetDeviceCaps(sdc, VERTRES) as u32;
-            let dpi_x = GetDeviceCaps(sdc, LOGPIXELSX);
-            let dpi_y = GetDeviceCaps(sdc, LOGPIXELSY);
+            let dc_w = GetDeviceCaps(Some(sdc), GET_DEVICE_CAPS_INDEX::HORZRES) as u32;
+            let dc_h = GetDeviceCaps(Some(sdc), GET_DEVICE_CAPS_INDEX::VERTRES) as u32;
+            let dpi_x = GetDeviceCaps(Some(sdc), GET_DEVICE_CAPS_INDEX::LOGPIXELSX);
+            let dpi_y = GetDeviceCaps(Some(sdc), GET_DEVICE_CAPS_INDEX::LOGPIXELSY);
             if dpi_x != 96 || dpi_y != 96 {
                 log::debug!(
                     "GDI capture: region={}x{}@{},{} DC={}x{} DPI={}x{}",
