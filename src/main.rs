@@ -31,12 +31,22 @@ fn main() -> Result<(), eframe::Error> {
     // Set DPI awareness for high-resolution screenshots on Windows
     #[cfg(target_os = "windows")]
     {
-        // Make process DPI aware so GetDC(NULL) returns physical pixels
+        // Use modern per-monitor DPI awareness so GetDC(NULL) and
+        // GetClientRect/ClientToScreen all return consistent physical pixels.
+        // Legacy SetProcessDPIAware() only sets system DPI awareness,
+        // which miscounts pixels on modern Windows with >100% DPI scaling.
+        #[link(name = "shcore")]
+        extern "system" {
+            fn SetProcessDpiAwareness(value: u32) -> i32;
+        }
+        // PROCESS_PER_MONITOR_DPI_AWARE = 2 — all coordinates in device pixels
+        { let _ = unsafe { SetProcessDpiAwareness(2) }; }
+        // Fallback: legacy system DPI awareness
         #[link(name = "user32")]
         extern "system" {
-            fn SetProcessDPIAware() -> i32;
-        }
-        unsafe { SetProcessDPIAware(); }
+           fn SetProcessDPIAware() -> i32;
+       }
+        { let _ = unsafe { SetProcessDPIAware() }; }
     }
 
     // Initialize logging
