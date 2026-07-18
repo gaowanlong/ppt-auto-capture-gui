@@ -44,8 +44,8 @@ fn main() -> Result<(), eframe::Error> {
         // Fallback: legacy system DPI awareness
         #[link(name = "user32")]
         extern "system" {
-           fn SetProcessDPIAware() -> i32;
-       }
+            fn SetProcessDPIAware() -> i32;
+        }
         { let _ = unsafe { SetProcessDPIAware() }; }
     }
 
