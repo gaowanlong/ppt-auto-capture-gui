@@ -215,6 +215,8 @@ impl WorkerLoop {
                     match monitor {
                         Ok(mut mon) => {
                             // If window is selected, clip capture region to window bounds
+                            let mut window_client_w = 0u32;
+                            let mut window_client_h = 0u32;
                             if source.window_hwnd != 0 {
                                 // Use client rect for accurate content capture (excludes title bar, borders, shadow)
                                 if let Ok(window_rect) = crate::windows::get_client_window_rect(source.window_hwnd) {
@@ -224,6 +226,9 @@ impl WorkerLoop {
                                         && window_rect.x < 50000 && window_rect.y < 50000
                                     {
                                         let rx = mon.region.x.max(window_rect.x);
+                                        // Save client dims for PrintWindow-based capture (RDP compatible)
+                                        window_client_w = window_rect.width;
+                                        window_client_h = window_rect.height;
                                         let ry = mon.region.y.max(window_rect.y);
                                         let rr = (mon.region.x + mon.region.width as i32)
                                             .min(window_rect.x + window_rect.width as i32);
@@ -249,7 +254,7 @@ impl WorkerLoop {
                                     Err(e) => {
                                         warn!("DXGI init failed ({}), falling back to GDI", e);
                                         match self.gdi_capturer.initialize(&mon) {
-                                            Ok(()) => info!("GDI capturer initialized (fallback)"),
+                                            Ok(()) => { info!("GDI capturer initialized (fallback)"); self.gdi_capturer.set_window_hwnd(source.window_hwnd, window_client_w, window_client_h); },
                                             Err(e2) => {
                                                 let msg = format!("Both DXGI and GDI failed: {} / {}", e, e2);
                                                 error!("{}", msg);
@@ -262,7 +267,7 @@ impl WorkerLoop {
                                 }
                             } else {
                                 match self.gdi_capturer.initialize(&mon) {
-                                    Ok(()) => info!("GDI capturer initialized"),
+                                    Ok(()) => { info!("GDI capturer initialized"); self.gdi_capturer.set_window_hwnd(source.window_hwnd, window_client_w, window_client_h); },
                                     Err(e) => {
                                         let msg = format!("GDI init failed: {}", e);
                                         error!("{}", msg);
@@ -335,7 +340,9 @@ impl WorkerLoop {
                     let mut monitor = self.create_monitor_info_for_source(&source);
                     // Also clip to window for test capture
                     if let Ok(ref mut mon) = monitor {
-                        if source.window_hwnd != 0 {
+                        let mut window_client_w = 0u32;
+                            let mut window_client_h = 0u32;
+                            if source.window_hwnd != 0 {
                             if let Ok(window_rect) = crate::windows::get_client_window_rect(source.window_hwnd) {
                                 if window_rect.width > 10 && window_rect.height > 10
                                     && window_rect.x > -32000 && window_rect.y > -32000

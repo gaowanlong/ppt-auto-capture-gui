@@ -77,13 +77,34 @@ const SRCCOPY: ROP_CODE = ROP_CODE(0x00CC0020u32);
 
 pub struct GdiCapturer {
     region: Region, frame_index: u64, window_hwnd: u64,
+    /// Client area dimensions (for PrintWindow-based capture, RDP compatible).
+    window_width: u32, window_height: u32,
 }
 impl GdiCapturer {
-    pub fn new() -> Self { Self { region: Region::new(0,0,0,0), frame_index: 0, window_hwnd: 0 } }
+    pub fn new() -> Self { Self { region: Region::new(0,0,0,0), frame_index: 0, window_hwnd: 0, window_width: 0, window_height: 0 } }
     pub fn initialize(&mut self, mon: &MonitorInfo) -> Result<()> { self.region = mon.region; self.frame_index = 0; Ok(()) }
-    pub fn set_window_hwnd(&mut self, hwnd: u64) { self.window_hwnd = hwnd; }
+    pub fn set_window_hwnd(&mut self, hwnd: u64, client_w: u32, client_h: u32) { self.window_hwnd = hwnd; self.window_width = client_w; self.window_height = client_h; }
     pub fn region(&self) -> &Region { &self.region }
     pub fn capture_frame(&mut self) -> Result<Frame> {
+        // When a window HWND is set, use PrintWindow (works in RDP; BitBlt fails there).
+        if self.window_hwnd != 0 && self.window_width > 0 && self.window_height > 0 {
+            return self.capture_window_with_printwindow();
+        }
+        self.capture_screen_with_bitblt()
+    }
+
+    /// Capture a specific window via PrintWindow (RDP-compatible, ignores overlapping windows).
+    fn capture_window_with_printwindow(&mut self) -> Result<Frame> {
+        let w = self.window_width;
+        let h = self.window_height;
+        let data = capture_window_content(self.window_hwnd, w, h)?;
+        self.frame_index += 1;
+        Ok(Frame::new(data, w, h, w * 4, self.frame_index, now_ms()))
+    }
+
+    /// Capture the full monitor region via BitBlt from screen DC.
+    /// Note: may fail in RDP or locked desktop sessions.
+    fn capture_screen_with_bitblt(&mut self) -> Result<Frame> {
         let (w, h) = (self.region.width, self.region.height);
         if w == 0 || h == 0 {
             return Err(anyhow::anyhow!("Empty capture region: {}x{}", w, h));
@@ -93,11 +114,11 @@ impl GdiCapturer {
             if sdc.is_invalid() { return Err(anyhow::anyhow!("GetDC")); }
 
             // DPI diagnostic: log the screen DC dimensions vs capture region
-            let dc_w = GetDeviceCaps(Some(sdc), GET_DEVICE_CAPS_INDEX(8)) as u32;
-            let dc_h = GetDeviceCaps(Some(sdc), GET_DEVICE_CAPS_INDEX(10)) as u32;
             let dpi_x = GetDeviceCaps(Some(sdc), GET_DEVICE_CAPS_INDEX(88));
             let dpi_y = GetDeviceCaps(Some(sdc), GET_DEVICE_CAPS_INDEX(90));
             if dpi_x != 96 || dpi_y != 96 {
+                let dc_w = GetDeviceCaps(Some(sdc), GET_DEVICE_CAPS_INDEX(8)) as u32;
+                let dc_h = GetDeviceCaps(Some(sdc), GET_DEVICE_CAPS_INDEX(10)) as u32;
                 log::debug!(
                     "GDI capture: region={}x{}@{},{} DC={}x{} DPI={}x{}",
                     w, h, self.region.x, self.region.y, dc_w, dc_h, dpi_x, dpi_y
@@ -109,7 +130,12 @@ impl GdiCapturer {
             let bmp = CreateCompatibleBitmap(sdc, w as i32, h as i32);
             if bmp.is_invalid() { let _ = ReleaseDC(None, sdc); let _ = DeleteDC(mdc); return Err(anyhow::anyhow!("CreateCompatibleBitmap")); }
             SelectObject(mdc, bmp.into());
-            let _ = BitBlt(mdc, 0, 0, w as i32, h as i32, Some(sdc), self.region.x, self.region.y, SRCCOPY);
+            let blt_result = BitBlt(mdc, 0, 0, w as i32, h as i32, Some(sdc), self.region.x, self.region.y, SRCCOPY);
+            // BitBlt can fail in RDP or locked sessions — return a clear error instead of silent black frame
+            if blt_result.is_err() {
+                let _ = DeleteObject(bmp.into()); let _ = ReleaseDC(None, sdc); let _ = DeleteDC(mdc);
+                return Err(anyhow::anyhow!("BitBlt failed (RDP or locked session). Try selecting a window for PrintWindow capture."));
+            }
             let mut bi = BITMAPINFO::default();
             bi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
             bi.bmiHeader.biWidth = w as i32; bi.bmiHeader.biHeight = -(h as i32);

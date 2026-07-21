@@ -15,6 +15,7 @@ impl GdiCapturer {
     pub fn initialize(&mut self, _mon: &MonitorInfo) -> Result<()> { Ok(()) }
     pub fn capture_frame(&mut self) -> Result<crate::model::Frame> { Err(anyhow::anyhow!("GDI stub")) }
     pub fn is_initialized(&self) -> bool { false }
+    pub fn set_window_hwnd(&mut self, _hwnd: u64, _client_w: u32, _client_h: u32) {}
 }
 pub struct SessionEventMonitor;
 impl SessionEventMonitor {
