@@ -458,6 +458,19 @@ self.gdi_capturer.capture_frame()?
         });
 
         if changed {
+            // If we were already stabilizing a previous slide, save it before resetting.
+            // This prevents rapid PPT slide transitions from losing intermediate slides.
+            // Save the partially-stabilized slide before a new transition resets everything.
+            // Without this, rapid PPT transitions cause intermediate slides to be lost.
+            if self.state == CaptureState::WaitingForStable {
+                let pending_frame = self.stability_detector.get_pending_frame().cloned();
+                if let Some(ref pframe) = pending_frame {
+                    log::info!("Saving pending stable frame before rapid transition");
+                    if let Err(e) = self.save_frame(pframe) {
+                        error!("Failed to save pending stable frame: {}", e);
+                    }
+                }
+            }
             self.state = CaptureState::WaitingForStable;
             self.animation_timer = Some(std::time::Instant::now());
             self.stability_detector.reset();

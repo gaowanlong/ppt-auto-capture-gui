@@ -88,6 +88,16 @@ impl StabilityDetector {
         self.stable_count >= self.required_stable
     }
 
+    /// Returns the last frame being stabilized, if any.
+    /// Used by the capture loop to save intermediate slides during rapid transitions.
+    pub fn get_pending_frame(&self) -> Option<&Frame> {
+        if self.stable_count > 0 {
+            self.previous_frame.as_ref()
+        } else {
+            None
+        }
+    }
+
     pub fn reset(&mut self) {
         self.stable_count = 0;
         self.previous_frame = None;
