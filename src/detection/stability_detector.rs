@@ -18,7 +18,7 @@ impl StabilityDetector {
             required_stable,
             stable_count: 0,
             previous_frame: None,
-            downsample: 4,
+            downsample: 2,
         }
     }
 

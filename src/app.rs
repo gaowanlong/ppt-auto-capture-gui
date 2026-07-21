@@ -300,7 +300,17 @@ impl eframe::App for PptAutoCaptureApp {
                     }
                     if self.monitors.is_empty() { self.refresh_displays(); }
                 }
-                Tab::Settings => self.settings_panel.render(ui, self.language),
+                Tab::Settings => {
+                    self.settings_panel.render(ui, self.language);
+                    // Immediately push settings changes to the worker
+                    if self.settings_panel.changed {
+                        if let Some(ref tx) = self.cmd_tx {
+                            let cfg = self.settings_panel.get_config();
+                            let _ = tx.send(WorkerCommand::UpdateConfig(cfg));
+                        }
+                    }
+                    self.settings_panel.changed = false;
+                }
                 Tab::Output => {
                     self.output_panel.render(ui, self.language);
                     // Handle open output directory button

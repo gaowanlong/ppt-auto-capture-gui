@@ -15,7 +15,7 @@ impl ChangeDetector {
         Self {
             threshold,
             previous_frame: None,
-            downsample: 4,
+            downsample: 2,
         }
     }
 
