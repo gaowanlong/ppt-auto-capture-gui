@@ -463,11 +463,25 @@ self.gdi_capturer.capture_frame()?
             // Save the partially-stabilized slide before a new transition resets everything.
             // Without this, rapid PPT transitions cause intermediate slides to be lost.
             if self.state == CaptureState::WaitingForStable {
+                // First try: stability detector has a pending stable frame (stable_count > 0)
+                let mut saved = false;
                 let pending_frame = self.stability_detector.get_pending_frame().cloned();
                 if let Some(ref pframe) = pending_frame {
                     log::info!("Saving pending stable frame before rapid transition");
                     if let Err(e) = self.save_frame(pframe) {
                         error!("Failed to save pending stable frame: {}", e);
+                    } else {
+                        saved = true;
+                    }
+                }
+                // Fallback: save the change detector's reference frame (last known good frame).
+                // This catches the case where stability was just reset (stable_count = 0).
+                if !saved {
+                    if let Some(ref ref_frame) = self.change_detector.get_reference_frame().cloned() {
+                        log::info!("Saving reference frame as fallback before rapid transition");
+                        if let Err(e) = self.save_frame(&ref_frame) {
+                            error!("Failed to save reference frame: {}", e);
+                        }
                     }
                 }
             }

@@ -387,4 +387,49 @@ mod tests {
         assert_eq!(&media_data[16..20], &[0, 0, 0, 2], "PNG width should be 2");
         assert_eq!(&media_data[20..24], &[0, 0, 0, 2], "PNG height should be 2");
     }
+
+
+
+    #[test]
+    fn test_pptx_multiple_slides_preserved() {
+        // Simulate sequential slide captures: add slide 1, then slide 2,
+        // and verify both are preserved in the final PPTX.
+        let dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let slides_dir = dir.path().join("slides");
+        std::fs::create_dir_all(&slides_dir).unwrap();
+        let png_data = make_test_png();
+
+        // Slide 1
+        std::fs::write(slides_dir.join("slide_0001.png"), &png_data).unwrap();
+        let output_path = dir.path().join("output.pptx");
+        let writer = PptxWriter::new(&output_path, "16:9", "fit");
+        let record1 = SlideRecord::new(
+            1, "slide_0001.png".into(), "slides/slide_0001.png".into(),
+            1, 2, 2, "hash1".into(), "Test".into(), "Monitor".into(),
+        );
+        writer.add_slide(&record1, &slides_dir.join("slide_0001.png")).unwrap();
+        drop(writer);
+
+        // Slide 2 (uses read_existing_slides to re-add slide 1)
+        std::fs::write(slides_dir.join("slide_0002.png"), &png_data).unwrap();
+        let writer2 = PptxWriter::new(&output_path, "16:9", "fit");
+        let record2 = SlideRecord::new(
+            2, "slide_0002.png".into(), "slides/slide_0002.png".into(),
+            2, 2, 2, "hash2".into(), "Test".into(), "Monitor".into(),
+        );
+        writer2.add_slide(&record2, &slides_dir.join("slide_0002.png")).unwrap();
+        drop(writer2);
+
+        // Verify both slides in final PPTX
+        let file = std::fs::File::open(&output_path).unwrap();
+        let mut archive = ZipArchive::new(file).unwrap();
+        assert!(archive.by_name("ppt/slides/slide1.xml").is_ok(), "Slide 1 should exist");
+        assert!(archive.by_name("ppt/slides/slide2.xml").is_ok(), "Slide 2 should exist");
+
+        // Verify presentation.xml has both sldId entries
+        let mut pres = String::new();
+        archive.by_name("ppt/presentation.xml").unwrap().read_to_string(&mut pres).unwrap();
+        assert!(pres.contains(r#"sldId id="256"#), "Presentation should contain sldId for slide 1");
+        assert!(pres.contains(r#"sldId id="257"#), "Presentation should contain sldId for slide 2");
+    }
 }

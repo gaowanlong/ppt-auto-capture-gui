@@ -84,6 +84,13 @@ impl ChangeDetector {
         self.previous_frame = Some(frame.clone());
     }
 
+    /// Returns the reference frame (the last frame used for comparison).
+    /// Used as fallback to capture slides during rapid transitions where
+    /// the stability detector hasn't accumulated any stable counts yet.
+    pub fn get_reference_frame(&self) -> Option<&Frame> {
+        self.previous_frame.as_ref()
+    }
+
     pub fn reset(&mut self) {
         self.previous_frame = None;
     }
