@@ -168,6 +168,50 @@ mod tests {
         assert!(!changed, "After reset, first frame sets reference");
     }
 
+
+
+    /// Simulate a PPT slide change: old slide → black transition → new slide.
+    /// Verifies the full change + stability pipeline.
+    #[test]
+    fn test_slide_change_detection_pipeline() {
+        use crate::detection::StabilityDetector;
+
+        let mut change_det = ChangeDetector::new(0.05);
+        let mut stable_det = StabilityDetector::new(2);
+
+        // Slide 1: solid blue
+        let slide1 = solid_frame(0, 0, 255, 100, 100);
+        // Slide 2: solid red (different content, like a PPT slide change)
+        let slide2 = solid_frame(255, 0, 0, 100, 100);
+        // Black transition frame (PPT often flashes black between slides)
+        let mut black_data = vec![0u8; 100 * 100 * 4];
+        let black_frame = Frame::new(black_data.clone(), 100, 100, 400, 0, 0);
+
+        // Phase 1: Slide 1 displayed, no changes
+        let (changed, _) = change_det.detect_change(&slide1);
+        change_det.update_reference(&slide1);
+        assert!(!changed, "First frame should set reference, not detect change");
+
+        // Phase 2: Black transition frame
+        let (changed, _) = change_det.detect_change(&black_frame);
+        change_det.update_reference(&black_frame);
+        assert!(changed, "Black frame should be detected as change from slide1");
+
+        // Phase 3: Slide 2 appears (like a new slide after transition)
+        let (changed, _) = change_det.detect_change(&slide2);
+        change_det.update_reference(&slide2);
+        assert!(changed, "Slide 2 should be detected as change from black frame");
+
+        // Phase 4: Stability check — Slide 2 stabilizes
+        assert!(!stable_det.check_stable(&slide2), "First stable check sets reference");
+        assert!(!stable_det.check_stable(&slide2), "Second check: stable_count=1");
+        assert!(stable_det.check_stable(&slide2), "Third check: stable_count=2 => stable!");
+
+        // Phase 5: After stability, no more changes detected for same content
+        change_det.update_reference(&slide2);
+        let (changed, _) = change_det.detect_change(&slide2);
+        assert!(!changed, "Same slide should not trigger change after reference update");
+    }
     #[test]
     fn test_set_threshold() {
         let mut detector = ChangeDetector::new(0.01);

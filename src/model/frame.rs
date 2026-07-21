@@ -135,6 +135,42 @@ mod tests {
         assert_eq!(thumb.len(), 800, "Expected 20x10x4 = 800 bytes");
     }
 
+
+
+    #[test]
+    fn test_frame_clone_preserves_pixel_data() {
+        let mut data = vec![0u8; 4 * 4 * 4];  // 4x4 RGBA
+        // Set each pixel to a unique value
+        for i in 0..data.len() { data[i] = (i % 256) as u8; }
+        let f1 = Frame::new(data, 4, 4, 16, 1, 1000);
+        let f2 = f1.clone();
+        assert_eq!(f1.width, f2.width);
+        assert_eq!(f1.height, f2.height);
+        assert_eq!(f1.stride, f2.stride);
+        assert_eq!(f1.data, f2.data, "Cloned frame pixel data should match");
+    }
+
+    #[test]
+    fn test_frame_thumbnail_checksum() {
+        let mut data = vec![0u8; 100 * 100 * 4];
+        // Red rectangle in the center
+        for y in 25..75 {
+            for x in 25..75 {
+                let idx = (y * 400 + x * 4) as usize;
+                data[idx] = 0;     // B
+                data[idx+1] = 0;   // G
+                data[idx+2] = 255; // R
+                data[idx+3] = 255; // A
+            }
+        }
+        let f = Frame::new(data, 100, 100, 400, 1, 1000);
+        let thumb = f.thumbnail(50, 50);
+        // Thumbnail should be 50x50 RGBA = 10000 bytes
+        assert_eq!(thumb.len(), 10000, "Thumbnail should be 50x50x4");
+        // There should be some red pixels (R > 0) in the thumbnail
+        let has_red = thumb.chunks(4).any(|px| px[2] > 0);
+        assert!(has_red, "Thumbnail should contain red pixels from original");
+    }
     #[test]
     fn test_thumbnail_upscale_not_happens() {
         let f = make_frame(0, 255, 0, 10, 10);

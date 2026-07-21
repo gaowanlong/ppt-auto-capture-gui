@@ -194,3 +194,197 @@ fn extract_attr_value(s: &str, after: &str, until: &str) -> Option<String> {
     let end = s[start..].find(until)?;
     Some(s[start..start + end].to_string())
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+
+    /// Create a minimal 2x2 RGBA PNG in memory.
+    fn make_test_png() -> Vec<u8> {
+        // Minimal valid PNG: 2x2 pixels, RGBA (color type 6)
+        // PNG signature
+        let mut png = vec![137, 80, 78, 71, 13, 10, 26, 10];
+        // IHDR chunk: width=2, height=2, bit_depth=8, color_type=6(RGBA)
+        let ihdr_data = [0u8, 0, 0, 2, 0, 0, 0, 2, 8, 6, 0, 0, 0];
+        let mut ihdr = Vec::new();
+        ihdr.extend_from_slice(&(ihdr_data.len() as u32).to_be_bytes());
+        ihdr.extend_from_slice(b"IHDR");
+        ihdr.extend_from_slice(&ihdr_data);
+        // CRC of IHDR chunk type + data
+        let crc = crc32(&ihdr[4..]);  // "IHDR" + data
+        ihdr.extend_from_slice(&crc.to_be_bytes());
+        png.extend_from_slice(&ihdr);
+
+        // IDAT chunk: 2x2 RGBA pixels (4 bytes per pixel = 16 bytes raw)
+        // Filter byte (0) + 16 bytes pixel data = 17 bytes
+        let raw: Vec<u8> = std::iter::once(0)  // filter byte: None
+            .chain([255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255].iter().cloned())
+            .collect();
+        // Compress using zlib (deflate)
+        use std::io::Write;
+        let mut compressed = Vec::new();
+        {
+            let mut encoder = flate2::write::ZlibEncoder::new(&mut compressed, flate2::Compression::fast());
+            encoder.write_all(&raw).unwrap();
+            encoder.finish().unwrap();
+        }
+        let mut idat = Vec::new();
+        idat.extend_from_slice(&(compressed.len() as u32).to_be_bytes());
+        idat.extend_from_slice(b"IDAT");
+        idat.extend_from_slice(&compressed);
+        let idat_crc = crc32(&idat[4..]);
+        idat.extend_from_slice(&idat_crc.to_be_bytes());
+        png.extend_from_slice(&idat);
+
+        // IEND chunk
+        let iend_crc = crc32(b"IEND");
+        png.extend_from_slice(&[0, 0, 0, 0, 73, 69, 78, 68]);
+        png.extend_from_slice(&iend_crc.to_be_bytes());
+        png
+    }
+
+    fn crc32(data: &[u8]) -> u32 {
+        let mut crc: u32 = 0xFFFFFFFF;
+        for &b in data {
+            crc ^= b as u32;
+            for _ in 0..8 {
+                if crc & 1 != 0 { crc = (crc >> 1) ^ 0xEDB88320; }
+                else { crc >>= 1; }
+            }
+        }
+        crc ^ 0xFFFFFFFF
+    }
+
+    /// Build a temp directory with a test PNG and return the PptxWriter.
+    fn setup_pptx_test() -> (tempfile::TempDir, PptxWriter, SlideRecord) {
+        let dir = tempfile::tempdir().expect("Failed to create temp dir");
+        // Create slides/ subdirectory
+        let slides_dir = dir.path().join("slides");
+        std::fs::create_dir_all(&slides_dir).unwrap();
+        // Write a test PNG
+        let png_path = slides_dir.join("slide_0001.png");
+        let png_data = make_test_png();
+        std::fs::write(&png_path, &png_data).unwrap();
+        // Create output path
+        let output_path = dir.path().join("output.pptx");
+        let writer = PptxWriter::new(&output_path, "16:9", "fit");
+        // Create slide record
+        let record = SlideRecord::new(
+            1, "slide_0001.png".into(), "slides/slide_0001.png".into(),
+            1, 2, 2, "test_hash".into(), "Test".into(), "Monitor".into(),
+        );
+        (dir, writer, record)
+    }
+
+    #[test]
+    fn test_pptx_has_required_parts() {
+        let (_dir, writer, record) = setup_pptx_test();
+        let png_path = _dir.path().join("slides").join("slide_0001.png");
+        writer.add_slide(&record, &png_path).unwrap();
+
+        let output_path = _dir.path().join("output.pptx");
+        assert!(output_path.exists(), "PPTX file should exist after adding a slide");
+
+        let file = std::fs::File::open(&output_path).unwrap();
+        let mut archive = ZipArchive::new(file).unwrap();
+
+        // Check all required entries exist
+        let required = [
+            "[Content_Types].xml",
+            "_rels/.rels",
+            "ppt/presentation.xml",
+            "ppt/_rels/presentation.xml.rels",
+            "ppt/slides/slide1.xml",
+            "ppt/slides/_rels/slide1.xml.rels",
+            "ppt/media/image1.png",
+            "ppt/slideMasters/slideMaster1.xml",
+            "ppt/theme/theme1.xml",
+            "ppt/presProps.xml",
+            "ppt/tableStyles.xml",
+            "ppt/viewProps.xml",
+            "docProps/app.xml",
+            "docProps/core.xml",
+        ];
+        for name in &required {
+            assert!(archive.by_name(name).is_ok(), "Missing required part: {}", name);
+        }
+    }
+
+    #[test]
+    fn test_pptx_xml_well_formed() {
+        let (_dir, writer, record) = setup_pptx_test();
+        let png_path = _dir.path().join("slides").join("slide_0001.png");
+        writer.add_slide(&record, &png_path).unwrap();
+
+        let output_path = _dir.path().join("output.pptx");
+        let file = std::fs::File::open(&output_path).unwrap();
+        let mut archive = ZipArchive::new(file).unwrap();
+
+        let xml_files = [
+            "[Content_Types].xml",
+            "ppt/presentation.xml",
+            "ppt/_rels/presentation.xml.rels",
+            "ppt/slides/slide1.xml",
+            "ppt/slides/_rels/slide1.xml.rels",
+        ];
+        for name in &xml_files {
+            let mut entry = archive.by_name(name).unwrap();
+            let mut content = String::new();
+            entry.read_to_string(&mut content).unwrap();
+            // Verify it starts with XML declaration or valid XML root
+            assert!(content.starts_with("<?xml") || content.starts_with("<"),
+                "{} should contain valid XML", name);
+            // Verify it has a closing root tag
+            assert!(content.contains("</"), "{} should have closing tags", name);
+        }
+    }
+
+    #[test]
+    fn test_pptx_relationships_consistent() {
+        let (_dir, writer, record) = setup_pptx_test();
+        let png_path = _dir.path().join("slides").join("slide_0001.png");
+        writer.add_slide(&record, &png_path).unwrap();
+
+        let output_path = _dir.path().join("output.pptx");
+        let file = std::fs::File::open(&output_path).unwrap();
+        let mut archive = ZipArchive::new(file).unwrap();
+
+        // Read presentation.xml.rels
+        let mut rels_content = String::new();
+        archive.by_name("ppt/_rels/presentation.xml.rels").unwrap()
+            .read_to_string(&mut rels_content).unwrap();
+
+        // Check that slide relationship exists
+        assert!(rels_content.contains("slide1.xml"), "Relationships should reference slide1.xml");
+
+        // Read presentation.xml to check slide ID
+        let mut pres_content = String::new();
+        archive.by_name("ppt/presentation.xml").unwrap()
+            .read_to_string(&mut pres_content).unwrap();
+        assert!(pres_content.contains("sldId"), "Presentation should contain slide ID entries");
+    }
+
+    #[test]
+    fn test_pptx_media_image_integrity() {
+        let (_dir, writer, record) = setup_pptx_test();
+        let png_path = _dir.path().join("slides").join("slide_0001.png");
+        writer.add_slide(&record, &png_path).unwrap();
+
+        let output_path = _dir.path().join("output.pptx");
+        let file = std::fs::File::open(&output_path).unwrap();
+        let mut archive = ZipArchive::new(file).unwrap();
+
+        // Read the embedded image and verify it's a valid PNG
+        let mut media_data = Vec::new();
+        archive.by_name("ppt/media/image1.png").unwrap()
+            .read_to_end(&mut media_data).unwrap();
+        // PNG signature should be present
+        assert_eq!(&media_data[..8], &[137, 80, 78, 71, 13, 10, 26, 10],
+            "Embedded image should have valid PNG signature");
+        // IHDR chunk should indicate 2x2 pixels
+        assert_eq!(&media_data[16..20], &[0, 0, 0, 2], "PNG width should be 2");
+        assert_eq!(&media_data[20..24], &[0, 0, 0, 2], "PNG height should be 2");
+    }
+}
