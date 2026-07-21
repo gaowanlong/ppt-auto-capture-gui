@@ -554,6 +554,8 @@ self.gdi_capturer.capture_frame()?
         });
 
         info!("Slide {} saved (frame {})", slide_number, frame.frame_index);
+        self.state = CaptureState::Running;
+        let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
         Ok(())
     }
 
