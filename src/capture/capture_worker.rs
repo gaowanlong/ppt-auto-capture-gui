@@ -426,6 +426,17 @@ self.gdi_capturer.capture_frame()?
         if self.state == CaptureState::ProtectedOrBlack {
             self.state = CaptureState::Running;
             let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
+
+            // Just exited a black/protected transition (e.g. PPT slide change).
+            // The current frame is almost certainly the new slide content.
+            // Force-save it immediately (save_frame handles duplicates internally).
+            self.change_detector.detect_change(&frame);
+            self.change_detector.update_reference(&frame);
+            if let Err(e) = self.save_frame(&frame) {
+                error!("Failed to save frame after black recovery: {}", e);
+                let _ = self.event_tx.send(WorkerEvent::Error(format!("Black-recovery save failed: {}", e)));
+            }
+            return Ok(());
         }
 
         // Save first frame immediately on starting capture

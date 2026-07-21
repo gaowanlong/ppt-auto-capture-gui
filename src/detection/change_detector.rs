@@ -51,7 +51,7 @@ impl ChangeDetector {
                 let curr_lum = frame.luminance_at(x, y);
 
                 // Consider pixel changed if luminance differs by more than 20
-                if (prev_lum as i16 - curr_lum as i16).unsigned_abs() > 20 {
+                if (prev_lum as i16 - curr_lum as i16).unsigned_abs() > 15 {
                     diff_pixels += 1;
                 }
                 total_pixels += 1;

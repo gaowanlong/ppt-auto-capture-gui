@@ -45,11 +45,11 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            sample_interval_ms: 500,
-            stability_frames: 3,
+            sample_interval_ms: 200,
+            stability_frames: 2,
             animation_timeout_ms: 10000,
-            change_threshold: 0.15,
-            black_threshold: 0.95,
+            change_threshold: 0.05,
+            black_threshold: 0.80,
             filter_duplicates: true,
             output_dir: "output".to_string(),
             output_filename: format!("ppt-capture-{}.pptx", chrono::Local::now().format("%Y%m%d-%H%M%S")),
@@ -110,11 +110,11 @@ mod tests {
     #[test]
     fn test_default_config_values() {
         let cfg = AppConfig::default();
-        assert_eq!(cfg.sample_interval_ms, 500);
-        assert_eq!(cfg.stability_frames, 3);
+        assert_eq!(cfg.sample_interval_ms, 200);
+        assert_eq!(cfg.stability_frames, 2);
         assert_eq!(cfg.animation_timeout_ms, 10000);
-        assert_eq!(cfg.change_threshold, 0.15);
-        assert_eq!(cfg.black_threshold, 0.95);
+        assert_eq!(cfg.change_threshold, 0.05);
+        assert_eq!(cfg.black_threshold, 0.80);
         assert!(cfg.filter_duplicates);
         assert_eq!(cfg.page_ratio, "16:9");
         assert_eq!(cfg.image_fit, "fit");

@@ -37,7 +37,7 @@ impl BlackFrameDetector {
                     let g = frame.data[offset + 1] as u16;
                     let r = frame.data[offset + 2] as u16;
                     // Near-black if all channels < 30
-                    if r < 30 && g < 30 && b < 30 {
+                    if r < 20 && g < 20 && b < 20 {
                         black_pixels += 1;
                     }
                 }
