@@ -81,6 +81,10 @@ impl PptAutoCaptureApp {
         app.display_panel.selected_description = config.last_monitor_description.clone();
         app.source_panel.selected_hwnd = config.last_window_hwnd;
         app.source_panel.selected_title = config.last_window_title.clone();
+        // Restore full-screen mode flag if previous session was full-screen
+        if config.last_full_screen {
+            app.source_panel.full_screen_selected = true;
+        }
         app.check_recovery();
         app
     }
@@ -115,7 +119,12 @@ impl PptAutoCaptureApp {
         self.dashboard.output_path = format!("{}/{}",
                         self.output_panel.output_dir.trim_end_matches('/').trim_end_matches('\\'),
                         self.output_panel.output_filename);
-        self.dashboard.source_window_title = self.source_panel.selected_title.clone();
+        
+        if self.source_panel.full_screen_selected {
+            self.dashboard.source_window_title = "📺 Full Screen".to_string();
+        } else {
+            self.dashboard.source_window_title = self.source_panel.selected_title.clone();
+        }
         self.dashboard.monitor_description = self.display_panel.selected_description.clone();
     }
 
@@ -180,8 +189,9 @@ impl PptAutoCaptureApp {
             self.windows = w.clone(); 
             self.source_panel.windows = w.clone();
             
-            // Auto-select the best window: prefer slideshow, then PPT window
-            if self.source_panel.selected_hwnd == 0 {
+            // Auto-select the best window only when user hasn't intentionally
+            // chosen full-screen capture AND no window is currently selected.
+            if self.source_panel.selected_hwnd == 0 && !self.source_panel.full_screen_selected {
                 // Sort by priority: slideshow first, then PPT
                 let mut candidates: Vec<&WindowInfo> = w.iter().collect();
                 candidates.sort_by(|a, b| {
@@ -332,6 +342,7 @@ impl Drop for PptAutoCaptureApp {
         self.config.filter_duplicates = scfg.filter_duplicates;
         self.config.last_window_hwnd = self.source_panel.selected_hwnd;
         self.config.last_window_title = self.source_panel.selected_title.clone();
+        self.config.last_full_screen = self.source_panel.full_screen_selected;
         self.config.last_monitor_hmonitor = self.display_panel.selected_hmonitor;
         self.config.last_monitor_description = self.display_panel.selected_description.clone();
         self.config.language = self.language;

@@ -32,6 +32,8 @@ pub struct AppConfig {
     /// Last used capture source (serialized for persistence).
     pub last_window_hwnd: u64,
     pub last_window_title: String,
+    /// Whether user last chose full-screen capture (zero window).
+    pub last_full_screen: bool,
     pub last_monitor_hmonitor: u64,
     pub last_monitor_description: String,
     /// Whether to use DXGI (vs GDI).
@@ -56,6 +58,7 @@ impl Default for AppConfig {
             keep_previous: true,
             last_window_hwnd: 0,
             last_window_title: String::new(),
+            last_full_screen: false,
             last_monitor_hmonitor: 0,
             last_monitor_description: String::new(),
             use_dxgi: true,
