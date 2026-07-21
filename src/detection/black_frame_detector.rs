@@ -110,4 +110,35 @@ mod tests {
         let frame = all_white_frame(10, 10);
         assert!(!detector.is_black(&frame), "All-white frame should not be black even with 5% threshold");
     }
+
+
+
+    /// 70% dark frame should not be flagged as black at 80% threshold.
+    #[test]
+    fn test_dark_frame_not_black() {
+        let detector = BlackFrameDetector::new(0.80);
+        let mut data = vec![0u8; 100 * 100 * 4];
+        let half = (100 * 100 * 4) * 70 / 100;
+        for i in half..data.len() { data[i] = 255; }
+        let frame = Frame::new(data, 100, 100, 400, 0, 0);
+        assert!(!detector.is_black(&frame), "70% dark should not be black at 80% threshold");
+    }
+
+    /// 1x1 pixel frames.
+    #[test]
+    fn test_tiny_frame_black_detection() {
+        let detector = BlackFrameDetector::new(0.95);
+        let black = Frame::new(vec![0u8; 4], 1, 1, 4, 0, 0);
+        let white = Frame::new(vec![255u8; 4], 1, 1, 4, 0, 0);
+        assert!(detector.is_black(&black));
+        assert!(!detector.is_black(&white));
+    }
+
+    /// All-zero frame is black.
+    #[test]
+    fn test_all_zeros_is_black() {
+        let detector = BlackFrameDetector::new(0.95);
+        let frame = Frame::new(vec![0u8; 100 * 100 * 4], 100, 100, 400, 0, 0);
+        assert!(detector.is_black(&frame));
+    }
 }

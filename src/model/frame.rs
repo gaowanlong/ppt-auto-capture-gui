@@ -178,4 +178,40 @@ mod tests {
         // Scale is capped at 1.0, so thumb should be same size: 10x10x4 = 400
         assert_eq!(thumb.len(), 400, "Should not upscale");
     }
+
+
+
+    /// All-zero frame.
+    #[test]
+    fn test_empty_frame_all_zero() {
+        let f = Frame::new(vec![0u8; 400], 10, 10, 40, 0, 0);
+        assert_eq!(f.luminance_at(5, 5), 0);
+        let thumb = f.thumbnail(5, 5);
+        assert_eq!(thumb.len(), 5 * 5 * 4);
+    }
+
+    /// Frame with padded stride.
+    #[test]
+    fn test_frame_padded_stride() {
+        let stride = 28; let w = 6; let h = 5;
+        let mut data = vec![0u8; (stride * h) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let off = (y * stride + x * 4) as usize;
+                data[off] = (x * 255 / w) as u8; data[off+1] = (y * 255 / h) as u8;
+                data[off+2] = 128; data[off+3] = 255;
+            }
+        }
+        let f = Frame::new(data, w, h, stride, 0, 0);
+        assert!(f.luminance_at(0, 0) > 0);
+        assert_eq!(f.luminance_at(100, 100), 0, "OOB should return 0");
+    }
+
+    /// Very small frame thumbnail — no upscaling.
+    #[test]
+    fn test_tiny_frame_no_upscale() {
+        let f = Frame::new(vec![100u8; 64], 4, 4, 16, 0, 0);
+        let thumb = f.thumbnail(100, 100);
+        assert_eq!(thumb.len(), 64, "Tiny frame should not upscale: 4x4x4=64");
+    }
 }

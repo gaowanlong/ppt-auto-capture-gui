@@ -230,4 +230,98 @@ mod tests {
         let (changed, _) = detector.detect_change(&f2);
         assert!(changed, "100% pixel change should exceed 90% threshold");
     }
+
+
+
+    /// Simulates the full capture cycle: old slide → change detected →
+    /// wait for stability → new slide stabilizes → confirmed by no further changes.
+    #[test]
+    fn test_capture_pipeline_full_cycle() {
+        use crate::detection::StabilityDetector;
+        let mut change_det = ChangeDetector::new(0.05);
+        let mut stable_det = StabilityDetector::new(2);
+        let slide1 = solid_frame(0, 0, 200, 100, 100);
+        let slide2 = solid_frame(200, 0, 0, 100, 100);
+
+        let (changed, _) = change_det.detect_change(&slide1);
+        change_det.update_reference(&slide1);
+        assert!(!changed, "First frame should not trigger change");
+
+        let (changed, _) = change_det.detect_change(&slide1);
+        change_det.update_reference(&slide1);
+        assert!(!changed, "Same slide should not trigger change");
+
+        let (changed, _) = change_det.detect_change(&slide2);
+        change_det.update_reference(&slide2);
+        assert!(changed, "New slide should trigger change");
+
+        assert!(!stable_det.check_stable(&slide2), "First stable check sets ref");
+        assert!(!stable_det.check_stable(&slide2), "Second: stable_count=1");
+        assert!(stable_det.check_stable(&slide2), "Third: stable_count=2 => stable!");
+
+        let (changed, _) = change_det.detect_change(&slide2);
+        change_det.update_reference(&slide2);
+        assert!(!changed, "Stable slide should not re-trigger change");
+    }
+
+    /// Stress test: 100 rapid slide changes in sequence, verifying the pipeline
+    /// doesn't lose intermediate slides.
+    #[test]
+    fn test_capture_pipeline_rapid_slides() {
+        use crate::detection::StabilityDetector;
+        let mut change_det = ChangeDetector::new(0.05);
+        let mut stable_det = StabilityDetector::new(2);
+        let mut saved = 0u32;
+        let n = 50;
+
+        let first = solid_frame(0, 0, 200, 100, 100);
+        change_det.detect_change(&first);
+        change_det.update_reference(&first);
+        saved += 1;
+
+        for i in 1..n {
+            // Use colors with high luminance contrast (not just hue shift)
+            let new_slide = if i % 2 == 0 {
+                solid_frame(255, 255, 255, 100, 100)  // white
+            } else {
+                solid_frame(0, 0, 0, 100, 100)        // black
+            };
+            let (changed, _) = change_det.detect_change(&new_slide);
+            change_det.update_reference(&new_slide);
+            assert!(changed, "Slide {} should trigger change", i + 1);
+            stable_det.reset();
+            assert!(!stable_det.check_stable(&new_slide));
+            assert!(!stable_det.check_stable(&new_slide));
+            assert!(stable_det.check_stable(&new_slide));
+            let (changed, _) = change_det.detect_change(&new_slide);
+            change_det.update_reference(&new_slide);
+            assert!(!changed, "Slide {} should be stable after stabilization", i + 1);
+            saved += 1;
+        }
+        assert_eq!(saved, n, "All {} slides should be captured", n);
+    }
+
+    /// Alternating frames should never stabilize.
+    #[test]
+    fn test_alternating_frames_not_stable() {
+        use crate::detection::StabilityDetector;
+        let mut stable_det = StabilityDetector::new(2);
+        let a = solid_frame(255, 0, 0, 50, 50);
+        let b = solid_frame(0, 255, 0, 50, 50);
+        assert!(!stable_det.check_stable(&a)); assert!(!stable_det.check_stable(&b));
+        assert!(!stable_det.check_stable(&a)); assert!(!stable_det.check_stable(&b));
+    }
+
+    /// Dimension change triggers detection at 1.0 diff.
+    #[test]
+    fn test_dimension_change_triggers_detection() {
+        let mut change_det = ChangeDetector::new(0.05);
+        let f1 = solid_frame(100, 100, 100, 100, 100);
+        let f2 = solid_frame(100, 100, 100, 200, 200);
+        change_det.detect_change(&f1);
+        change_det.update_reference(&f1);
+        let (changed, diff) = change_det.detect_change(&f2);
+        assert!(changed);
+        assert!((diff - 1.0).abs() < 0.001);
+    }
 }

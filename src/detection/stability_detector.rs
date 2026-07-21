@@ -180,4 +180,30 @@ mod tests {
         assert!(!detector.check_stable(&f));  // stable=2
         assert!(detector.check_stable(&f));   // stable=3
     }
+
+
+
+    #[test]
+    fn test_stability_resets_on_dimension_change() {
+        let mut detector = StabilityDetector::new(2);
+        let f1 = solid_frame(100, 100, 100);
+        assert!(!detector.check_stable(&f1));
+        assert!(!detector.check_stable(&f1));
+        // Frame with different dimensions triggers reset
+        let data = vec![100u8; 8 * 8 * 4];
+        let f2 = Frame::new(data, 8, 8, 32, 0, 0);
+        assert!(!detector.check_stable(&f2), "Dimension change resets stable_count");
+    }
+
+    #[test]
+    fn test_many_identical_frames_stable() {
+        let mut detector = StabilityDetector::new(5);
+        let f = solid_frame(100, 100, 100);
+        assert!(!detector.check_stable(&f));
+        assert!(!detector.check_stable(&f));
+        assert!(!detector.check_stable(&f));
+        assert!(!detector.check_stable(&f));
+        assert!(!detector.check_stable(&f));
+        assert!(detector.check_stable(&f), "Stable after 5 identical frames");
+    }
 }
