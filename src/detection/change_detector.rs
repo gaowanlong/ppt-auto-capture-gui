@@ -38,6 +38,13 @@ impl ChangeDetector {
             return (true, 1.0);
         }
 
+        // Auto-adjust downsample so ~500K pixels are checked regardless of resolution.
+        // 1080p → downsample 2, 4K → downsample 4, 5K → downsample 6, etc.
+        let target: u64 = 500_000;
+        let total = frame.width as u64 * frame.height as u64;
+        let ds = ((total as f64 / target as f64).sqrt().ceil() as u32).max(1).min(8);
+        self.downsample = ds;
+
         let step = self.downsample as usize;
         let mut diff_pixels: u64 = 0;
         let mut total_pixels: u64 = 0;
