@@ -261,7 +261,8 @@ pub const VIEW_PROPS_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standal
   <p:normalViewPr><p:restoredLeft cx="0"/><p:restoredTop cy="0"/></p:normalViewPr>
 </p:viewPr>"#;
 
-pub const DOC_PROPS_APP_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+// Dynamic — slide count is filled in add_slide()
+pub const DOC_PROPS_APP_XML_TEMPLATE_TEMPLATE: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"
             xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
   <Application>PPT Auto Capture</Application>

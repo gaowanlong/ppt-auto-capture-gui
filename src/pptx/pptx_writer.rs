@@ -115,7 +115,15 @@ impl PptxWriter {
         zip_write(&mut zip, "ppt/presProps.xml", options, PRES_PROPS_XML.as_bytes())?;
         zip_write(&mut zip, "ppt/tableStyles.xml", options, TABLE_STYLES_XML.as_bytes())?;
         zip_write(&mut zip, "ppt/viewProps.xml", options, VIEW_PROPS_XML.as_bytes())?;
-        zip_write(&mut zip, "docProps/app.xml", options, DOC_PROPS_APP_XML.as_bytes())?;
+        // app.xml with correct slide count (critical: static template reports 0 slides)
+        let app_xml = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"
+            xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
+  <Application>PPT Auto Capture</Application>
+  <Slides>{}</Slides>
+</Properties>"#, existing_slides.len());
+        zip_write(&mut zip, "docProps/app.xml", options, app_xml.as_bytes())?;
+
         zip_write(&mut zip, "docProps/core.xml", options, DOC_PROPS_CORE_XML.as_bytes())?;
 
         zip.finish()?;
