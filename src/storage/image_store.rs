@@ -27,8 +27,9 @@ impl ImageStore {
         let filename = format!("slide_{:04}.png", slide_number);
         let filepath = self.slides_dir.join(&filename);
 
-        // Convert BGRA frame data to RGBA using the `image` crate
-        let mut rgba_data = Vec::with_capacity((frame.width as usize * frame.height as usize * 4) as usize);
+        // Convert BGRA frame data to RGB (drop alpha — some PowerPoint versions 
+        // fail to render RGBA PNG and delete the image content silently).
+        let mut rgb_data = Vec::with_capacity((frame.width as usize * frame.height as usize * 3) as usize);
 
         for y in 0..frame.height {
             for x in 0..frame.width {
@@ -37,16 +38,14 @@ impl ImageStore {
                     let b = frame.data[offset];
                     let g = frame.data[offset + 1];
                     let r = frame.data[offset + 2];
-                    let a = frame.data[offset + 3];
-                    rgba_data.push(r);
-                    rgba_data.push(g);
-                    rgba_data.push(b);
-                    rgba_data.push(a);
+                    rgb_data.push(r);
+                    rgb_data.push(g);
+                    rgb_data.push(b);
                 }
             }
         }
 
-        let img = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(frame.width, frame.height, rgba_data)
+        let img = image::ImageBuffer::<image::Rgb<u8>, _>::from_raw(frame.width, frame.height, rgb_data)
             .context("Failed to create image buffer")?;
 
         // Save as PNG atomically
