@@ -208,6 +208,7 @@ fn extract_attr_value(s: &str, after: &str, until: &str) -> Option<String> {
 mod tests {
     use super::*;
     use std::io::Read;
+        use crate::model::SlideRecord;
 
     /// Create a minimal 2x2 RGBA PNG in memory.
     fn make_test_png() -> Vec<u8> {
@@ -439,5 +440,52 @@ mod tests {
         archive.by_name("ppt/presentation.xml").unwrap().read_to_string(&mut pres).unwrap();
         assert!(pres.contains(r#"sldId id="256"#), "Presentation should contain sldId for slide 1");
         assert!(pres.contains(r#"sldId id="257"#), "Presentation should contain sldId for slide 2");
+    }
+
+/// Generates PPTX files to /tmp/pptx_test/ for manual inspection.
+    /// Run: cargo test test_pptx_generate_to_tmp -- --nocapture
+    #[test]
+    fn test_pptx_generate_to_tmp() {
+        use std::io::Read;
+        use crate::model::SlideRecord;
+        let base = std::path::Path::new("/tmp/pptx_test");
+        let slides_dir = base.join("slides");
+        let _ = std::fs::remove_dir_all(base);
+        std::fs::create_dir_all(&slides_dir).unwrap();
+        let png_data = make_test_png();
+        for i in 1..=10 {
+            std::fs::write(slides_dir.join(&format!("slide_{:04}.png", i)), &png_data).unwrap();
+        }
+
+        let report = |name: &str, n: u32| {
+            let output = base.join(name);
+            let writer = PptxWriter::new(&output, "16:9", "fit");
+            for i in 1..=n {
+                let record = SlideRecord::new(
+                    i,
+                    format!("slide_{:04}.png", i),
+                    format!("slides/slide_{:04}.png", i),
+                    i as u64, 2, 2, format!("hash{}", i),
+                    "Test".into(), "Monitor".into(),
+                );
+                writer.add_slide(&record, &slides_dir.join(format!("slide_{:04}.png", i))).unwrap();
+            }
+            drop(writer);
+            // Verify ZIP + slide count
+            let file = std::fs::File::open(&output).unwrap();
+            let mut archive = zip::ZipArchive::new(file).unwrap();
+            let slide_count = (1..=n).filter(|i| {
+                archive.by_name(&format!("ppt/slides/slide{}.xml", i)).is_ok()
+            }).count();
+            assert_eq!(slide_count, n as usize);
+            println!("  OK  {}  ({} slides, {} bytes)", name, n, std::fs::metadata(&output).map(|m| m.len()).unwrap_or(0));
+        };
+
+        println!("\nPPTX test files generated at: {}/", base.display());
+        println!("---");
+        report("test_1slide.pptx", 1);
+        report("test_3slides.pptx", 3);
+        report("test_10slides.pptx", 10);
+        println!("---\nAll PPTX files verified. Open them in macOS Preview or PowerPoint to check integrity.\n");
     }
 }
