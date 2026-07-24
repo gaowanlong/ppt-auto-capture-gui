@@ -88,6 +88,8 @@ fn setup_cjk_fonts(ctx: &egui::Context) {
         "/System/Library/Fonts/Hiragino Sans GB.ttc",
         "/System/Library/Fonts/AppleSDGothicNeo.ttc",
     ];
+    #[cfg(target_os = "linux")]
+    let font_list: &[&str] = &[];
 
     for (i, path) in font_list.iter().enumerate() {
         if let Ok(data) = std::fs::read(path) {
