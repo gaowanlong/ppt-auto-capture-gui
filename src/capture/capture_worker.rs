@@ -173,6 +173,11 @@ impl WorkerLoop {
                             warn!("DXGI lost, pausing capture");
                             self.state = CaptureState::Paused;
                             let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
+                        } else if msg.contains("No capturer initialized") && cfg!(not(target_os = "windows")) {
+                            warn!("Capture not available on this platform (non-Windows). PPTX test mode.");
+                            self.state = CaptureState::Idle;
+                            let _ = self.event_tx.send(WorkerEvent::Error(
+                                "Capture only works on Windows. This build is for PPTX testing only.".into()));
                         } else {
                             self.state = CaptureState::Error;
                             let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));

@@ -71,8 +71,31 @@ jobs:
           path: artifacts/
 
   create-release:
+  build-macos:
+    name: Build macOS (x86_64)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: true
+          fetch-depth: 0
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build release
+        run: cargo build --release
+      - name: Prepare artifacts
+        run: |
+          mkdir -p artifacts
+          cp target/release/ppt-auto-capture-gui artifacts/
+          cp README.md artifacts/
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ppt-auto-capture-gui-macos-x86_64
+          path: artifacts/
+
     name: Create Release
-    needs: [build-windows, build-linux]
+    needs: [build-windows, build-linux, build-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -91,6 +114,11 @@ jobs:
           cp downloaded-artifacts/ppt-auto-capture-gui-windows-x86_64-msvc/ppt-auto-capture-gui.exe release-files/
           cp downloaded-artifacts/ppt-auto-capture-gui-windows-x86_64-msvc/README.md release-files/README-windows.md
           tar czf release-files/ppt-auto-capture-gui-linux-x86_64.tar.gz -C downloaded-artifacts/ppt-auto-capture-gui-linux-x86_64 ppt-auto-capture-gui README.md
+      - name: Package macOS binary
+        run: |
+          mkdir -p release-files/macos
+          cp downloaded-artifacts/ppt-auto-capture-gui-macos-x86_64/ppt-auto-capture-gui release-files/macos/
+          tar czf release-files/ppt-auto-capture-gui-macos-x86_64.tar.gz -C release-files/macos ppt-auto-capture-gui
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -102,4 +130,6 @@ jobs:
           files: |
             release-files/ppt-auto-capture-gui.exe
             release-files/ppt-auto-capture-gui-linux-x86_64.tar.gz
+            release-files/ppt-auto-capture-gui-macos-x86_64.tar.gz
             release-files/README-windows.md
+            release-files/README-macos.md

@@ -74,21 +74,27 @@ fn main() -> Result<(), eframe::Error> {
 /// Add CJK font support by loading system fonts on Windows.
 /// Add CJK font support by loading system fonts on Windows.
 fn setup_cjk_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+
     #[cfg(target_os = "windows")]
-    {
-        let mut fonts = egui::FontDefinitions::default();
-        let font_list = [
-            r"C:\Windows\Fonts\msyh.ttc",
-            r"C:\Windows\Fonts\simsun.ttc",
-            r"C:\Windows\Fonts\simhei.ttf",
-        ];
-        for (i, path) in font_list.iter().enumerate() {
-            if let Ok(data) = std::fs::read(path) {
-                let name = format!("cjk_{}", i);
-                fonts.font_data.insert(name.clone(), egui::FontData::from_owned(data).into());
-                fonts.families.entry(egui::FontFamily::Proportional).or_default().insert(0, name);
-            }
+    let font_list: &[&str] = &[
+        r"C:\Windows\Fonts\msyh.ttc",
+        r"C:\Windows\Fonts\simsun.ttc",
+        r"C:\Windows\Fonts\simhei.ttf",
+    ];
+    #[cfg(target_os = "macos")]
+    let font_list: &[&str] = &[
+        "/System/Library/Fonts/STHeiti Light.ttc",
+        "/System/Library/Fonts/Hiragino Sans GB.ttc",
+        "/System/Library/Fonts/AppleSDGothicNeo.ttc",
+    ];
+
+    for (i, path) in font_list.iter().enumerate() {
+        if let Ok(data) = std::fs::read(path) {
+            let name = format!("cjk_{}", i);
+            fonts.font_data.insert(name.clone(), egui::FontData::from_owned(data).into());
+            fonts.families.entry(egui::FontFamily::Proportional).or_default().insert(0, name);
         }
-        ctx.set_fonts(fonts);
     }
+    ctx.set_fonts(fonts);
 }
