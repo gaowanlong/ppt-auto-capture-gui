@@ -1,40 +1,44 @@
 //! Generates slide XML and slide relationships XML.
 
-
 /// EMU constants
-const SLIDE_W_4_3: i64 = 9144000;   // 10 inches for 4:3
-const SLIDE_H_4_3: i64 = 6858000;   // 7.5 inches for 4:3
-const SLIDE_W_16_9: i64 = 9144000;  // 10 inches for 16:9
-const SLIDE_H_16_9: i64 = 5143500;  // 5.625 inches for 16:9
-const EMU_PER_PX: i64 = 12700;      // 1 pixel at 72 DPI ≈ 12700 EMU
+const SLIDE_W_4_3: i64 = 9144000; // 10 inches for 4:3
+const SLIDE_H_4_3: i64 = 6858000; // 7.5 inches for 4:3
+const SLIDE_W_16_9: i64 = 9144000; // 10 inches for 16:9
+const SLIDE_H_16_9: i64 = 5143500; // 5.625 inches for 16:9
+const EMU_PER_PX: i64 = 12700; // 1 pixel at 72 DPI ≈ 12700 EMU
 
 /// Compute slide dimensions in EMU from a ratio string like "16:9" or "4:3".
 pub fn slide_dimensions(ratio: &str) -> (i64, i64) {
     match ratio {
         "4:3" => (SLIDE_W_4_3, SLIDE_H_4_3),
-        "3:2" => (SLIDE_W_16_9 * 2 / 3, SLIDE_H_16_9),  // approximate
+        "3:2" => (SLIDE_W_16_9 * 2 / 3, SLIDE_H_16_9), // approximate
         "16:10" => (SLIDE_W_16_9, SLIDE_H_4_3 * 10 / 15),
-        _ => (SLIDE_W_16_9, SLIDE_H_16_9),  // default 16:9
+        _ => (SLIDE_W_16_9, SLIDE_H_16_9), // default 16:9
     }
 }
 
 /// Compute image display position/size in EMU for "fit" mode (maintain aspect ratio, center).
-fn compute_image_fit(img_w_px: u32, img_h_px: u32, slide_w: i64, slide_h: i64) -> (i64, i64, i64, i64) {
+fn compute_image_fit(
+    img_w_px: u32,
+    img_h_px: u32,
+    slide_w: i64,
+    slide_h: i64,
+) -> (i64, i64, i64, i64) {
     let img_emu_w = (img_w_px as i64) * EMU_PER_PX;
     let img_emu_h = (img_h_px as i64) * EMU_PER_PX;
-    
+
     // Scale to fit within slide, maintaining aspect ratio
     let scale_x = slide_w as f64 / img_emu_w as f64;
     let scale_y = slide_h as f64 / img_emu_h as f64;
-    let scale = scale_x.min(scale_y).min(1.0);  // Don't upscale
-    
+    let scale = scale_x.min(scale_y).min(1.0); // Don't upscale
+
     let disp_w = (img_emu_w as f64 * scale) as i64;
     let disp_h = (img_emu_h as f64 * scale) as i64;
-    
+
     // Center on slide
     let off_x = (slide_w - disp_w) / 2;
     let off_y = (slide_h - disp_h) / 2;
-    
+
     (off_x, off_y, disp_w, disp_h)
 }
 
@@ -46,14 +50,21 @@ impl SlideXml {
     /// image_w/image_h are the pixel dimensions of the captured screenshot.
     /// fit_mode is "fill" (stretch to fill) or "fit" (proportional, centered).
     /// page_ratio is "16:9", "4:3", etc.
-    pub fn new(slide_number: u32, image_name: &str, image_w: u32, image_h: u32, fit_mode: &str, page_ratio: &str) -> (String, String) {
+    pub fn new(
+        slide_number: u32,
+        image_name: &str,
+        image_w: u32,
+        image_h: u32,
+        fit_mode: &str,
+        page_ratio: &str,
+    ) -> (String, String) {
         let (slide_w, slide_h) = slide_dimensions(page_ratio);
         let (off_x, off_y, disp_w, disp_h) = if fit_mode == "fit" {
             compute_image_fit(image_w, image_h, slide_w, slide_h)
         } else {
             (0i64, 0i64, slide_w, slide_h)
         };
-        
+
         let slide_xml = format!(
             r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
@@ -108,6 +119,9 @@ impl SlideXml {
         let rels_xml = format!(
             r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1"
+                Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout"
+                Target="../slideLayouts/slideLayout1.xml"/>
   <Relationship Id="rId2"
                 Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
                 Target="../media/{}.png"/>
@@ -128,7 +142,8 @@ impl PresentationXml {
         for (num, _media) in slides {
             sld_ids.push_str(&format!(
                 r#"        <p:sldId id="{}" r:id="rId{}"/>"#,
-                255 + num, num + 1  // rId1 = master, slides start at rId2
+                255 + num,
+                num + 1 // rId1 = master, slides start at rId2
             ));
             sld_ids.push('\n');
         }
@@ -191,10 +206,30 @@ pub const SLIDE_MASTER_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" stand
 <p:sldMaster xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
              xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
              xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
-  <p:cSld name="Slide Master"/>
-  <p:clrMapOvr>
-    <a:masterClrMapping/>
-  </p:clrMapOvr>
+  <p:cSld name="Slide Master">
+    <p:spTree>
+      <p:nvGrpSpPr>
+        <p:cNvPr id="1" name=""/>
+        <p:cNvGrpSpPr/>
+        <p:nvPr/>
+      </p:nvGrpSpPr>
+      <p:grpSpPr>
+        <a:xfrm>
+          <a:off x="0" y="0"/>
+          <a:ext cx="0" cy="0"/>
+          <a:chOff x="0" y="0"/>
+          <a:chExt cx="0" cy="0"/>
+        </a:xfrm>
+      </p:grpSpPr>
+    </p:spTree>
+  </p:cSld>
+  <p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2"
+            accent1="accent1" accent2="accent2" accent3="accent3"
+            accent4="accent4" accent5="accent5" accent6="accent6"
+            hlink="hlink" folHlink="folHlink"/>
+  <p:sldLayoutIdLst>
+    <p:sldLayoutId id="2147483649" r:id="rId1"/>
+  </p:sldLayoutIdLst>
 </p:sldMaster>"#;
 
 pub const SLIDE_MASTER_RELS_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -207,8 +242,24 @@ pub const SLIDE_LAYOUT_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" stand
 <p:sldLayout xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
              xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
              xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
-             type="blank">
-  <p:cSld name="Blank Layout"/>
+             type="blank" preserve="1">
+  <p:cSld name="Blank Layout">
+    <p:spTree>
+      <p:nvGrpSpPr>
+        <p:cNvPr id="1" name=""/>
+        <p:cNvGrpSpPr/>
+        <p:nvPr/>
+      </p:nvGrpSpPr>
+      <p:grpSpPr>
+        <a:xfrm>
+          <a:off x="0" y="0"/>
+          <a:ext cx="0" cy="0"/>
+          <a:chOff x="0" y="0"/>
+          <a:chExt cx="0" cy="0"/>
+        </a:xfrm>
+      </p:grpSpPr>
+    </p:spTree>
+  </p:cSld>
   <p:clrMapOvr>
     <a:masterClrMapping/>
   </p:clrMapOvr>
@@ -280,7 +331,6 @@ pub const DOC_PROPS_CORE_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" sta
   <dcterms:modified xsi:type="dcterms:W3CDTF">2025-01-01T00:00:00Z</dcterms:modified>
 </cp:coreProperties>"#;
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,9 +382,9 @@ mod tests {
         let slides = vec![(1, "image1.png".into()), (2, "image2.png".into())];
         let xml = PresentationXml::new(&slides, "16:9");
         assert!(xml.contains("sldId"));
-        assert!(xml.contains("rId2"));  // slide 1 (rId1 is master)
-        assert!(xml.contains("rId3"));  // slide 2
-        assert!(xml.contains("rId1"));  // master reference
+        assert!(xml.contains("rId2")); // slide 1 (rId1 is master)
+        assert!(xml.contains("rId3")); // slide 2
+        assert!(xml.contains("rId1")); // master reference
         assert!(xml.contains(r#"cx="9144000""#));
         assert!(xml.contains(r#"cy="5143500""#));
     }
@@ -343,8 +393,8 @@ mod tests {
     fn test_presentation_rels_contains_slides() {
         let slides = vec![(1, "image1.png".into())];
         let rels = PresentationRelsXml::new(&slides);
-        assert!(rels.contains("rId1"));  // master
-        assert!(rels.contains("rId2"));  // slide 1 (offset)
+        assert!(rels.contains("rId1")); // master
+        assert!(rels.contains("rId2")); // slide 1 (offset)
         assert!(rels.contains("slides/slide1.xml"));
     }
 

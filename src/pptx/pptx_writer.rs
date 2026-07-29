@@ -2,13 +2,13 @@ use anyhow::{Context, Result};
 use log::info;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use zip::write::FileOptions;
 use zip::ZipArchive;
 use zip::ZipWriter;
-use zip::write::FileOptions;
 
-use crate::model::SlideRecord;
 use super::content_types::*;
 use super::slide_xml::*;
+use crate::model::SlideRecord;
 
 pub struct PptxWriter {
     output_path: PathBuf,
@@ -50,15 +50,24 @@ impl PptxWriter {
             let _ = std::fs::copy(output_path, &backup);
             info!("Backed up existing PPTX to {:?}", backup);
         }
-        Self { output_path: output_path.to_path_buf(), page_ratio: page_ratio.to_string(), image_fit: image_fit.to_string() }
+        Self {
+            output_path: output_path.to_path_buf(),
+            page_ratio: page_ratio.to_string(),
+            image_fit: image_fit.to_string(),
+        }
     }
 
     pub fn add_slide(&self, record: &SlideRecord, _png_path: &Path) -> Result<()> {
         let slide_number = record.slide_number;
         let media_name = format!("image{}.png", slide_number);
         // Use unique temp name to avoid conflicts with antivirus or previous crashes
-        let tmp_suffix = format!("tmp.{:x}.pptx", std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos());
+        let tmp_suffix = format!(
+            "tmp.{:x}.pptx",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        );
         let tmp_path = self.output_path.with_file_name(&tmp_suffix);
 
         let mut existing_slides: Vec<(u32, String)> = Vec::new();
@@ -75,28 +84,84 @@ impl PptxWriter {
             .compression_method(zip::CompressionMethod::Deflated)
             .unix_permissions(0o644);
 
-        zip_write(&mut zip, "[Content_Types].xml", options,
-            ContentTypesXml::new(&existing_slides).to_string().as_bytes())?;
+        zip_write(
+            &mut zip,
+            "[Content_Types].xml",
+            options,
+            ContentTypesXml::new(&existing_slides)
+                .to_string()
+                .as_bytes(),
+        )?;
         zip_write(&mut zip, "_rels/.rels", options, RELS_DOT_RELS.as_bytes())?;
-        zip_write(&mut zip, "ppt/presentation.xml", options,
-            PresentationXml::new(&existing_slides, &self.page_ratio).to_string().as_bytes())?;
-        zip_write(&mut zip, "ppt/_rels/presentation.xml.rels", options,
-            PresentationRelsXml::new(&existing_slides).to_string().as_bytes())?;
-        zip_write(&mut zip, "ppt/slideMasters/slideMaster1.xml", options, SLIDE_MASTER_XML.as_bytes())?;
-        zip_write(&mut zip, "ppt/slideMasters/_rels/slideMaster1.xml.rels", options, SLIDE_MASTER_RELS_XML.as_bytes())?;
-        zip_write(&mut zip, "ppt/slideLayouts/slideLayout1.xml", options, SLIDE_LAYOUT_XML.as_bytes())?;
-        zip_write(&mut zip, "ppt/slideLayouts/_rels/slideLayout1.xml.rels", options, SLIDE_LAYOUT_RELS_XML.as_bytes())?;
-        zip_write(&mut zip, "ppt/theme/theme1.xml", options, THEME_XML.as_bytes())?;
+        zip_write(
+            &mut zip,
+            "ppt/presentation.xml",
+            options,
+            PresentationXml::new(&existing_slides, &self.page_ratio)
+                .to_string()
+                .as_bytes(),
+        )?;
+        zip_write(
+            &mut zip,
+            "ppt/_rels/presentation.xml.rels",
+            options,
+            PresentationRelsXml::new(&existing_slides)
+                .to_string()
+                .as_bytes(),
+        )?;
+        zip_write(
+            &mut zip,
+            "ppt/slideMasters/slideMaster1.xml",
+            options,
+            SLIDE_MASTER_XML.as_bytes(),
+        )?;
+        zip_write(
+            &mut zip,
+            "ppt/slideMasters/_rels/slideMaster1.xml.rels",
+            options,
+            SLIDE_MASTER_RELS_XML.as_bytes(),
+        )?;
+        zip_write(
+            &mut zip,
+            "ppt/slideLayouts/slideLayout1.xml",
+            options,
+            SLIDE_LAYOUT_XML.as_bytes(),
+        )?;
+        zip_write(
+            &mut zip,
+            "ppt/slideLayouts/_rels/slideLayout1.xml.rels",
+            options,
+            SLIDE_LAYOUT_RELS_XML.as_bytes(),
+        )?;
+        zip_write(
+            &mut zip,
+            "ppt/theme/theme1.xml",
+            options,
+            THEME_XML.as_bytes(),
+        )?;
 
-        let slides_dir = self.output_path.parent().unwrap_or(Path::new(".")).join("slides");
-        let slides_dir = if slides_dir.exists() { slides_dir } else { PathBuf::from("slides") };
+        let slides_dir = self
+            .output_path
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join("slides");
+        let slides_dir = if slides_dir.exists() {
+            slides_dir
+        } else {
+            PathBuf::from("slides")
+        };
 
         for (num, media) in &existing_slides {
             let media_path = slides_dir.join(format!("slide_{:04}.png", num));
             if media_path.exists() {
                 let media_bytes = std::fs::read(&media_path)
                     .with_context(|| format!("Failed to read {:?}", media_path))?;
-                zip_write(&mut zip, &format!("ppt/media/{}", media), options, &media_bytes)?;
+                zip_write(
+                    &mut zip,
+                    &format!("ppt/media/{}", media),
+                    options,
+                    &media_bytes,
+                )?;
             }
         }
 
@@ -104,45 +169,85 @@ impl PptxWriter {
             // Get image dimensions from the existing PNG file
             let img_dimensions = get_png_dimensions(&slides_dir, *num);
             // If PNG not found on disk, fall back to the record's stored dimensions
-            let (img_w, img_h) = img_dimensions.unwrap_or_else(|| {
-                (record.width.max(1), record.height.max(1))
-            });
-            let (slide_xml, rels_xml) = SlideXml::new(*num, &format!("image{}", num), img_w, img_h, &self.image_fit, &self.page_ratio);
-            zip_write(&mut zip, &format!("ppt/slides/slide{}.xml", num), options, slide_xml.as_bytes())?;
-            zip_write(&mut zip, &format!("ppt/slides/_rels/slide{}.xml.rels", num), options, rels_xml.as_bytes())?;
+            let (img_w, img_h) =
+                img_dimensions.unwrap_or_else(|| (record.width.max(1), record.height.max(1)));
+            let (slide_xml, rels_xml) = SlideXml::new(
+                *num,
+                &format!("image{}", num),
+                img_w,
+                img_h,
+                &self.image_fit,
+                &self.page_ratio,
+            );
+            zip_write(
+                &mut zip,
+                &format!("ppt/slides/slide{}.xml", num),
+                options,
+                slide_xml.as_bytes(),
+            )?;
+            zip_write(
+                &mut zip,
+                &format!("ppt/slides/_rels/slide{}.xml.rels", num),
+                options,
+                rels_xml.as_bytes(),
+            )?;
         }
 
-        zip_write(&mut zip, "ppt/presProps.xml", options, PRES_PROPS_XML.as_bytes())?;
-        zip_write(&mut zip, "ppt/tableStyles.xml", options, TABLE_STYLES_XML.as_bytes())?;
-        zip_write(&mut zip, "ppt/viewProps.xml", options, VIEW_PROPS_XML.as_bytes())?;
+        zip_write(
+            &mut zip,
+            "ppt/presProps.xml",
+            options,
+            PRES_PROPS_XML.as_bytes(),
+        )?;
+        zip_write(
+            &mut zip,
+            "ppt/tableStyles.xml",
+            options,
+            TABLE_STYLES_XML.as_bytes(),
+        )?;
+        zip_write(
+            &mut zip,
+            "ppt/viewProps.xml",
+            options,
+            VIEW_PROPS_XML.as_bytes(),
+        )?;
         // app.xml with correct slide count (critical: static template reports 0 slides)
-        let app_xml = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        let app_xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"
             xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
   <Application>PPT Auto Capture</Application>
   <Slides>{}</Slides>
-</Properties>"#, existing_slides.len());
+</Properties>"#,
+            existing_slides.len()
+        );
         zip_write(&mut zip, "docProps/app.xml", options, app_xml.as_bytes())?;
 
-        zip_write(&mut zip, "docProps/core.xml", options, DOC_PROPS_CORE_XML.as_bytes())?;
+        zip_write(
+            &mut zip,
+            "docProps/core.xml",
+            options,
+            DOC_PROPS_CORE_XML.as_bytes(),
+        )?;
 
         zip.finish()?;
-        
+
         // Atomic replace: try rename first, fall back to copy+delete
         let replace_result = std::fs::rename(&tmp_path, &self.output_path);
         match replace_result {
-            Ok(()) => {},
+            Ok(()) => {}
             Err(_) => {
                 // Rename failed (antivirus or cross-device), try copy+delete
-                std::fs::copy(&tmp_path, &self.output_path)
-                    .with_context(|| format!("Failed to copy tmp to output: {:?}", self.output_path))?;
+                std::fs::copy(&tmp_path, &self.output_path).with_context(|| {
+                    format!("Failed to copy tmp to output: {:?}", self.output_path)
+                })?;
                 let _ = std::fs::remove_file(&tmp_path);
             }
         }
         info!("PPTX updated: slide {} added", slide_number);
         Ok(())
     }
-    
+
     /// Read PNG dimensions from a saved slide file.
     fn read_png_dimensions(slides_dir: &std::path::Path, num: u32) -> Option<(u32, u32)> {
         let path = slides_dir.join(format!("slide_{:04}.png", num));
@@ -203,67 +308,22 @@ fn extract_attr_value(s: &str, after: &str, until: &str) -> Option<String> {
     Some(s[start..start + end].to_string())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::SlideRecord;
     use std::io::Read;
-        use crate::model::SlideRecord;
 
-    /// Create a minimal 2x2 RGBA PNG in memory.
+    /// Create a standards-compliant 2x2 RGB PNG in memory.
     fn make_test_png() -> Vec<u8> {
-        // Minimal valid PNG: 2x2 pixels, RGBA (color type 6)
-        // PNG signature
-        let mut png = vec![137, 80, 78, 71, 13, 10, 26, 10];
-        // IHDR chunk: width=2, height=2, bit_depth=8, color_type=6(RGBA)
-        let ihdr_data = [0u8, 0, 0, 2, 0, 0, 0, 2, 8, 6, 0, 0, 0];
-        let mut ihdr = Vec::new();
-        ihdr.extend_from_slice(&(ihdr_data.len() as u32).to_be_bytes());
-        ihdr.extend_from_slice(b"IHDR");
-        ihdr.extend_from_slice(&ihdr_data);
-        // CRC of IHDR chunk type + data
-        let crc = crc32(&ihdr[4..]);  // "IHDR" + data
-        ihdr.extend_from_slice(&crc.to_be_bytes());
-        png.extend_from_slice(&ihdr);
+        use image::ImageEncoder;
 
-        // IDAT chunk: 2x2 RGBA pixels (4 bytes per pixel = 16 bytes raw)
-        // Filter byte (0) + 16 bytes pixel data = 17 bytes
-        let raw: Vec<u8> = std::iter::once(0)  // filter byte: None
-            .chain([255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255].iter().cloned())
-            .collect();
-        // Compress using zlib (deflate)
-        use std::io::Write;
-        let mut compressed = Vec::new();
-        {
-            let mut encoder = flate2::write::ZlibEncoder::new(&mut compressed, flate2::Compression::fast());
-            encoder.write_all(&raw).unwrap();
-            encoder.finish().unwrap();
-        }
-        let mut idat = Vec::new();
-        idat.extend_from_slice(&(compressed.len() as u32).to_be_bytes());
-        idat.extend_from_slice(b"IDAT");
-        idat.extend_from_slice(&compressed);
-        let idat_crc = crc32(&idat[4..]);
-        idat.extend_from_slice(&idat_crc.to_be_bytes());
-        png.extend_from_slice(&idat);
-
-        // IEND chunk
-        let iend_crc = crc32(b"IEND");
-        png.extend_from_slice(&[0, 0, 0, 0, 73, 69, 78, 68]);
-        png.extend_from_slice(&iend_crc.to_be_bytes());
+        let pixels = [255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0];
+        let mut png = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut png)
+            .write_image(&pixels, 2, 2, image::ExtendedColorType::Rgb8)
+            .unwrap();
         png
-    }
-
-    fn crc32(data: &[u8]) -> u32 {
-        let mut crc: u32 = 0xFFFFFFFF;
-        for &b in data {
-            crc ^= b as u32;
-            for _ in 0..8 {
-                if crc & 1 != 0 { crc = (crc >> 1) ^ 0xEDB88320; }
-                else { crc >>= 1; }
-            }
-        }
-        crc ^ 0xFFFFFFFF
     }
 
     /// Build a temp directory with a test PNG and return the PptxWriter.
@@ -281,8 +341,15 @@ mod tests {
         let writer = PptxWriter::new(&output_path, "16:9", "fit");
         // Create slide record
         let record = SlideRecord::new(
-            1, "slide_0001.png".into(), "slides/slide_0001.png".into(),
-            1, 2, 2, "test_hash".into(), "Test".into(), "Monitor".into(),
+            1,
+            "slide_0001.png".into(),
+            "slides/slide_0001.png".into(),
+            1,
+            2,
+            2,
+            "test_hash".into(),
+            "Test".into(),
+            "Monitor".into(),
         );
         (dir, writer, record)
     }
@@ -294,7 +361,10 @@ mod tests {
         writer.add_slide(&record, &png_path).unwrap();
 
         let output_path = _dir.path().join("output.pptx");
-        assert!(output_path.exists(), "PPTX file should exist after adding a slide");
+        assert!(
+            output_path.exists(),
+            "PPTX file should exist after adding a slide"
+        );
 
         let file = std::fs::File::open(&output_path).unwrap();
         let mut archive = ZipArchive::new(file).unwrap();
@@ -317,7 +387,11 @@ mod tests {
             "docProps/core.xml",
         ];
         for name in &required {
-            assert!(archive.by_name(name).is_ok(), "Missing required part: {}", name);
+            assert!(
+                archive.by_name(name).is_ok(),
+                "Missing required part: {}",
+                name
+            );
         }
     }
 
@@ -343,8 +417,11 @@ mod tests {
             let mut content = String::new();
             entry.read_to_string(&mut content).unwrap();
             // Verify it starts with XML declaration or valid XML root
-            assert!(content.starts_with("<?xml") || content.starts_with("<"),
-                "{} should contain valid XML", name);
+            assert!(
+                content.starts_with("<?xml") || content.starts_with("<"),
+                "{} should contain valid XML",
+                name
+            );
             // Verify it has a closing root tag
             assert!(content.contains("</"), "{} should have closing tags", name);
         }
@@ -362,21 +439,105 @@ mod tests {
 
         // Read presentation.xml.rels
         let mut rels_content = String::new();
-        archive.by_name("ppt/_rels/presentation.xml.rels").unwrap()
-            .read_to_string(&mut rels_content).unwrap();
+        archive
+            .by_name("ppt/_rels/presentation.xml.rels")
+            .unwrap()
+            .read_to_string(&mut rels_content)
+            .unwrap();
 
         // Check that slide relationship exists
-        assert!(rels_content.contains("slide1.xml"), "Relationships should reference slide1.xml");
+        assert!(
+            rels_content.contains("slide1.xml"),
+            "Relationships should reference slide1.xml"
+        );
 
         // Read presentation.xml to check slide ID
         let mut pres_content = String::new();
-        archive.by_name("ppt/presentation.xml").unwrap()
-            .read_to_string(&mut pres_content).unwrap();
-        assert!(pres_content.contains("sldId"), "Presentation should contain slide ID entries");
+        archive
+            .by_name("ppt/presentation.xml")
+            .unwrap()
+            .read_to_string(&mut pres_content)
+            .unwrap();
+        assert!(
+            pres_content.contains("sldId"),
+            "Presentation should contain slide ID entries"
+        );
     }
 
     #[test]
-    fn test_pptx_media_image_integrity() {
+    fn pptx_slide_relationships_resolve_required_parts() {
+        let (dir, writer, record) = setup_pptx_test();
+        let png_path = dir.path().join("slides").join("slide_0001.png");
+        writer.add_slide(&record, &png_path).unwrap();
+
+        let file = std::fs::File::open(dir.path().join("output.pptx")).unwrap();
+        let mut archive = ZipArchive::new(file).unwrap();
+        let mut rels = String::new();
+        archive
+            .by_name("ppt/slides/_rels/slide1.xml.rels")
+            .unwrap()
+            .read_to_string(&mut rels)
+            .unwrap();
+
+        assert!(
+            rels.contains(
+                r#"Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image""#
+            ) && rels.contains(r#"Target="../media/image1.png""#),
+            "slide must relate to its embedded image"
+        );
+        assert!(
+            rels.contains(
+                r#"Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout""#
+            ) && rels.contains(r#"Target="../slideLayouts/slideLayout1.xml""#),
+            "slide must relate to the slide layout part"
+        );
+        assert!(
+            archive.by_name("ppt/slideLayouts/slideLayout1.xml").is_ok(),
+            "slide layout relationship target must exist"
+        );
+    }
+
+    #[test]
+    fn pptx_master_and_layout_have_required_structure() {
+        let (dir, writer, record) = setup_pptx_test();
+        let png_path = dir.path().join("slides").join("slide_0001.png");
+        writer.add_slide(&record, &png_path).unwrap();
+
+        let file = std::fs::File::open(dir.path().join("output.pptx")).unwrap();
+        let mut archive = ZipArchive::new(file).unwrap();
+        let mut master = String::new();
+        let mut layout = String::new();
+        archive
+            .by_name("ppt/slideMasters/slideMaster1.xml")
+            .unwrap()
+            .read_to_string(&mut master)
+            .unwrap();
+        archive
+            .by_name("ppt/slideLayouts/slideLayout1.xml")
+            .unwrap()
+            .read_to_string(&mut layout)
+            .unwrap();
+
+        assert!(
+            master.contains("<p:cSld") && master.contains("<p:spTree>"),
+            "slide master common slide data must contain a shape tree"
+        );
+        assert!(
+            master.contains("<p:clrMap "),
+            "slide master must define its color mapping"
+        );
+        assert!(
+            master.contains(r#"<p:sldLayoutId id="2147483649" r:id="rId1"/>"#),
+            "slide master must identify the layout exposed by rId1"
+        );
+        assert!(
+            layout.contains("<p:cSld") && layout.contains("<p:spTree>"),
+            "slide layout common slide data must contain a shape tree"
+        );
+    }
+
+    #[test]
+    fn pptx_media_image_is_decodable() {
         let (_dir, writer, record) = setup_pptx_test();
         let png_path = _dir.path().join("slides").join("slide_0001.png");
         writer.add_slide(&record, &png_path).unwrap();
@@ -387,17 +548,16 @@ mod tests {
 
         // Read the embedded image and verify it's a valid PNG
         let mut media_data = Vec::new();
-        archive.by_name("ppt/media/image1.png").unwrap()
-            .read_to_end(&mut media_data).unwrap();
-        // PNG signature should be present
-        assert_eq!(&media_data[..8], &[137, 80, 78, 71, 13, 10, 26, 10],
-            "Embedded image should have valid PNG signature");
-        // IHDR chunk should indicate 2x2 pixels
-        assert_eq!(&media_data[16..20], &[0, 0, 0, 2], "PNG width should be 2");
-        assert_eq!(&media_data[20..24], &[0, 0, 0, 2], "PNG height should be 2");
+        archive
+            .by_name("ppt/media/image1.png")
+            .unwrap()
+            .read_to_end(&mut media_data)
+            .unwrap();
+        let image = image::load_from_memory_with_format(&media_data, image::ImageFormat::Png)
+            .expect("embedded PNG must be fully decodable");
+        assert_eq!(image.width(), 2);
+        assert_eq!(image.height(), 2);
     }
-
-
 
     #[test]
     fn test_pptx_multiple_slides_preserved() {
@@ -413,41 +573,75 @@ mod tests {
         let output_path = dir.path().join("output.pptx");
         let writer = PptxWriter::new(&output_path, "16:9", "fit");
         let record1 = SlideRecord::new(
-            1, "slide_0001.png".into(), "slides/slide_0001.png".into(),
-            1, 2, 2, "hash1".into(), "Test".into(), "Monitor".into(),
+            1,
+            "slide_0001.png".into(),
+            "slides/slide_0001.png".into(),
+            1,
+            2,
+            2,
+            "hash1".into(),
+            "Test".into(),
+            "Monitor".into(),
         );
-        writer.add_slide(&record1, &slides_dir.join("slide_0001.png")).unwrap();
+        writer
+            .add_slide(&record1, &slides_dir.join("slide_0001.png"))
+            .unwrap();
         drop(writer);
 
         // Slide 2 (uses read_existing_slides to re-add slide 1)
         std::fs::write(slides_dir.join("slide_0002.png"), &png_data).unwrap();
         let writer2 = PptxWriter::new(&output_path, "16:9", "fit");
         let record2 = SlideRecord::new(
-            2, "slide_0002.png".into(), "slides/slide_0002.png".into(),
-            2, 2, 2, "hash2".into(), "Test".into(), "Monitor".into(),
+            2,
+            "slide_0002.png".into(),
+            "slides/slide_0002.png".into(),
+            2,
+            2,
+            2,
+            "hash2".into(),
+            "Test".into(),
+            "Monitor".into(),
         );
-        writer2.add_slide(&record2, &slides_dir.join("slide_0002.png")).unwrap();
+        writer2
+            .add_slide(&record2, &slides_dir.join("slide_0002.png"))
+            .unwrap();
         drop(writer2);
 
         // Verify both slides in final PPTX
         let file = std::fs::File::open(&output_path).unwrap();
         let mut archive = ZipArchive::new(file).unwrap();
-        assert!(archive.by_name("ppt/slides/slide1.xml").is_ok(), "Slide 1 should exist");
-        assert!(archive.by_name("ppt/slides/slide2.xml").is_ok(), "Slide 2 should exist");
+        assert!(
+            archive.by_name("ppt/slides/slide1.xml").is_ok(),
+            "Slide 1 should exist"
+        );
+        assert!(
+            archive.by_name("ppt/slides/slide2.xml").is_ok(),
+            "Slide 2 should exist"
+        );
 
         // Verify presentation.xml has both sldId entries
         let mut pres = String::new();
-        archive.by_name("ppt/presentation.xml").unwrap().read_to_string(&mut pres).unwrap();
-        assert!(pres.contains(r#"sldId id="256"#), "Presentation should contain sldId for slide 1");
-        assert!(pres.contains(r#"sldId id="257"#), "Presentation should contain sldId for slide 2");
+        archive
+            .by_name("ppt/presentation.xml")
+            .unwrap()
+            .read_to_string(&mut pres)
+            .unwrap();
+        assert!(
+            pres.contains(r#"sldId id="256"#),
+            "Presentation should contain sldId for slide 1"
+        );
+        assert!(
+            pres.contains(r#"sldId id="257"#),
+            "Presentation should contain sldId for slide 2"
+        );
     }
 
-/// Generates PPTX files to /tmp/pptx_test/ for manual inspection.
+    /// Generates PPTX files to /tmp/pptx_test/ for manual inspection.
     /// Run: cargo test test_pptx_generate_to_tmp -- --nocapture
     #[test]
     fn test_pptx_generate_to_tmp() {
-        use std::io::Read;
         use crate::model::SlideRecord;
+        use std::io::Read;
         let base = std::path::Path::new("/tmp/pptx_test");
         let slides_dir = base.join("slides");
         let _ = std::fs::remove_dir_all(base);
@@ -465,20 +659,35 @@ mod tests {
                     i,
                     format!("slide_{:04}.png", i),
                     format!("slides/slide_{:04}.png", i),
-                    i as u64, 2, 2, format!("hash{}", i),
-                    "Test".into(), "Monitor".into(),
+                    i as u64,
+                    2,
+                    2,
+                    format!("hash{}", i),
+                    "Test".into(),
+                    "Monitor".into(),
                 );
-                writer.add_slide(&record, &slides_dir.join(format!("slide_{:04}.png", i))).unwrap();
+                writer
+                    .add_slide(&record, &slides_dir.join(format!("slide_{:04}.png", i)))
+                    .unwrap();
             }
             drop(writer);
             // Verify ZIP + slide count
             let file = std::fs::File::open(&output).unwrap();
             let mut archive = zip::ZipArchive::new(file).unwrap();
-            let slide_count = (1..=n).filter(|i| {
-                archive.by_name(&format!("ppt/slides/slide{}.xml", i)).is_ok()
-            }).count();
+            let slide_count = (1..=n)
+                .filter(|i| {
+                    archive
+                        .by_name(&format!("ppt/slides/slide{}.xml", i))
+                        .is_ok()
+                })
+                .count();
             assert_eq!(slide_count, n as usize);
-            println!("  OK  {}  ({} slides, {} bytes)", name, n, std::fs::metadata(&output).map(|m| m.len()).unwrap_or(0));
+            println!(
+                "  OK  {}  ({} slides, {} bytes)",
+                name,
+                n,
+                std::fs::metadata(&output).map(|m| m.len()).unwrap_or(0)
+            );
         };
 
         println!("\nPPTX test files generated at: {}/", base.display());
