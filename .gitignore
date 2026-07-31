@@ -7,3 +7,4 @@ ppt-auto-capture-config.json
 *.swp
 *.swo
 *~
+.worktrees/
