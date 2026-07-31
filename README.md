@@ -1,11 +1,11 @@
 # PPT Auto Capture GUI
 
-A desktop tool that captures PowerPoint slide show screenshots and produces a real-time `output.pptx`. Windows is the primary capture platform. The macOS build currently provides Apple Silicon application packaging; native macOS capture support is still limited.
+A desktop tool that captures PowerPoint slide show screenshots and produces a real-time `output.pptx`. Capture is supported on Windows and Apple Silicon macOS.
 
 ## Features
 
 - **Auto-capture**: Detects slide changes on a selected display, waits for animations to settle, then captures
-- **Dual capture engine**: DXGI Desktop Duplication (primary) with GDI fallback
+- **Native capture engines**: DXGI/GDI on Windows and xcap/CoreGraphics on macOS
 - **GUI-driven**: No command-line interaction — launch the `.exe` and configure visually
 - **Window management**: Select a window, move it to the capture display, maximize it — all from the UI
 - **Real-time PPTX**: Each screenshot is immediately appended to `output.pptx`
@@ -33,7 +33,9 @@ The macOS release supports Apple Silicon Macs only.
 4. If macOS requests Screen Recording permission, enable it in **System Settings → Privacy & Security → Screen Recording**.
 5. Restart `PPT Auto Capture.app` after changing Screen Recording permission.
 
-The DMG makes the program installable and launchable through Finder. Native macOS screen capture is currently limited; Windows remains the fully supported capture platform.
+On macOS, refresh and select either a display for full-screen capture or a specific presentation window. **Test Screenshot**, continuous capture, pause, resume, stop, PNG output, recovery, and PPTX generation use the same pipeline as Windows.
+
+Moving or maximizing another application's window is disabled on macOS because it requires Accessibility permission; arrange the presentation window manually before capture. If a selected display is disconnected or a selected window closes, capture stops with an error instead of switching to another source.
 
 ## Building from Source
 
@@ -50,6 +52,18 @@ git clone https://github.com/gaowanlong/ppt-auto-capture-gui.git
 cd ppt-auto-capture-gui
 cargo build --release
 ```
+
+### Build the Apple Silicon DMG
+
+```bash
+cargo build --release --target aarch64-apple-darwin
+bash scripts/package-macos-dmg.sh \
+  target/aarch64-apple-darwin/release/ppt-auto-capture-gui \
+  1.1.0 \
+  dist/ppt-auto-capture-gui-macos-apple-silicon.dmg
+```
+
+The app is ad-hoc signed, not Developer ID signed or notarized.
 
 ### Cross-compile for Windows (from macOS/Linux)
 
