@@ -91,6 +91,23 @@ pub(crate) fn capture_error_message(kind: CaptureErrorKind, detail: &str) -> Str
     }
 }
 
+pub(crate) fn classify_capture_error(detail: &str) -> CaptureErrorKind {
+    let detail = detail.to_ascii_lowercase();
+    if detail.contains("screen recording")
+        || detail.contains("permission")
+        || detail.contains("not authorized")
+        || detail.contains("denied")
+    {
+        CaptureErrorKind::PermissionDenied
+    } else if detail.contains("window") && detail.contains("not found") {
+        CaptureErrorKind::WindowLost
+    } else if detail.contains("display") && detail.contains("not found") {
+        CaptureErrorKind::DisplayLost
+    } else {
+        CaptureErrorKind::Other
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,5 +176,17 @@ mod tests {
         assert!(display.contains("显示器"));
         assert!(window.contains("window"));
         assert!(window.contains("窗口"));
+    }
+
+    #[test]
+    fn classifies_permission_and_missing_source_errors() {
+        assert_eq!(
+            classify_capture_error("Screen Recording permission not granted"),
+            CaptureErrorKind::PermissionDenied
+        );
+        assert_eq!(
+            classify_capture_error("Window not found"),
+            CaptureErrorKind::WindowLost
+        );
     }
 }
