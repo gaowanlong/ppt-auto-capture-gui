@@ -173,11 +173,11 @@ impl WorkerLoop {
                             warn!("DXGI lost, pausing capture");
                             self.state = CaptureState::Paused;
                             let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
-                        } else if msg.contains("No capturer initialized") && cfg!(not(target_os = "windows")) {
-                            warn!("Capture not available on this platform (non-Windows). PPTX test mode.");
+                        } else if msg.contains("No capturer initialized") && capture_backend_unavailable_message().is_some() {
+                            warn!("Capture not available on this platform. PPTX test mode.");
                             self.state = CaptureState::Idle;
                             let _ = self.event_tx.send(WorkerEvent::Error(
-                                "Capture only works on Windows. This build is for PPTX testing only.".into()));
+                                capture_backend_unavailable_message().unwrap().into()));
                         } else {
                             self.state = CaptureState::Error;
                             let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
@@ -253,7 +253,7 @@ impl WorkerLoop {
                                     }
                                 }
                             }
-                            if source.use_dxgi {
+                            if should_use_display_capturer(&source) {
                                 match self.dxgi_capturer.initialize(&mon) {
                                     Ok(()) => info!("DXGI capturer initialized"),
                                     Err(e) => {
@@ -316,10 +316,12 @@ impl WorkerLoop {
                     if let Some(ref src) = self.source.clone() {
                         let monitor = self.create_monitor_info_for_source(src);
                         if let Ok(mon) = monitor {
-                            if src.use_dxgi {
+                            if should_use_display_capturer(src) {
                                 let _ = self.dxgi_capturer.initialize(&mon);
                             } else {
-                                let _ = self.gdi_capturer.initialize(&mon);
+                                if self.gdi_capturer.initialize(&mon).is_ok() {
+                                    self.gdi_capturer.set_window_hwnd(src.window_hwnd, 0, 0);
+                                }
                             }
                             self.state = CaptureState::Running;
                         } else {
@@ -368,6 +370,30 @@ impl WorkerLoop {
                     }
                     match monitor {
                         Ok(mon) => {
+                            if !should_use_display_capturer(&source) {
+                                let mut test_gdi = GdiCapturer::new();
+                                match test_gdi.initialize(&mon) {
+                                    Ok(()) => {
+                                        test_gdi.set_window_hwnd(source.window_hwnd, 0, 0);
+                                        match test_gdi.capture_frame() {
+                                            Ok(frame) => {
+                                                let thumb = frame.thumbnail(320, 240);
+                                                let _ = self.event_tx.send(WorkerEvent::TestFrame(thumb, 320, 240));
+                                            }
+                                            Err(e) => {
+                                                let _ = self.event_tx.send(WorkerEvent::Error(
+                                                    format!("Test window capture failed: {}", e)));
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        let _ = self.event_tx.send(WorkerEvent::Error(
+                                            format!("Test window capture init failed: {}", e)));
+                                    }
+                                }
+                                continue;
+                            }
+
                             let mut test_dxgi = DxgiCapturer::new();
                             match test_dxgi.initialize(&mon) {
                                 Ok(()) => {
@@ -597,5 +623,47 @@ self.gdi_capturer.capture_frame()?
             .find(|m| m.hmonitor == source.monitor_hmonitor)
             .ok_or_else(|| anyhow::anyhow!("Monitor {} not found", source.monitor_hmonitor))?;
         Ok(mon)
+    }
+}
+
+fn should_use_display_capturer(source: &CaptureSource) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        source.use_dxgi && !source.is_window_selected()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        source.use_dxgi
+    }
+}
+
+fn capture_backend_unavailable_message() -> Option<&'static str> {
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    {
+        None
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        Some("Capture only works on Windows and Apple Silicon macOS. This build is for PPTX testing only.")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn macos_is_not_reported_as_an_unsupported_capture_backend() {
+        #[cfg(target_os = "macos")]
+        assert!(capture_backend_unavailable_message().is_none());
+    }
+
+    #[test]
+    fn macos_window_sources_use_the_window_capturer() {
+        #[cfg(target_os = "macos")]
+        {
+            let source = CaptureSource::new(7, "Slides".into(), 42, "Display".into());
+            assert!(!should_use_display_capturer(&source));
+        }
     }
 }
