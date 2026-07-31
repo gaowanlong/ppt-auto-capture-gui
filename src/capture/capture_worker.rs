@@ -284,8 +284,17 @@ impl WorkerLoop {
                             }
 
                             let out_dir = std::path::PathBuf::from(&source.output_dir);
-                            let _ = std::fs::create_dir_all(&out_dir);
-                            self.image_store = Some(ImageStore::new(out_dir.clone()));
+                            let image_store = match ImageStore::new(out_dir.clone()) {
+                                Ok(store) => store,
+                                Err(e) => {
+                                    let msg = format!("Failed to initialize output directory: {}", e);
+                                    error!("{}", msg);
+                                    self.state = CaptureState::Error;
+                                    let _ = self.event_tx.send(WorkerEvent::Error(msg));
+                                    continue;
+                                }
+                            };
+                            self.image_store = Some(image_store);
                             self.manifest_store = Some(ManifestStore::new(out_dir.join("manifest.jsonl")));
                             self.pptx_writer = Some(PptxWriter::new(&out_dir.join(&source.output_filename), &source.page_ratio, &source.image_fit));
 

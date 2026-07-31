@@ -85,6 +85,13 @@ impl PptAutoCaptureApp {
         if config.last_full_screen {
             app.source_panel.full_screen_selected = true;
         }
+        #[cfg(target_os = "macos")]
+        apply_macos_source_default(&mut app.source_panel);
+        app.output_panel.output_dir = config.output_dir.clone();
+        app.output_panel.page_ratio = config.page_ratio.clone();
+        app.output_panel.image_fit = config.image_fit.clone();
+        app.output_panel.keep_previous = config.keep_previous;
+        app.refresh_displays();
         app.check_recovery();
         app
     }
@@ -211,8 +218,34 @@ impl PptAutoCaptureApp {
 
     fn refresh_displays(&mut self) {
         self.display_panel.refresh_requested = false;
-        if let Ok(m) = enumerate_monitors() { self.monitors = m.clone(); self.display_panel.monitors = m; }
+        if let Ok(m) = enumerate_monitors() {
+            #[cfg(target_os = "macos")]
+            if !m.iter().any(|monitor| monitor.hmonitor == self.display_panel.selected_hmonitor) {
+                if let Some(monitor) = default_monitor(&m) {
+                    self.display_panel.selected_hmonitor = monitor.hmonitor;
+                    self.display_panel.selected_description = format!(
+                        "{} ({}x{})",
+                        monitor.output_name.trim(),
+                        monitor.region.width,
+                        monitor.region.height);
+                    self.display_panel.status_text =
+                        format!("Selected: {}", monitor.output_name.trim());
+                }
+            }
+            self.monitors = m.clone();
+            self.display_panel.monitors = m;
+        }
     }
+}
+
+fn default_monitor(monitors: &[MonitorInfo]) -> Option<&MonitorInfo> {
+    monitors.iter().find(|monitor| monitor.is_primary).or_else(|| monitors.first())
+}
+
+fn apply_macos_source_default(panel: &mut SourcePanel) {
+    panel.selected_hwnd = 0;
+    panel.selected_title.clear();
+    panel.full_screen_selected = true;
 }
 
 impl eframe::App for PptAutoCaptureApp {
@@ -358,5 +391,41 @@ impl Drop for PptAutoCaptureApp {
         self.config.language = self.language;
         let _ = self.config.save();
         if let Some(mut worker) = self.worker.take() { worker.stop(); }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Region;
+
+    fn monitor(id: u64, primary: bool) -> MonitorInfo {
+        MonitorInfo {
+            hmonitor: id,
+            adapter_name: "macOS".into(),
+            output_name: format!("Display {id}"),
+            description: format!("Display {id}"),
+            region: Region::new(0, 0, 1920, 1080),
+            is_primary: primary,
+            is_virtual_suspect: false,
+            output_index: 0,
+            adapter_index: 0,
+        }
+    }
+
+    #[test]
+    fn default_monitor_prefers_the_primary_display() {
+        let monitors = vec![monitor(1, false), monitor(2, true)];
+        assert_eq!(default_monitor(&monitors).unwrap().hmonitor, 2);
+    }
+
+    #[test]
+    fn macos_source_defaults_to_full_screen() {
+        let mut panel = SourcePanel::new();
+        panel.selected_hwnd = 99;
+        panel.selected_title = "Old Window".into();
+        apply_macos_source_default(&mut panel);
+        assert_eq!(panel.selected_hwnd, 0);
+        assert!(panel.full_screen_selected);
     }
 }

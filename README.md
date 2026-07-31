@@ -37,6 +37,8 @@ On macOS, refresh and select either a display for full-screen capture or a speci
 
 Moving or maximizing another application's window is disabled on macOS because it requires Accessibility permission; arrange the presentation window manually before capture. If a selected display is disconnected or a selected window closes, capture stops with an error instead of switching to another source.
 
+The macOS app starts with the primary display and full-screen capture selected. Its default writable output directory is `~/Documents/PPT Auto Capture`; it can be changed in the Output tab.
+
 ## Building from Source
 
 ### Prerequisites

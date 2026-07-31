@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 use crate::i18n::Language;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -76,8 +76,11 @@ impl AppConfig {
         if path.exists() {
             match std::fs::read_to_string(path) {
                 Ok(content) => {
-                    match serde_json::from_str(&content) {
-                        Ok(config) => return config,
+                    match serde_json::from_str::<Self>(&content) {
+                        Ok(mut config) => {
+                            config.output_dir = platform_output_dir(&config.output_dir);
+                            return config;
+                        }
                         Err(e) => log::warn!("Failed to parse config file: {}", e),
                     }
                 }
@@ -88,6 +91,7 @@ impl AppConfig {
         // Generate a fresh timestamp-based filename on first run
         cfg.output_filename = format!("ppt-capture-{}.pptx",
             chrono::Local::now().format("%Y%m%d-%H%M%S"));
+        cfg.output_dir = platform_output_dir(&cfg.output_dir);
         cfg
     }
 
@@ -99,6 +103,35 @@ impl AppConfig {
         std::fs::write(path, content)
             .context("Failed to write config file")?;
         Ok(())
+    }
+}
+
+fn platform_output_dir(configured: &str) -> String {
+    #[cfg(target_os = "macos")]
+    {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        return resolve_output_dir(Path::new(configured), home.as_deref(), true)
+            .to_string_lossy()
+            .into_owned();
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        configured.to_string()
+    }
+}
+
+fn resolve_output_dir(path: &Path, home: Option<&Path>, is_macos: bool) -> PathBuf {
+    if path.is_absolute() || !is_macos {
+        return path.to_path_buf();
+    }
+    let Some(home) = home else {
+        return path.to_path_buf();
+    };
+    let base = home.join("Documents").join("PPT Auto Capture");
+    if path == Path::new("output") || path.as_os_str().is_empty() {
+        base
+    } else {
+        base.join(path)
     }
 }
 
@@ -128,5 +161,28 @@ mod tests {
         let deserialized: AppConfig = serde_json::from_str(&json).expect("Deserialization failed");
         assert_eq!(deserialized.sample_interval_ms, cfg.sample_interval_ms);
         assert_eq!(deserialized.change_threshold, cfg.change_threshold);
+    }
+
+    #[test]
+    fn macos_default_output_is_in_the_users_documents_directory() {
+        let resolved = resolve_output_dir(
+            Path::new("output"),
+            Some(Path::new("/Users/tester")),
+            true,
+        );
+        assert_eq!(
+            resolved,
+            Path::new("/Users/tester/Documents/PPT Auto Capture")
+        );
+    }
+
+    #[test]
+    fn absolute_output_directory_is_preserved() {
+        let resolved = resolve_output_dir(
+            Path::new("/Volumes/Captures"),
+            Some(Path::new("/Users/tester")),
+            true,
+        );
+        assert_eq!(resolved, Path::new("/Volumes/Captures"));
     }
 }
