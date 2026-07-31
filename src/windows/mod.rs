@@ -22,8 +22,14 @@ pub use dxgi_capture::*;
 #[cfg(target_os = "windows")]
 pub use gdi_capture::*;
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+#[path = "../macos/mod.rs"]
+mod macos;
+#[cfg(target_os = "macos")]
+pub use macos::*;
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 #[path = "stub.rs"]
 mod stub;
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub use stub::*;
