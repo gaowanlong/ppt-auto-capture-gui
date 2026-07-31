@@ -2,6 +2,8 @@ use anyhow::Result;
 
 use crate::model::{Frame, MonitorInfo, Region, WindowInfo};
 
+mod adapter;
+
 pub const fn backend_name() -> &'static str {
     "macos-xcap"
 }
