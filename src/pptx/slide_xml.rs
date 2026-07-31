@@ -149,6 +149,11 @@ impl PresentationXml {
         }
 
         let (sld_w, sld_h) = slide_dimensions(page_ratio);
+        let slide_type = if page_ratio == "16:9" {
+            r#" type="screen16x9""#
+        } else {
+            ""
+        };
         format!(
             r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
@@ -160,10 +165,15 @@ impl PresentationXml {
   <p:sldIdLst>
 {}
   </p:sldIdLst>
-  <p:sldSz cx="{}" cy="{}"/>
+  <p:sldSz cx="{}" cy="{}"{}/>
   <p:notesSz cx="6858000" cy="9144000"/>
+  <p:defaultTextStyle>
+    <a:defPPr>
+      <a:defRPr lang="zh-CN"/>
+    </a:defPPr>
+  </p:defaultTextStyle>
 </p:presentation>"#,
-            sld_ids, sld_w, sld_h
+            sld_ids, sld_w, sld_h, slide_type
         )
     }
 }
@@ -182,13 +192,46 @@ impl PresentationRelsXml {
             slide_rels.push('\n');
         }
 
+        let next_id = slides.iter().map(|(num, _)| num + 1).max().unwrap_or(1) + 1;
+        let support_rels = [
+            (
+                "presProps",
+                "presProps.xml",
+            ),
+            (
+                "viewProps",
+                "viewProps.xml",
+            ),
+            (
+                "theme",
+                "theme/theme1.xml",
+            ),
+            (
+                "tableStyles",
+                "tableStyles.xml",
+            ),
+        ]
+        .iter()
+        .enumerate()
+        .map(|(offset, (relationship_type, target))| {
+            format!(
+                r#"  <Relationship Id="rId{}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/{}" Target="{}"/>"#,
+                next_id + offset as u32,
+                relationship_type,
+                target
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
         format!(
             r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="slideMasters/slideMaster1.xml"/>
 {}
+{}
 </Relationships>"#,
-            slide_rels
+            slide_rels, support_rels
         )
     }
 }
@@ -207,6 +250,12 @@ pub const SLIDE_MASTER_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" stand
              xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
              xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
   <p:cSld name="Slide Master">
+    <p:bg>
+      <p:bgPr>
+        <a:solidFill><a:schemeClr val="bg1"/></a:solidFill>
+        <a:effectLst/>
+      </p:bgPr>
+    </p:bg>
     <p:spTree>
       <p:nvGrpSpPr>
         <p:cNvPr id="1" name=""/>
@@ -230,6 +279,17 @@ pub const SLIDE_MASTER_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" stand
   <p:sldLayoutIdLst>
     <p:sldLayoutId id="2147483649" r:id="rId1"/>
   </p:sldLayoutIdLst>
+  <p:txStyles>
+    <p:titleStyle>
+      <a:defPPr><a:defRPr lang="zh-CN"/></a:defPPr>
+    </p:titleStyle>
+    <p:bodyStyle>
+      <a:defPPr><a:defRPr lang="zh-CN"/></a:defPPr>
+    </p:bodyStyle>
+    <p:otherStyle>
+      <a:defPPr><a:defRPr lang="zh-CN"/></a:defPPr>
+    </p:otherStyle>
+  </p:txStyles>
 </p:sldMaster>"#;
 
 pub const SLIDE_MASTER_RELS_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -288,14 +348,38 @@ pub const THEME_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="
       <a:folHlink><a:srgbClr val="954F72"/></a:folHlink>
     </a:clrScheme>
     <a:fontScheme name="Default">
-      <a:majorFont><a:latin typeface="Calibri Light"/></a:majorFont>
-      <a:minorFont><a:latin typeface="Calibri"/></a:minorFont>
+      <a:majorFont>
+        <a:latin typeface="Calibri Light"/>
+        <a:ea typeface=""/>
+        <a:cs typeface=""/>
+      </a:majorFont>
+      <a:minorFont>
+        <a:latin typeface="Calibri"/>
+        <a:ea typeface=""/>
+        <a:cs typeface=""/>
+      </a:minorFont>
     </a:fontScheme>
     <a:fmtScheme name="Default">
-      <a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:fillStyleLst>
-      <a:lnStyleLst><a:ln w="6350"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln></a:lnStyleLst>
-      <a:effectStyleLst><a:effectStyle><a:effectLst/></a:effectStyle></a:effectStyleLst>
-      <a:bgFillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:bgFillStyleLst>
+      <a:fillStyleLst>
+        <a:solidFill><a:schemeClr val="phClr"/></a:solidFill>
+        <a:solidFill><a:schemeClr val="phClr"><a:tint val="50000"/></a:schemeClr></a:solidFill>
+        <a:solidFill><a:schemeClr val="phClr"><a:shade val="50000"/></a:schemeClr></a:solidFill>
+      </a:fillStyleLst>
+      <a:lnStyleLst>
+        <a:ln w="6350"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:prstDash val="solid"/></a:ln>
+        <a:ln w="12700"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:prstDash val="solid"/></a:ln>
+        <a:ln w="19050"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:prstDash val="solid"/></a:ln>
+      </a:lnStyleLst>
+      <a:effectStyleLst>
+        <a:effectStyle><a:effectLst/></a:effectStyle>
+        <a:effectStyle><a:effectLst/></a:effectStyle>
+        <a:effectStyle><a:effectLst/></a:effectStyle>
+      </a:effectStyleLst>
+      <a:bgFillStyleLst>
+        <a:solidFill><a:schemeClr val="phClr"/></a:solidFill>
+        <a:solidFill><a:schemeClr val="phClr"><a:tint val="95000"/></a:schemeClr></a:solidFill>
+        <a:solidFill><a:schemeClr val="phClr"><a:shade val="90000"/></a:schemeClr></a:solidFill>
+      </a:bgFillStyleLst>
     </a:fmtScheme>
   </a:themeElements>
 </a:theme>"#;
@@ -309,7 +393,7 @@ pub const TABLE_STYLES_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" stand
 
 pub const VIEW_PROPS_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:viewPr xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
-  <p:normalViewPr><p:restoredLeft cx="0"/><p:restoredTop cy="0"/></p:normalViewPr>
+  <p:normalViewPr><p:restoredLeft sz="15611"/><p:restoredTop sz="94660"/></p:normalViewPr>
 </p:viewPr>"#;
 
 // Dynamic — slide count is filled in add_slide()
@@ -357,7 +441,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn test_compute_image_fit_fits_width() {
         // 1x1 pixel in a 12700x25400 EMU slide → image exactly fits width, centered vertically
         let (ox, oy, dw, dh) = compute_image_fit(1, 2, 12700, 25400);
@@ -396,6 +479,116 @@ mod tests {
         assert!(rels.contains("rId1")); // master
         assert!(rels.contains("rId2")); // slide 1 (offset)
         assert!(rels.contains("slides/slide1.xml"));
+    }
+
+    #[test]
+    fn presentation_relationships_include_support_parts() {
+        let rels = PresentationRelsXml::new(&[(1, "image1.png".into())]);
+        for (relationship_type, target) in [
+            ("presProps", "presProps.xml"),
+            ("viewProps", "viewProps.xml"),
+            ("theme", "theme/theme1.xml"),
+            ("tableStyles", "tableStyles.xml"),
+        ] {
+            assert!(
+                rels.contains(&format!(
+                    "/relationships/{relationship_type}\" Target=\"{target}\""
+                )),
+                "missing {relationship_type} relationship to {target}"
+            );
+        }
+    }
+
+    #[test]
+    fn presentation_relationship_ids_are_unique_for_supported_slide_counts() {
+        for slide_count in [0, 1, 3, 100] {
+            let slides = (1..=slide_count)
+                .map(|number| (number, format!("image{number}.png")))
+                .collect::<Vec<_>>();
+            let rels = PresentationRelsXml::new(&slides);
+            let ids = rels
+                .split(" Id=\"")
+                .skip(1)
+                .map(|tail| tail.split('"').next().unwrap())
+                .collect::<Vec<_>>();
+            let unique = ids
+                .iter()
+                .copied()
+                .collect::<std::collections::HashSet<_>>();
+
+            assert_eq!(
+                ids.len(),
+                slide_count as usize + 5,
+                "{slide_count} slides require a master, every slide, and four support relationships"
+            );
+            assert_eq!(
+                unique.len(),
+                ids.len(),
+                "relationship IDs must be unique for {slide_count} slides"
+            );
+        }
+    }
+
+    #[test]
+    fn view_properties_use_size_attributes() {
+        assert!(VIEW_PROPS_XML.contains("<p:restoredLeft sz=\"15611\"/>"));
+        assert!(VIEW_PROPS_XML.contains("<p:restoredTop sz=\"94660\"/>"));
+        assert!(!VIEW_PROPS_XML.contains("<p:restoredLeft cx="));
+        assert!(!VIEW_PROPS_XML.contains("<p:restoredTop cy="));
+    }
+
+    #[test]
+    fn theme_has_complete_font_collections_and_style_matrix() {
+        for font_name in ["majorFont", "minorFont"] {
+            let start = THEME_XML
+                .find(&format!("<a:{font_name}>"))
+                .expect("font collection must exist");
+            let end = THEME_XML[start..]
+                .find(&format!("</a:{font_name}>"))
+                .expect("font collection must close")
+                + start;
+            let font = &THEME_XML[start..end];
+            for required in ["<a:latin", "<a:ea", "<a:cs"] {
+                assert!(
+                    font.contains(required),
+                    "{font_name} must contain {required}"
+                );
+            }
+        }
+
+        for (list_name, child_name) in [
+            ("fillStyleLst", "solidFill"),
+            ("lnStyleLst", "ln"),
+            ("effectStyleLst", "effectStyle"),
+            ("bgFillStyleLst", "solidFill"),
+        ] {
+            let start = THEME_XML
+                .find(&format!("<a:{list_name}>"))
+                .expect("style list must exist");
+            let end = THEME_XML[start..]
+                .find(&format!("</a:{list_name}>"))
+                .expect("style list must close")
+                + start;
+            let list = &THEME_XML[start..end];
+            assert!(
+                list.matches(&format!("<a:{child_name}")).count() >= 3,
+                "{list_name} must contain at least three {child_name} entries"
+            );
+        }
+    }
+
+    #[test]
+    fn presentation_and_master_have_powerpoint_compatible_defaults() {
+        let presentation = PresentationXml::new(&[(1, "image1.png".into())], "16:9");
+        assert!(presentation.contains(r#"<p:sldSz cx="9144000" cy="5143500" type="screen16x9"/>"#));
+        assert!(presentation.contains("<p:defaultTextStyle>"));
+        assert!(SLIDE_MASTER_XML.contains("<p:bg>"));
+        for style in ["titleStyle", "bodyStyle", "otherStyle"] {
+            assert!(
+                SLIDE_MASTER_XML.contains(&format!("<p:{style}>")),
+                "slide master must contain {style}"
+            );
+        }
     }
 
     #[test]

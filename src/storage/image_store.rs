@@ -13,13 +13,14 @@ pub struct ImageStore {
 }
 
 impl ImageStore {
-    pub fn new(output_dir: PathBuf) -> Self {
+    pub fn new(output_dir: PathBuf) -> Result<Self> {
         let slides_dir = output_dir.join("slides");
-        std::fs::create_dir_all(&slides_dir).unwrap_or_default();
-        Self {
+        std::fs::create_dir_all(&slides_dir)
+            .with_context(|| format!("Failed to create slides directory {:?}", slides_dir))?;
+        Ok(Self {
             output_dir,
             slides_dir,
-        }
+        })
     }
 
     /// Save a frame as a PNG file. Returns the path to the saved file.
@@ -59,5 +60,23 @@ impl ImageStore {
         info!("Saved PNG: {}", filepath.display());
 
         Ok(filepath)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn constructor_reports_when_slides_directory_cannot_be_created() {
+        let temp = tempfile::tempdir().unwrap();
+        let blocking_file = temp.path().join("not-a-directory");
+        std::fs::write(&blocking_file, b"file").unwrap();
+
+        let error = match ImageStore::new(blocking_file) {
+            Ok(_) => panic!("constructor unexpectedly succeeded"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("slides"));
     }
 }

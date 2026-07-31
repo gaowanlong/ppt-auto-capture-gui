@@ -20,11 +20,6 @@ mod model;
 mod pptx;
 mod storage;
 
-#[cfg(target_os = "windows")]
-mod windows;
-
-#[cfg(not(target_os = "windows"))]
-#[path = "windows/stub.rs"]
 mod windows;
 
 fn main() -> Result<(), eframe::Error> {
@@ -69,6 +64,15 @@ fn main() -> Result<(), eframe::Error> {
             Ok(Box::new(app::PptAutoCaptureApp::new()))
         }),
     )
+}
+
+#[cfg(test)]
+mod platform_tests {
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_uses_xcap_backend() {
+        assert_eq!(crate::windows::backend_name(), "macos-xcap");
+    }
 }
 
 /// Add CJK font support by loading system fonts on Windows.

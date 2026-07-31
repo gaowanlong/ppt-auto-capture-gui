@@ -312,7 +312,9 @@ fn extract_attr_value(s: &str, after: &str, until: &str) -> Option<String> {
 mod tests {
     use super::*;
     use crate::model::SlideRecord;
+    use std::collections::HashSet;
     use std::io::Read;
+    use std::path::{Component, Path, PathBuf};
 
     /// Create a standards-compliant 2x2 RGB PNG in memory.
     fn make_test_png() -> Vec<u8> {
@@ -352,6 +354,95 @@ mod tests {
             "Monitor".into(),
         );
         (dir, writer, record)
+    }
+
+    fn read_zip_text(archive: &mut ZipArchive<std::fs::File>, name: &str) -> String {
+        let mut content = String::new();
+        archive
+            .by_name(name)
+            .unwrap_or_else(|_| panic!("missing ZIP part {name}"))
+            .read_to_string(&mut content)
+            .unwrap_or_else(|_| panic!("failed to read ZIP part {name}"));
+        content
+    }
+
+    fn relationship_owner_directory(relationship_part: &str) -> PathBuf {
+        if relationship_part == "_rels/.rels" {
+            return PathBuf::new();
+        }
+
+        let (prefix, relationship_name) = relationship_part
+            .rsplit_once("/_rels/")
+            .unwrap_or_else(|| panic!("invalid relationship part path: {relationship_part}"));
+        let owner_name = relationship_name
+            .strip_suffix(".rels")
+            .unwrap_or_else(|| panic!("invalid relationship part suffix: {relationship_part}"));
+        Path::new(prefix)
+            .join(owner_name)
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .to_path_buf()
+    }
+
+    fn normalize_package_target(base: &Path, target: &str) -> String {
+        let mut normalized = Vec::new();
+        for component in base.join(target).components() {
+            match component {
+                Component::Normal(part) => normalized.push(part.to_string_lossy().into_owned()),
+                Component::ParentDir => {
+                    assert!(
+                        normalized.pop().is_some(),
+                        "relationship target escapes package root: {target}"
+                    );
+                }
+                Component::CurDir => {}
+                Component::RootDir | Component::Prefix(_) => {
+                    panic!("relationship target must be package-relative: {target}")
+                }
+            }
+        }
+        normalized.join("/")
+    }
+
+    fn assert_internal_relationship_graph_is_closed(output_path: &Path) {
+        let file = std::fs::File::open(output_path).unwrap();
+        let mut archive = ZipArchive::new(file).unwrap();
+        let names = (0..archive.len())
+            .map(|index| archive.by_index(index).unwrap().name().to_string())
+            .collect::<HashSet<_>>();
+        let relationship_parts = names
+            .iter()
+            .filter(|name| name.ends_with(".rels"))
+            .cloned()
+            .collect::<Vec<_>>();
+
+        for relationship_part in relationship_parts {
+            let content = read_zip_text(&mut archive, &relationship_part);
+            let base = relationship_owner_directory(&relationship_part);
+            let mut ids = HashSet::new();
+            for relationship in content.split("<Relationship ").skip(1) {
+                let relationship = relationship
+                    .split("/>")
+                    .next()
+                    .expect("relationship element must close");
+                let id = extract_attr_value(relationship, "Id=\"", "\"")
+                    .unwrap_or_else(|| panic!("{relationship_part} relationship missing Id"));
+                assert!(
+                    ids.insert(id.clone()),
+                    "{relationship_part} contains duplicate relationship ID {id}"
+                );
+                if relationship.contains("TargetMode=\"External\"") {
+                    continue;
+                }
+                let target = extract_attr_value(relationship, "Target=\"", "\"")
+                    .unwrap_or_else(|| panic!("{relationship_part} relationship missing Target"));
+                let resolved = normalize_package_target(&base, &target);
+                assert!(
+                    names.contains(&resolved),
+                    "{relationship_part} target {target} resolves to missing part {resolved}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -405,25 +496,26 @@ mod tests {
         let file = std::fs::File::open(&output_path).unwrap();
         let mut archive = ZipArchive::new(file).unwrap();
 
-        let xml_files = [
-            "[Content_Types].xml",
-            "ppt/presentation.xml",
-            "ppt/_rels/presentation.xml.rels",
-            "ppt/slides/slide1.xml",
-            "ppt/slides/_rels/slide1.xml.rels",
-        ];
-        for name in &xml_files {
-            let mut entry = archive.by_name(name).unwrap();
-            let mut content = String::new();
-            entry.read_to_string(&mut content).unwrap();
-            // Verify it starts with XML declaration or valid XML root
-            assert!(
-                content.starts_with("<?xml") || content.starts_with("<"),
-                "{} should contain valid XML",
-                name
-            );
-            // Verify it has a closing root tag
-            assert!(content.contains("</"), "{} should have closing tags", name);
+        let xml_files = (0..archive.len())
+            .filter_map(|index| {
+                let name = archive.by_index(index).unwrap().name().to_string();
+                (name.ends_with(".xml") || name.ends_with(".rels")).then_some(name)
+            })
+            .collect::<Vec<_>>();
+
+        for name in xml_files {
+            let content = read_zip_text(&mut archive, &name);
+            let mut reader = quick_xml::Reader::from_str(&content);
+            loop {
+                match reader.read_event() {
+                    Ok(quick_xml::events::Event::Eof) => break,
+                    Ok(_) => {}
+                    Err(error) => panic!(
+                        "{name} is not well-formed XML at byte {}: {error}",
+                        reader.buffer_position()
+                    ),
+                }
+            }
         }
     }
 
@@ -462,6 +554,39 @@ mod tests {
             pres_content.contains("sldId"),
             "Presentation should contain slide ID entries"
         );
+    }
+
+    #[test]
+    fn generated_pptx_has_required_presentation_relationships() {
+        let (dir, writer, record) = setup_pptx_test();
+        let png_path = dir.path().join("slides").join("slide_0001.png");
+        writer.add_slide(&record, &png_path).unwrap();
+
+        let file = std::fs::File::open(dir.path().join("output.pptx")).unwrap();
+        let mut archive = ZipArchive::new(file).unwrap();
+        let rels = read_zip_text(&mut archive, "ppt/_rels/presentation.xml.rels");
+        for (relationship_type, target) in [
+            ("presProps", "presProps.xml"),
+            ("viewProps", "viewProps.xml"),
+            ("theme", "theme/theme1.xml"),
+            ("tableStyles", "tableStyles.xml"),
+        ] {
+            assert!(
+                rels.contains(&format!(
+                    "/relationships/{relationship_type}\" Target=\"{target}\""
+                )),
+                "generated presentation is missing {relationship_type} relationship to {target}"
+            );
+        }
+    }
+
+    #[test]
+    fn generated_pptx_has_closed_internal_relationship_graph() {
+        let (dir, writer, record) = setup_pptx_test();
+        let png_path = dir.path().join("slides").join("slide_0001.png");
+        writer.add_slide(&record, &png_path).unwrap();
+
+        assert_internal_relationship_graph_is_closed(&dir.path().join("output.pptx"));
     }
 
     #[test]
@@ -636,12 +761,73 @@ mod tests {
         );
     }
 
+    #[test]
+    fn pptx_preserves_distinct_media_bytes_and_slide_mappings() {
+        use image::ImageEncoder;
+
+        let dir = tempfile::tempdir().unwrap();
+        let slides_dir = dir.path().join("slides");
+        std::fs::create_dir_all(&slides_dir).unwrap();
+        let output_path = dir.path().join("output.pptx");
+        let mut expected_media = Vec::new();
+
+        for number in 1..=3 {
+            let pixels = vec![number as u8 * 50; 2 * 2 * 3];
+            let mut png = Vec::new();
+            image::codecs::png::PngEncoder::new(&mut png)
+                .write_image(&pixels, 2, 2, image::ExtendedColorType::Rgb8)
+                .unwrap();
+            std::fs::write(slides_dir.join(format!("slide_{number:04}.png")), &png).unwrap();
+            expected_media.push(png);
+
+            let writer = PptxWriter::new(&output_path, "16:9", "fit");
+            let record = SlideRecord::new(
+                number,
+                format!("slide_{number:04}.png"),
+                format!("slides/slide_{number:04}.png"),
+                number as u64,
+                2,
+                2,
+                format!("hash{number}"),
+                "Test".into(),
+                "Monitor".into(),
+            );
+            writer
+                .add_slide(&record, &slides_dir.join(format!("slide_{number:04}.png")))
+                .unwrap();
+        }
+
+        let file = std::fs::File::open(&output_path).unwrap();
+        let mut archive = ZipArchive::new(file).unwrap();
+        for number in 1..=3 {
+            assert!(archive
+                .by_name(&format!("ppt/slides/slide{number}.xml"))
+                .is_ok());
+            let rels = read_zip_text(
+                &mut archive,
+                &format!("ppt/slides/_rels/slide{number}.xml.rels"),
+            );
+            assert!(rels.contains(&format!("Target=\"../media/image{number}.png\"")));
+            assert!(rels.contains("Target=\"../slideLayouts/slideLayout1.xml\""));
+
+            let mut media = Vec::new();
+            archive
+                .by_name(&format!("ppt/media/image{number}.png"))
+                .unwrap()
+                .read_to_end(&mut media)
+                .unwrap();
+            assert_eq!(media, expected_media[(number - 1) as usize]);
+        }
+        drop(archive);
+
+        assert_internal_relationship_graph_is_closed(&output_path);
+    }
+
     /// Generates PPTX files to /tmp/pptx_test/ for manual inspection.
     /// Run: cargo test test_pptx_generate_to_tmp -- --nocapture
     #[test]
     fn test_pptx_generate_to_tmp() {
         use crate::model::SlideRecord;
-        use std::io::Read;
         let base = std::path::Path::new("/tmp/pptx_test");
         let slides_dir = base.join("slides");
         let _ = std::fs::remove_dir_all(base);

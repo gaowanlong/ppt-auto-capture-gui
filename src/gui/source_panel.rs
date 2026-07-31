@@ -118,10 +118,23 @@ impl SourcePanel {
             ui.separator();
 
             ui.horizontal(|ui| {
-                if ui.add_enabled(has_window_selected && monitor_ready, Button::new(i18n::t_move_to_display(language))).clicked() {
+                let window_controls_available = cfg!(target_os = "windows");
+                let move_button = ui.add_enabled(
+                    window_controls_available && has_window_selected && monitor_ready,
+                    Button::new(i18n::t_move_to_display(language)));
+                #[cfg(target_os = "macos")]
+                let move_button = move_button.on_disabled_hover_text(
+                    i18n::t_macos_window_controls_unavailable(language));
+                if move_button.clicked() {
                     self.move_requested = true;
                 }
-                if ui.add_enabled(has_window_selected, Button::new(i18n::t_maximize(language))).clicked() {
+                let maximize_button = ui.add_enabled(
+                    window_controls_available && has_window_selected,
+                    Button::new(i18n::t_maximize(language)));
+                #[cfg(target_os = "macos")]
+                let maximize_button = maximize_button.on_disabled_hover_text(
+                    i18n::t_macos_window_controls_unavailable(language));
+                if maximize_button.clicked() {
                     self.maximize_requested = true;
                 }
             });

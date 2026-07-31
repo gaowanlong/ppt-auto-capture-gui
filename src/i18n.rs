@@ -134,6 +134,12 @@ pub fn t_move_to_display(lang: Language) -> &'static str {
 pub fn t_maximize(lang: Language) -> &'static str {
     match lang { Language::English => "⬜ Maximize", Language::Chinese => "⬜ 最大化" }
 }
+pub fn t_macos_window_controls_unavailable(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Moving or maximizing another app requires Accessibility permission and is not available in this macOS release.",
+        Language::Chinese => "移动或最大化其他应用需要“辅助功能”权限，此 macOS 版本暂不提供该功能。",
+    }
+}
 pub fn t_test_screenshot(lang: Language) -> &'static str {
     match lang { Language::English => "📷 Test Screenshot", Language::Chinese => "📷 测试截图" }
 }
@@ -291,5 +297,11 @@ mod tests {
         assert!(msg_en.contains("5"));
         let msg_cn = t_recovery_msg(Language::Chinese, 3);
         assert!(msg_cn.contains("3"));
+    }
+
+    #[test]
+    fn macos_window_control_explanation_is_localized() {
+        assert!(t_macos_window_controls_unavailable(Language::English).contains("Accessibility"));
+        assert!(t_macos_window_controls_unavailable(Language::Chinese).contains("辅助功能"));
     }
 }
