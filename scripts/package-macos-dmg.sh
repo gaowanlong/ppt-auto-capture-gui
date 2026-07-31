@@ -78,6 +78,8 @@ cat > "$APP_PATH/Contents/Info.plist" <<EOF
   </array>
   <key>NSHighResolutionCapable</key>
   <true/>
+  <key>NSScreenCaptureUsageDescription</key>
+  <string>PPT Auto Capture needs screen recording access to capture the selected display or presentation window.</string>
 </dict>
 </plist>
 EOF

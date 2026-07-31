@@ -87,6 +87,11 @@ if [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]]; then
   test "$(plutil -extract CFBundleShortVersionString raw "$INFO_PLIST")" = "1.23"
   test "$(plutil -extract CFBundleVersion raw "$INFO_PLIST")" = "1.23"
   test "$(plutil -extract LSMinimumSystemVersion raw "$INFO_PLIST")" = "11.0"
+  SCREEN_CAPTURE_USAGE="$(
+    plutil -extract NSScreenCaptureUsageDescription raw "$INFO_PLIST"
+  )"
+  [[ "$SCREEN_CAPTURE_USAGE" == *"screen"* ]]
+  [[ "$SCREEN_CAPTURE_USAGE" == *"window"* ]]
   file "$APP_EXECUTABLE" | grep -F "arm64" >/dev/null
   codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
