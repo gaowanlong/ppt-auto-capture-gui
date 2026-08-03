@@ -1,3 +1,5 @@
+use std::fmt;
+
 pub struct ContentTypesXml {
     slides: Vec<(u32, String)>,
 }
@@ -7,7 +9,7 @@ impl ContentTypesXml {
         Self { slides: slides.to_vec() }
     }
 
-    pub fn to_string(&self) -> String {
+    fn render(&self) -> String {
         let mut entries = String::new();
         // Per-slide Override entries (critical for PPTX validity!)
         for (num, _) in &self.slides {
@@ -38,10 +40,28 @@ impl ContentTypesXml {
     }
 }
 
+impl fmt::Display for ContentTypesXml {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.render())
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn display_renders_exact_slide_override() {
+        let rendered = format!("{}", ContentTypesXml::new(&[(7, "ignored.png".into())]));
+        assert!(rendered.starts_with(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Types "
+        ));
+        assert!(rendered.contains(
+            "  <Override PartName=\"/ppt/slides/slide7.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slide+xml\"/>\n"
+        ));
+        assert!(rendered.ends_with("\n</Types>"));
+    }
 
     #[test]
     fn test_content_types_contains_slide_overrides() {
