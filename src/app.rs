@@ -3,13 +3,13 @@ use log::{error, info};
 
 use crossbeam_channel::{Receiver, Sender};
 
-use crate::capture::{CaptureState, CaptureWorker, WorkerCommand, WorkerEvent, CaptureSource};
-use crate::i18n::{self, Language};
+use crate::capture::{CaptureSource, CaptureState, CaptureWorker, WorkerCommand, WorkerEvent};
 use crate::gui::dashboard::DashboardPanel;
-use crate::gui::source_panel::SourcePanel;
 use crate::gui::display_panel::DisplayPanel;
-use crate::gui::settings_panel::SettingsPanel;
 use crate::gui::output_panel::OutputPanel;
+use crate::gui::settings_panel::SettingsPanel;
+use crate::gui::source_panel::SourcePanel;
+use crate::i18n::{self, Language};
 
 use crate::config::AppConfig;
 use crate::model::{MonitorInfo, WindowInfo};
@@ -43,7 +43,13 @@ pub struct PptAutoCaptureApp {
 }
 
 #[derive(PartialEq)]
-enum Tab { Dashboard, Source, Display, Settings, Output }
+enum Tab {
+    Dashboard,
+    Source,
+    Display,
+    Settings,
+    Output,
+}
 
 impl PptAutoCaptureApp {
     pub fn new() -> Self {
@@ -55,14 +61,22 @@ impl PptAutoCaptureApp {
             display_panel: DisplayPanel::new(),
             settings_panel: SettingsPanel::new(),
             output_panel: OutputPanel::new_with_filename(&config.output_filename),
-            worker: None, cmd_tx: None, event_rx: None,
-            monitors: Vec::new(), windows: Vec::new(),
+            worker: None,
+            cmd_tx: None,
+            event_rx: None,
+            monitors: Vec::new(),
+            windows: Vec::new(),
             active_tab: Tab::Dashboard,
-            pending_start: false, pending_pause: false, pending_stop: false, pending_resume: false,
+            pending_start: false,
+            pending_pause: false,
+            pending_stop: false,
+            pending_resume: false,
             output_dir: config.output_dir.clone(),
             output_filename: config.output_filename.clone(),
-            recovery_available: false, recovery_slides: 0,
-            recovery_accepted: false, recovery_declined: false,
+            recovery_available: false,
+            recovery_slides: 0,
+            recovery_accepted: false,
+            recovery_declined: false,
             language: config.language,
         };
         // Load saved settings into settings panel
@@ -97,7 +111,8 @@ impl PptAutoCaptureApp {
     }
 
     fn check_recovery(&mut self) {
-        if let Ok(Some(records)) = detect_incomplete_session(std::path::Path::new(&self.output_dir)) {
+        if let Ok(Some(records)) = detect_incomplete_session(std::path::Path::new(&self.output_dir))
+        {
             self.recovery_available = true;
             self.recovery_slides = records.len() as u32;
             info!("Recovery: {} slides", self.recovery_slides);
@@ -110,11 +125,15 @@ impl PptAutoCaptureApp {
         self.event_rx = Some(worker.event_rx());
         self.cmd_tx = Some(worker.command_tx());
         // Regenerate output filename with current timestamp
-        self.output_panel.output_filename = format!("ppt-capture-{}.pptx",
-            chrono::Local::now().format("%Y%m%d-%H%M%S"));
+        self.output_panel.output_filename = format!(
+            "ppt-capture-{}.pptx",
+            chrono::Local::now().format("%Y%m%d-%H%M%S")
+        );
         let mut source = CaptureSource::new(
-            self.source_panel.selected_hwnd, self.source_panel.selected_title.clone(),
-            self.display_panel.selected_hmonitor, self.display_panel.selected_description.clone(),
+            self.source_panel.selected_hwnd,
+            self.source_panel.selected_title.clone(),
+            self.display_panel.selected_hmonitor,
+            self.display_panel.selected_description.clone(),
         );
         source.output_dir = self.output_panel.output_dir.clone();
         source.output_filename = self.output_panel.output_filename.clone();
@@ -125,10 +144,15 @@ impl PptAutoCaptureApp {
         }
         self.worker = Some(worker);
         self.dashboard.session_active = true;
-        self.dashboard.output_path = format!("{}/{}",
-                        self.output_panel.output_dir.trim_end_matches('/').trim_end_matches('\\'),
-                        self.output_panel.output_filename);
-        
+        self.dashboard.output_path = format!(
+            "{}/{}",
+            self.output_panel
+                .output_dir
+                .trim_end_matches('/')
+                .trim_end_matches('\\'),
+            self.output_panel.output_filename
+        );
+
         if self.source_panel.full_screen_selected {
             self.dashboard.source_window_title = "📺 Full Screen".to_string();
         } else {
@@ -137,11 +161,23 @@ impl PptAutoCaptureApp {
         self.dashboard.monitor_description = self.display_panel.selected_description.clone();
     }
 
-    fn pause_capture(&mut self) { if let Some(ref tx) = self.cmd_tx { let _ = tx.send(WorkerCommand::Pause); } }
-    fn resume_capture(&mut self) { if let Some(ref tx) = self.cmd_tx { let _ = tx.send(WorkerCommand::Resume); } }
+    fn pause_capture(&mut self) {
+        if let Some(ref tx) = self.cmd_tx {
+            let _ = tx.send(WorkerCommand::Pause);
+        }
+    }
+    fn resume_capture(&mut self) {
+        if let Some(ref tx) = self.cmd_tx {
+            let _ = tx.send(WorkerCommand::Resume);
+        }
+    }
     fn stop_capture(&mut self) {
-        if let Some(ref tx) = self.cmd_tx { let _ = tx.send(WorkerCommand::Stop); }
-        if let Some(mut worker) = self.worker.take() { worker.stop(); }
+        if let Some(ref tx) = self.cmd_tx {
+            let _ = tx.send(WorkerCommand::Stop);
+        }
+        if let Some(mut worker) = self.worker.take() {
+            worker.stop();
+        }
         self.cmd_tx = None;
         self.event_rx = None;
         self.dashboard.current_state = CaptureState::Stopped;
@@ -151,8 +187,10 @@ impl PptAutoCaptureApp {
 
     fn send_test_capture(&mut self) {
         let mut source = CaptureSource::new(
-            self.source_panel.selected_hwnd, self.source_panel.selected_title.clone(),
-            self.display_panel.selected_hmonitor, self.display_panel.selected_description.clone(),
+            self.source_panel.selected_hwnd,
+            self.source_panel.selected_title.clone(),
+            self.display_panel.selected_hmonitor,
+            self.display_panel.selected_description.clone(),
         );
         source.output_dir = self.output_panel.output_dir.clone();
         source.output_filename = self.output_panel.output_filename.clone();
@@ -163,30 +201,46 @@ impl PptAutoCaptureApp {
             let _ = tx.send(WorkerCommand::TestCapture(source));
             info!("Test capture command sent");
         } else {
-            self.dashboard.last_error = Some(
-                i18n::t_no_worker_error(self.language)
-            );
+            self.dashboard.last_error = Some(i18n::t_no_worker_error(self.language));
         }
     }
 
     fn process_events(&mut self) {
-        let rx = match self.event_rx.as_ref() { Some(r) => r, None => return };
+        let rx = match self.event_rx.as_ref() {
+            Some(r) => r,
+            None => return,
+        };
         loop {
             let event = match rx.try_recv() {
                 Ok(e) => e,
                 Err(crossbeam_channel::TryRecvError::Empty) => break,
                 Err(crossbeam_channel::TryRecvError::Disconnected) => {
                     error!("Worker disconnected");
-                    if let Some(mut worker) = self.worker.take() { worker.stop(); }
+                    if let Some(mut worker) = self.worker.take() {
+                        worker.stop();
+                    }
                     break;
                 }
             };
             match event {
-                WorkerEvent::StateChanged(s) => { self.dashboard.current_state = s; self.dashboard.state_message = s.label().to_string(); }
-                WorkerEvent::SlideSaved { slide_number, .. } => self.dashboard.saved_slides_count = slide_number,
-                WorkerEvent::Error(msg) => { self.dashboard.last_error = Some(msg); }
-                WorkerEvent::TestFrame(d, w, h) => { self.dashboard.test_frame_rgba = Some(d); self.dashboard.test_frame_w = w; self.dashboard.test_frame_h = h; }
-                WorkerEvent::BlackFrameDetected => { self.dashboard.state_message = "Black frame".into(); }
+                WorkerEvent::StateChanged(s) => {
+                    self.dashboard.current_state = s;
+                    self.dashboard.state_message = s.label().to_string();
+                }
+                WorkerEvent::SlideSaved { slide_number, .. } => {
+                    self.dashboard.saved_slides_count = slide_number
+                }
+                WorkerEvent::Error(msg) => {
+                    self.dashboard.last_error = Some(msg);
+                }
+                WorkerEvent::TestFrame(d, w, h) => {
+                    self.dashboard.test_frame_rgba = Some(d);
+                    self.dashboard.test_frame_w = w;
+                    self.dashboard.test_frame_h = h;
+                }
+                WorkerEvent::BlackFrameDetected => {
+                    self.dashboard.state_message = "Black frame".into();
+                }
                 _ => {}
             }
         }
@@ -194,18 +248,34 @@ impl PptAutoCaptureApp {
 
     fn refresh_windows(&mut self) {
         self.source_panel.refresh_requested = false;
-        if let Ok(w) = enumerate_windows() { 
-            self.windows = w.clone(); 
+        if let Ok(w) = enumerate_windows() {
+            self.windows = w.clone();
             self.source_panel.windows = w.clone();
-            
+
             // Auto-select the best window only when user hasn't intentionally
             // chosen full-screen capture AND no window is currently selected.
             if self.source_panel.selected_hwnd == 0 && !self.source_panel.full_screen_selected {
                 // Sort by priority: slideshow first, then PPT
                 let mut candidates: Vec<&WindowInfo> = w.iter().collect();
                 candidates.sort_by(|a, b| {
-                    let a_score = if a.is_powerpoint { 2 } else if a.title.to_lowercase().contains("powerpoint") || a.title.to_lowercase().contains("ppt") { 1 } else { 0 };
-                    let b_score = if b.is_powerpoint { 2 } else if b.title.to_lowercase().contains("powerpoint") || b.title.to_lowercase().contains("ppt") { 1 } else { 0 };
+                    let a_score = if a.is_powerpoint {
+                        2
+                    } else if a.title.to_lowercase().contains("powerpoint")
+                        || a.title.to_lowercase().contains("ppt")
+                    {
+                        1
+                    } else {
+                        0
+                    };
+                    let b_score = if b.is_powerpoint {
+                        2
+                    } else if b.title.to_lowercase().contains("powerpoint")
+                        || b.title.to_lowercase().contains("ppt")
+                    {
+                        1
+                    } else {
+                        0
+                    };
                     b_score.cmp(&a_score)
                 });
                 if let Some(best) = candidates.first() {
@@ -222,14 +292,18 @@ impl PptAutoCaptureApp {
         self.display_panel.refresh_requested = false;
         if let Ok(m) = enumerate_monitors() {
             #[cfg(target_os = "macos")]
-            if !m.iter().any(|monitor| monitor.hmonitor == self.display_panel.selected_hmonitor) {
+            if !m
+                .iter()
+                .any(|monitor| monitor.hmonitor == self.display_panel.selected_hmonitor)
+            {
                 if let Some(monitor) = default_monitor(&m) {
                     self.display_panel.selected_hmonitor = monitor.hmonitor;
                     self.display_panel.selected_description = format!(
                         "{} ({}x{})",
                         monitor.output_name.trim(),
                         monitor.region.width,
-                        monitor.region.height);
+                        monitor.region.height
+                    );
                     self.display_panel.status_text =
                         format!("Selected: {}", monitor.output_name.trim());
                 }
@@ -241,7 +315,10 @@ impl PptAutoCaptureApp {
 }
 
 fn default_monitor(monitors: &[MonitorInfo]) -> Option<&MonitorInfo> {
-    monitors.iter().find(|monitor| monitor.is_primary).or_else(|| monitors.first())
+    monitors
+        .iter()
+        .find(|monitor| monitor.is_primary)
+        .or_else(|| monitors.first())
 }
 
 fn apply_macos_source_default(panel: &mut SourcePanel) {
@@ -256,50 +333,106 @@ impl eframe::App for PptAutoCaptureApp {
 
         if self.recovery_available && !self.recovery_accepted && !self.recovery_declined {
             let mut open = true;
-            egui::Window::new("Session Recovery").anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).open(&mut open).show(ctx, |ui| {
-                ui.heading(i18n::t_session_recovery_title(self.language));
-                ui.label(i18n::t_recovery_msg(self.language, self.recovery_slides));
-                ui.horizontal(|ui| {
-                    if ui.button(i18n::t_recover(self.language)).clicked() {
-                        if let Ok(()) = recover_session(std::path::Path::new(&self.output_dir)) {
-                            self.dashboard.saved_slides_count = self.recovery_slides;
-                            self.recovery_accepted = true;
+            egui::Window::new("Session Recovery")
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .open(&mut open)
+                .show(ctx, |ui| {
+                    ui.heading(i18n::t_session_recovery_title(self.language));
+                    ui.label(i18n::t_recovery_msg(self.language, self.recovery_slides));
+                    ui.horizontal(|ui| {
+                        if ui.button(i18n::t_recover(self.language)).clicked() {
+                            if let Ok(()) = recover_session(std::path::Path::new(&self.output_dir))
+                            {
+                                self.dashboard.saved_slides_count = self.recovery_slides;
+                                self.recovery_accepted = true;
+                            }
                         }
-                    }
-                    if ui.button(i18n::t_skip(self.language)).clicked() { self.recovery_declined = true; }
+                        if ui.button(i18n::t_skip(self.language)).clicked() {
+                            self.recovery_declined = true;
+                        }
+                    });
                 });
-            });
-            if !open { self.recovery_declined = true; }
+            if !open {
+                self.recovery_declined = true;
+            }
             ctx.request_repaint();
             return;
         }
 
         if self.pending_start {
             self.pending_start = false;
-            if self.display_panel.selected_hmonitor == 0 { self.dashboard.last_error = Some(i18n::t_no_display_selected(self.language).to_string()); }
-            else { self.dashboard.last_error = None; self.start_capture(); }
-        }
-        if self.pending_pause { self.pending_pause = false; self.pause_capture(); }
-        if self.pending_resume { self.pending_resume = false; self.resume_capture(); }
-        if self.pending_stop { self.pending_stop = false; self.stop_capture(); }
-
-        if self.source_panel.refresh_requested { self.refresh_windows(); }
-        if self.source_panel.move_requested && self.display_panel.selected_hmonitor != 0 {
-            self.source_panel.move_requested = false;
-            if let Some(mon) = self.monitors.iter().find(|m| m.hmonitor == self.display_panel.selected_hmonitor) {
-                let _ = crate::windows::move_window_to_monitor(self.source_panel.selected_hwnd, &mon.region);
+            if self.display_panel.selected_hmonitor == 0 {
+                self.dashboard.last_error =
+                    Some(i18n::t_no_display_selected(self.language).to_string());
+            } else {
+                self.dashboard.last_error = None;
+                self.start_capture();
             }
         }
-        if self.source_panel.maximize_requested { self.source_panel.maximize_requested = false; let _ = crate::windows::maximize_window(self.source_panel.selected_hwnd); }
-        if self.display_panel.refresh_requested { self.refresh_displays(); }
+        if self.pending_pause {
+            self.pending_pause = false;
+            self.pause_capture();
+        }
+        if self.pending_resume {
+            self.pending_resume = false;
+            self.resume_capture();
+        }
+        if self.pending_stop {
+            self.pending_stop = false;
+            self.stop_capture();
+        }
+
+        if self.source_panel.refresh_requested {
+            self.refresh_windows();
+        }
+        if self.source_panel.move_requested && self.display_panel.selected_hmonitor != 0 {
+            self.source_panel.move_requested = false;
+            if let Some(mon) = self
+                .monitors
+                .iter()
+                .find(|m| m.hmonitor == self.display_panel.selected_hmonitor)
+            {
+                let _ = crate::windows::move_window_to_monitor(
+                    self.source_panel.selected_hwnd,
+                    &mon.region,
+                );
+            }
+        }
+        if self.source_panel.maximize_requested {
+            self.source_panel.maximize_requested = false;
+            let _ = crate::windows::maximize_window(self.source_panel.selected_hwnd);
+        }
+        if self.display_panel.refresh_requested {
+            self.refresh_displays();
+        }
 
         egui::TopBottomPanel::top("bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.active_tab, Tab::Dashboard, i18n::t_tab_dashboard(self.language));
-                ui.selectable_value(&mut self.active_tab, Tab::Source, i18n::t_tab_source(self.language));
-                ui.selectable_value(&mut self.active_tab, Tab::Display, i18n::t_tab_display(self.language));
-                ui.selectable_value(&mut self.active_tab, Tab::Settings, i18n::t_tab_settings(self.language));
-                ui.selectable_value(&mut self.active_tab, Tab::Output, i18n::t_tab_output(self.language));
+                ui.selectable_value(
+                    &mut self.active_tab,
+                    Tab::Dashboard,
+                    i18n::t_tab_dashboard(self.language),
+                );
+                ui.selectable_value(
+                    &mut self.active_tab,
+                    Tab::Source,
+                    i18n::t_tab_source(self.language),
+                );
+                ui.selectable_value(
+                    &mut self.active_tab,
+                    Tab::Display,
+                    i18n::t_tab_display(self.language),
+                );
+                ui.selectable_value(
+                    &mut self.active_tab,
+                    Tab::Settings,
+                    i18n::t_tab_settings(self.language),
+                );
+                ui.selectable_value(
+                    &mut self.active_tab,
+                    Tab::Output,
+                    i18n::t_tab_output(self.language),
+                );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button(i18n::t_language_switch(self.language)).clicked() {
                         self.language = self.language.next();
@@ -314,18 +447,36 @@ impl eframe::App for PptAutoCaptureApp {
             match self.active_tab {
                 Tab::Dashboard => {
                     // Sync output info to dashboard
-                    self.dashboard.output_path = format!("{}/{}",
-                        self.output_panel.output_dir.trim_end_matches('/').trim_end_matches('\\'),
-                        self.output_panel.output_filename);
-                    self.dashboard.render(ui, self.language, &mut self.pending_start, &mut self.pending_pause, &mut self.pending_stop, &mut self.pending_resume);
+                    self.dashboard.output_path = format!(
+                        "{}/{}",
+                        self.output_panel
+                            .output_dir
+                            .trim_end_matches('/')
+                            .trim_end_matches('\\'),
+                        self.output_panel.output_filename
+                    );
+                    self.dashboard.render(
+                        ui,
+                        self.language,
+                        &mut self.pending_start,
+                        &mut self.pending_pause,
+                        &mut self.pending_stop,
+                        &mut self.pending_resume,
+                    );
                 }
                 Tab::Source => {
-                    self.source_panel.render(ui, self.language, self.display_panel.selected_hmonitor != 0);
+                    self.source_panel.render(
+                        ui,
+                        self.language,
+                        self.display_panel.selected_hmonitor != 0,
+                    );
                     if self.source_panel.test_requested {
                         self.source_panel.test_requested = false;
                         self.send_test_capture();
                     }
-                    if self.windows.is_empty() { self.refresh_windows(); }
+                    if self.windows.is_empty() {
+                        self.refresh_windows();
+                    }
                 }
                 Tab::Display => {
                     self.display_panel.render(ui, self.language);
@@ -333,7 +484,9 @@ impl eframe::App for PptAutoCaptureApp {
                         self.display_panel.test_capture_requested = false;
                         self.send_test_capture();
                     }
-                    if self.monitors.is_empty() { self.refresh_displays(); }
+                    if self.monitors.is_empty() {
+                        self.refresh_displays();
+                    }
                 }
                 Tab::Settings => {
                     self.settings_panel.render(ui, self.language);
@@ -355,16 +508,27 @@ impl eframe::App for PptAutoCaptureApp {
                         let dir = if dir.is_empty() { "." } else { dir };
                         log::info!("Opening output directory: {}", dir);
                         #[cfg(target_os = "windows")]
-                        { let _ = std::process::Command::new("explorer").arg(dir).spawn(); }
+                        {
+                            let _ = std::process::Command::new("explorer").arg(dir).spawn();
+                        }
                         #[cfg(target_os = "macos")]
-                        { let _ = std::process::Command::new("open").arg(dir).spawn(); }
+                        {
+                            let _ = std::process::Command::new("open").arg(dir).spawn();
+                        }
                         #[cfg(target_os = "linux")]
-                        { let _ = std::process::Command::new("xdg-open").arg(dir).spawn(); }
+                        {
+                            let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
+                        }
                     }
                     // Sync output filename to dashboard
-                    self.dashboard.output_path = format!("{}/{}",
-                        self.output_panel.output_dir.trim_end_matches('/').trim_end_matches('\\'),
-                        self.output_panel.output_filename);
+                    self.dashboard.output_path = format!(
+                        "{}/{}",
+                        self.output_panel
+                            .output_dir
+                            .trim_end_matches('/')
+                            .trim_end_matches('\\'),
+                        self.output_panel.output_filename
+                    );
                 }
             }
         });
@@ -392,7 +556,9 @@ impl Drop for PptAutoCaptureApp {
         self.config.last_monitor_description = self.display_panel.selected_description.clone();
         self.config.language = self.language;
         let _ = self.config.save();
-        if let Some(mut worker) = self.worker.take() { worker.stop(); }
+        if let Some(mut worker) = self.worker.take() {
+            worker.stop();
+        }
     }
 }
 

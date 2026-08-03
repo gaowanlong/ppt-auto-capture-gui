@@ -58,7 +58,6 @@ impl SlideRecord {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

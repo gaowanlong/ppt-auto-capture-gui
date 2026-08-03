@@ -6,7 +6,9 @@ pub struct ContentTypesXml {
 
 impl ContentTypesXml {
     pub fn new(slides: &[(u32, String)]) -> Self {
-        Self { slides: slides.to_vec() }
+        Self {
+            slides: slides.to_vec(),
+        }
     }
 
     fn render(&self) -> String {
@@ -46,7 +48,6 @@ impl fmt::Display for ContentTypesXml {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -54,9 +55,8 @@ mod tests {
     #[test]
     fn display_renders_exact_slide_override() {
         let rendered = format!("{}", ContentTypesXml::new(&[(7, "ignored.png".into())]));
-        assert!(rendered.starts_with(
-            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Types "
-        ));
+        assert!(rendered
+            .starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Types "));
         assert!(rendered.contains(
             "  <Override PartName=\"/ppt/slides/slide7.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slide+xml\"/>\n"
         ));
@@ -76,7 +76,11 @@ mod tests {
 
     #[test]
     fn test_multiple_slides() {
-        let slides = vec![(1, "img1.png".into()), (2, "img2.png".into()), (3, "img3.png".into())];
+        let slides = vec![
+            (1, "img1.png".into()),
+            (2, "img2.png".into()),
+            (3, "img3.png".into()),
+        ];
         let ct = ContentTypesXml::new(&slides);
         let xml = ct.to_string();
         assert!(xml.contains("slide1.xml"));
