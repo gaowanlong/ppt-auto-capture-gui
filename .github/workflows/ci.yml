@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  quality:
+    name: Quality gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install Rust quality tools
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-dev libssl-dev libgtk-3-dev
+      - name: Run Rust tests
+        run: cargo test --all-targets --all-features
+      - name: Test changed-file formatting gate
+        run: bash tests/test_changed_rustfmt.sh
+      - name: Check changed Rust formatting
+        env:
+          GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+          GITHUB_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
+          GITHUB_EVENT_BEFORE: ${{ github.event.before || '' }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: bash scripts/check-rustfmt-changed.sh
+      - name: Test Clippy warning gate
+        run: bash tests/test_clippy_baseline.sh
+      - name: Check Clippy warning baseline
+        run: bash scripts/check-clippy-baseline.sh
+      - name: Test macOS DMG packaging contract
+        run: bash tests/test_macos_dmg_packaging.sh
+      - name: Test release workflow contract
+        run: bash tests/test_release_workflow.sh
+      - name: Test CI workflow contract
+        run: ruby tests/test_ci_workflow.rb
+
+  build:
+    name: Build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+          - runner: macos-latest
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-dev libssl-dev libgtk-3-dev
+      - name: Check target
+        run: cargo check --all-targets --all-features --target ${{ matrix.target }}

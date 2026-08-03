@@ -15,8 +15,43 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  preflight:
+    name: Validate release
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: true
+          fetch-depth: 0
+      - name: Install Rust quality tools
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-dev libssl-dev libgtk-3-dev
+      - name: Validate release tag
+        run: bash scripts/validate-release-tag.sh "$RELEASE_TAG"
+      - name: Run Rust tests
+        run: cargo test --all-targets --all-features
+      - name: Run regression contracts
+        run: |
+          bash tests/test_macos_dmg_packaging.sh
+          bash tests/test_release_tag.sh
+          bash tests/test_release_workflow.sh
+          ruby tests/test_ci_workflow.rb
+      - name: Check changed Rust formatting
+        run: bash scripts/check-rustfmt-changed.sh
+      - name: Check Clippy warning baseline
+        run: bash scripts/check-clippy-baseline.sh
+
   build-windows:
     name: Build Windows (x86_64-msvc)
+    needs: preflight
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -42,6 +77,7 @@ jobs:
 
   build-linux:
     name: Build Linux (x86_64)
+    needs: preflight
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -70,6 +106,7 @@ jobs:
 
   build-macos:
     name: Build macOS (Apple Silicon)
+    needs: preflight
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
