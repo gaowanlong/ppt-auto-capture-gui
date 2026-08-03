@@ -51,7 +51,7 @@ pub struct DiagnosticHistory {
 impl DiagnosticHistory {
     pub fn new(capacity: usize) -> Self {
         Self {
-            capacity: capacity.max(1),
+            capacity: capacity.clamp(1, 20),
             entries: VecDeque::new(),
         }
     }
@@ -130,6 +130,47 @@ mod tests {
                 format!("failure-{index}"),
             ));
         }
+        let messages: Vec<_> = history
+            .entries_newest_first()
+            .map(|entry| entry.message.as_str())
+            .collect();
+        assert_eq!(messages.len(), 20);
+        assert_eq!(messages.first(), Some(&"failure-20"));
+        assert!(!messages.contains(&"failure-0"));
+    }
+
+    #[test]
+    fn history_clamps_zero_capacity_to_one() {
+        let mut history = DiagnosticHistory::new(0);
+        history.push(DiagnosticEntry::new(
+            DiagnosticLevel::Info,
+            "capture",
+            "first",
+        ));
+        history.push(DiagnosticEntry::new(
+            DiagnosticLevel::Info,
+            "capture",
+            "second",
+        ));
+
+        let messages: Vec<_> = history
+            .entries_newest_first()
+            .map(|entry| entry.message.as_str())
+            .collect();
+        assert_eq!(messages, ["second"]);
+    }
+
+    #[test]
+    fn history_clamps_large_capacity_to_twenty() {
+        let mut history = DiagnosticHistory::new(21);
+        for index in 0..21 {
+            history.push(DiagnosticEntry::new(
+                DiagnosticLevel::Warning,
+                "capture",
+                format!("failure-{index}"),
+            ));
+        }
+
         let messages: Vec<_> = history
             .entries_newest_first()
             .map(|entry| entry.message.as_str())
