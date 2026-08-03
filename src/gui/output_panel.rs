@@ -1,5 +1,5 @@
-use egui::*;
 use crate::i18n::{self, Language};
+use egui::*;
 
 pub struct OutputPanel {
     pub output_dir: String,

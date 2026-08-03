@@ -1,6 +1,6 @@
-use egui::*;
-use crate::i18n::{self, Language};
 use crate::capture::CaptureState;
+use crate::i18n::{self, Language};
+use egui::*;
 
 pub struct DashboardPanel {
     pub current_state: CaptureState,
@@ -33,8 +33,15 @@ impl DashboardPanel {
         }
     }
 
-    pub fn render(&mut self, ui: &mut Ui, language: Language, start_btn: &mut bool, pause_btn: &mut bool,
-                  stop_btn: &mut bool, resume_btn: &mut bool) {
+    pub fn render(
+        &mut self,
+        ui: &mut Ui,
+        language: Language,
+        start_btn: &mut bool,
+        pause_btn: &mut bool,
+        stop_btn: &mut bool,
+        resume_btn: &mut bool,
+    ) {
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(i18n::t_status(language)).strong());
@@ -58,7 +65,10 @@ impl DashboardPanel {
                 (i18n::t_capture_source(language), &self.source_window_title),
                 (i18n::t_display(language), &self.monitor_description),
                 (i18n::t_output(language), &self.output_path),
-                (i18n::t_slides_saved(language), &format!("{}", self.saved_slides_count)),
+                (
+                    i18n::t_slides_saved(language),
+                    &format!("{}", self.saved_slides_count),
+                ),
             ];
 
             egui::Grid::new("dashboard_info")
@@ -81,37 +91,49 @@ impl DashboardPanel {
             }
 
             ui.horizontal(|ui| {
-                if ui.add_enabled(
-                    self.current_state == CaptureState::Idle
-                        || self.current_state == CaptureState::Stopped
-                        || self.current_state == CaptureState::Error,
-                    Button::new(RichText::new(i18n::t_start(language)).size(16.0)),
-                ).clicked() {
+                if ui
+                    .add_enabled(
+                        self.current_state == CaptureState::Idle
+                            || self.current_state == CaptureState::Stopped
+                            || self.current_state == CaptureState::Error,
+                        Button::new(RichText::new(i18n::t_start(language)).size(16.0)),
+                    )
+                    .clicked()
+                {
                     *start_btn = true;
                 }
 
-                if ui.add_enabled(
-                    self.current_state == CaptureState::Running
-                        || self.current_state == CaptureState::WaitingForStable
-                        || self.current_state == CaptureState::Stable,
-                    Button::new(RichText::new(i18n::t_pause(language)).size(16.0)),
-                ).clicked() {
+                if ui
+                    .add_enabled(
+                        self.current_state == CaptureState::Running
+                            || self.current_state == CaptureState::WaitingForStable
+                            || self.current_state == CaptureState::Stable,
+                        Button::new(RichText::new(i18n::t_pause(language)).size(16.0)),
+                    )
+                    .clicked()
+                {
                     *pause_btn = true;
                 }
 
-                if ui.add_enabled(
-                    self.current_state.is_paused(),
-                    Button::new(RichText::new(i18n::t_resume(language)).size(16.0)),
-                ).clicked() {
+                if ui
+                    .add_enabled(
+                        self.current_state.is_paused(),
+                        Button::new(RichText::new(i18n::t_resume(language)).size(16.0)),
+                    )
+                    .clicked()
+                {
                     *resume_btn = true;
                 }
 
-                if ui.add_enabled(
-                    self.current_state.is_active()
-                        || self.current_state.is_paused()
-                        || self.current_state == CaptureState::ProtectedOrBlack,
-                    Button::new(RichText::new(i18n::t_stop(language)).size(16.0)),
-                ).clicked() {
+                if ui
+                    .add_enabled(
+                        self.current_state.is_active()
+                            || self.current_state.is_paused()
+                            || self.current_state == CaptureState::ProtectedOrBlack,
+                        Button::new(RichText::new(i18n::t_stop(language)).size(16.0)),
+                    )
+                    .clicked()
+                {
                     *stop_btn = true;
                 }
             });
@@ -156,12 +178,16 @@ impl DashboardPanel {
                 }
             }
 
-            if !self.state_message.is_empty() && self.current_state == CaptureState::ProtectedOrBlack {
+            if !self.state_message.is_empty()
+                && self.current_state == CaptureState::ProtectedOrBlack
+            {
                 ui.separator();
-                ui.colored_label(Color32::RED,
+                ui.colored_label(
+                    Color32::RED,
                     "⚠ Protected or black content detected. Capture paused.\n\
                      The window might be showing protected video content or is blank.\n\
-                     PPT will resume automatically when content becomes visible.");
+                     PPT will resume automatically when content becomes visible.",
+                );
             }
         });
     }
