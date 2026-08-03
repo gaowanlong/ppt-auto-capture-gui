@@ -39,12 +39,13 @@ fn main() -> Result<(), eframe::Error> {
         }
     }
 
-    // Initialize logging
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-        .format_timestamp_millis()
-        .init();
-
-    info!("PPT Auto Capture GUI starting...");
+    let logging = diagnostics::initialize_logging();
+    info!(
+        "PPT Auto Capture {} starting on {}/{}",
+        env!("CARGO_PKG_VERSION"),
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
