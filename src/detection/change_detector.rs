@@ -101,10 +101,6 @@ mod tests {
     use super::*;
     use crate::model::Frame;
 
-    fn make_frame(data: &[u8], w: u32, h: u32) -> Frame {
-        Frame::new(data.to_vec(), w, h, w * 4, 0, 0)
-    }
-
     fn solid_frame(r: u8, g: u8, b: u8, w: u32, h: u32) -> Frame {
         let mut data = vec![0u8; (w * h * 4) as usize];
         for y in 0..h {

@@ -248,22 +248,6 @@ impl PptxWriter {
         Ok(())
     }
 
-    /// Read PNG dimensions from a saved slide file.
-    fn read_png_dimensions(slides_dir: &std::path::Path, num: u32) -> Option<(u32, u32)> {
-        let path = slides_dir.join(format!("slide_{:04}.png", num));
-        if path.exists() {
-            if let Ok(img) = std::fs::read(&path) {
-                // Parse PNG header for width/height
-                if img.len() > 24 && img[0..8] == [137, 80, 78, 71, 13, 10, 26, 10] {
-                    let w = u32::from_be_bytes([img[16], img[17], img[18], img[19]]);
-                    let h = u32::from_be_bytes([img[20], img[21], img[22], img[23]]);
-                    return Some((w, h));
-                }
-            }
-        }
-        None
-    }
-
     fn read_existing_slides(&self) -> Vec<(u32, String)> {
         let file = match std::fs::File::open(&self.output_path) {
             Ok(f) => f,

@@ -8,7 +8,6 @@ use crate::model::Frame;
 
 /// Manages the PNG image storage directory.
 pub struct ImageStore {
-    output_dir: PathBuf,
     slides_dir: PathBuf,
 }
 
@@ -17,10 +16,7 @@ impl ImageStore {
         let slides_dir = output_dir.join("slides");
         std::fs::create_dir_all(&slides_dir)
             .with_context(|| format!("Failed to create slides directory {:?}", slides_dir))?;
-        Ok(Self {
-            output_dir,
-            slides_dir,
-        })
+        Ok(Self { slides_dir })
     }
 
     /// Save a frame as a PNG file. Returns the path to the saved file.
