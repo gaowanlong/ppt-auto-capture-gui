@@ -151,7 +151,7 @@ mod tests {
         assert!(cfg.filter_duplicates);
         assert_eq!(cfg.page_ratio, "16:9");
         assert_eq!(cfg.image_fit, "fit");
-        assert_eq!(cfg.keep_previous, true);
+        assert!(cfg.keep_previous);
     }
 
     #[test]

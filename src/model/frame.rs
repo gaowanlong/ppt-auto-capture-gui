@@ -141,7 +141,9 @@ mod tests {
     fn test_frame_clone_preserves_pixel_data() {
         let mut data = vec![0u8; 4 * 4 * 4];  // 4x4 RGBA
         // Set each pixel to a unique value
-        for i in 0..data.len() { data[i] = (i % 256) as u8; }
+        for (i, byte) in data.iter_mut().enumerate() {
+            *byte = (i % 256) as u8;
+        }
         let f1 = Frame::new(data, 4, 4, 16, 1, 1000);
         let f2 = f1.clone();
         assert_eq!(f1.width, f2.width);

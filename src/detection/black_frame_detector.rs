@@ -76,8 +76,8 @@ mod tests {
         let mut data = vec![0u8; 100 * 100 * 4];
         // Make half black, half white
         let half = (100 * 100 * 4) / 2;
-        for i in half..data.len() {
-            data[i] = 255;
+        for byte in data.iter_mut().skip(half) {
+            *byte = 255;
         }
         Frame::new(data, 100, 100, 400, 0, 0)
     }
@@ -119,7 +119,9 @@ mod tests {
         let detector = BlackFrameDetector::new(0.80);
         let mut data = vec![0u8; 100 * 100 * 4];
         let half = (100 * 100 * 4) * 70 / 100;
-        for i in half..data.len() { data[i] = 255; }
+        for byte in data.iter_mut().skip(half) {
+            *byte = 255;
+        }
         let frame = Frame::new(data, 100, 100, 400, 0, 0);
         assert!(!detector.is_black(&frame), "70% dark should not be black at 80% threshold");
     }

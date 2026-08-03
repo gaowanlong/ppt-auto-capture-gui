@@ -67,7 +67,7 @@ mod tests {
     #[test]
     fn test_duplicate_detection() {
         let detector = DuplicateDetector::new();
-        let f = make_frame(&vec![128u8; 100], 5, 5);
+        let f = make_frame(&[128u8; 100], 5, 5);
         let hash = detector.compute_hash(&f);
         assert_eq!(hash.len(), 64, "SHA256 hex should be 64 chars");
         // First check with no previous hash — not a duplicate

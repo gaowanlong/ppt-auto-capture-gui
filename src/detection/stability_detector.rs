@@ -122,7 +122,7 @@ mod tests {
     }
 
     fn different_frame() -> Frame {
-        let mut data = vec![128u8; 4 * 4 * 4];
+        let data = vec![128u8; 4 * 4 * 4];
         Frame::new(data, 4, 4, 16, 0, 0)
     }
 

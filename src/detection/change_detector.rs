@@ -191,7 +191,7 @@ mod tests {
         // Slide 2: solid red (different content, like a PPT slide change)
         let slide2 = solid_frame(255, 0, 0, 100, 100);
         // Black transition frame (PPT often flashes black between slides)
-        let mut black_data = vec![0u8; 100 * 100 * 4];
+        let black_data = vec![0u8; 100 * 100 * 4];
         let black_frame = Frame::new(black_data.clone(), 100, 100, 400, 0, 0);
 
         // Phase 1: Slide 1 displayed, no changes

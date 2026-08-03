@@ -834,7 +834,7 @@ mod tests {
         std::fs::create_dir_all(&slides_dir).unwrap();
         let png_data = make_test_png();
         for i in 1..=10 {
-            std::fs::write(slides_dir.join(&format!("slide_{:04}.png", i)), &png_data).unwrap();
+            std::fs::write(slides_dir.join(format!("slide_{:04}.png", i)), &png_data).unwrap();
         }
 
         let report = |name: &str, n: u32| {

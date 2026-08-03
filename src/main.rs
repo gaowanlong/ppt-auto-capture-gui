@@ -66,15 +66,6 @@ fn main() -> Result<(), eframe::Error> {
     )
 }
 
-#[cfg(test)]
-mod platform_tests {
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn macos_uses_xcap_backend() {
-        assert_eq!(crate::windows::backend_name(), "macos-xcap");
-    }
-}
-
 /// Add CJK font support by loading system fonts on Windows.
 /// Add CJK font support by loading system fonts on Windows.
 fn setup_cjk_fonts(ctx: &egui::Context) {
@@ -103,4 +94,13 @@ fn setup_cjk_fonts(ctx: &egui::Context) {
         }
     }
     ctx.set_fonts(fonts);
+}
+
+#[cfg(test)]
+mod platform_tests {
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_uses_xcap_backend() {
+        assert_eq!(crate::windows::backend_name(), "macos-xcap");
+    }
 }

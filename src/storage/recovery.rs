@@ -65,7 +65,6 @@ pub fn recover_session(output_dir: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
 
     #[test]
     fn test_no_incomplete_session() {
