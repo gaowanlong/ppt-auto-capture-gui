@@ -355,7 +355,8 @@ Run:
 cargo test --all-targets --all-features
 for test_script in tests/*.sh; do bash "$test_script"; done
 for test_script in tests/test_*.rb; do ruby "$test_script"; done
-bash scripts/check-rustfmt-changed.sh origin/main
+CHANGED_RUST_FILES="$(git diff --name-only origin/main..HEAD -- '*.rs')" \
+  bash scripts/check-rustfmt-changed.sh
 bash scripts/check-clippy-baseline.sh
 cargo build --release --target aarch64-apple-darwin
 bash scripts/package-macos-dmg.sh \
