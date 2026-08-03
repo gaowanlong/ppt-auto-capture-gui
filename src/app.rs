@@ -120,7 +120,9 @@ impl PptAutoCaptureApp {
         source.output_filename = self.output_panel.output_filename.clone();
         source.page_ratio = self.output_panel.page_ratio.clone();
         source.image_fit = self.output_panel.image_fit.clone();
-        let _ = self.cmd_tx.as_ref().map(|tx| tx.send(WorkerCommand::Start(source)));
+        if let Some(tx) = self.cmd_tx.as_ref() {
+            let _ = tx.send(WorkerCommand::Start(source));
+        }
         self.worker = Some(worker);
         self.dashboard.session_active = true;
         self.dashboard.output_path = format!("{}/{}",
