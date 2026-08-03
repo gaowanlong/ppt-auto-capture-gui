@@ -50,7 +50,7 @@ impl SlideXml {
     /// image_w/image_h are the pixel dimensions of the captured screenshot.
     /// fit_mode is "fill" (stretch to fill) or "fit" (proportional, centered).
     /// page_ratio is "16:9", "4:3", etc.
-    pub fn new(
+    pub fn render(
         slide_number: u32,
         image_name: &str,
         image_w: u32,
@@ -137,7 +137,7 @@ impl SlideXml {
 pub struct PresentationXml;
 
 impl PresentationXml {
-    pub fn new(slides: &[(u32, String)], page_ratio: &str) -> String {
+    pub fn render(slides: &[(u32, String)], page_ratio: &str) -> String {
         let mut sld_ids = String::new();
         for (num, _media) in slides {
             sld_ids.push_str(&format!(
@@ -182,7 +182,7 @@ impl PresentationXml {
 pub struct PresentationRelsXml;
 
 impl PresentationRelsXml {
-    pub fn new(slides: &[(u32, String)]) -> String {
+    pub fn render(slides: &[(u32, String)]) -> String {
         let mut slide_rels = String::new();
         for (num, _media) in slides {
             slide_rels.push_str(&format!(
@@ -452,7 +452,7 @@ mod tests {
 
     #[test]
     fn test_slide_xml_contains_image() {
-        let (xml, rels) = SlideXml::new(1, "image1", 1920, 1080, "fit", "16:9");
+        let (xml, rels) = SlideXml::render(1, "image1", 1920, 1080, "fit", "16:9");
         assert!(xml.contains("slide1") || xml.contains("Slide 1"));
         assert!(xml.contains("image1"));
         assert!(xml.contains("p:pic"));
@@ -463,7 +463,7 @@ mod tests {
     #[test]
     fn test_presentation_xml_contains_slides() {
         let slides = vec![(1, "image1.png".into()), (2, "image2.png".into())];
-        let xml = PresentationXml::new(&slides, "16:9");
+        let xml = PresentationXml::render(&slides, "16:9");
         assert!(xml.contains("sldId"));
         assert!(xml.contains("rId2")); // slide 1 (rId1 is master)
         assert!(xml.contains("rId3")); // slide 2
@@ -475,7 +475,7 @@ mod tests {
     #[test]
     fn test_presentation_rels_contains_slides() {
         let slides = vec![(1, "image1.png".into())];
-        let rels = PresentationRelsXml::new(&slides);
+        let rels = PresentationRelsXml::render(&slides);
         assert!(rels.contains("rId1")); // master
         assert!(rels.contains("rId2")); // slide 1 (offset)
         assert!(rels.contains("slides/slide1.xml"));
@@ -483,7 +483,7 @@ mod tests {
 
     #[test]
     fn presentation_relationships_include_support_parts() {
-        let rels = PresentationRelsXml::new(&[(1, "image1.png".into())]);
+        let rels = PresentationRelsXml::render(&[(1, "image1.png".into())]);
         for (relationship_type, target) in [
             ("presProps", "presProps.xml"),
             ("viewProps", "viewProps.xml"),
@@ -505,7 +505,7 @@ mod tests {
             let slides = (1..=slide_count)
                 .map(|number| (number, format!("image{number}.png")))
                 .collect::<Vec<_>>();
-            let rels = PresentationRelsXml::new(&slides);
+            let rels = PresentationRelsXml::render(&slides);
             let ids = rels
                 .split(" Id=\"")
                 .skip(1)
@@ -579,7 +579,7 @@ mod tests {
 
     #[test]
     fn presentation_and_master_have_powerpoint_compatible_defaults() {
-        let presentation = PresentationXml::new(&[(1, "image1.png".into())], "16:9");
+        let presentation = PresentationXml::render(&[(1, "image1.png".into())], "16:9");
         assert!(presentation.contains(r#"<p:sldSz cx="9144000" cy="5143500" type="screen16x9"/>"#));
         assert!(presentation.contains("<p:defaultTextStyle>"));
         assert!(SLIDE_MASTER_XML.contains("<p:bg>"));
@@ -593,7 +593,7 @@ mod tests {
 
     #[test]
     fn test_slide_rel_contains_image() {
-        let (_, rels) = SlideXml::new(1, "image1", 640, 480, "fill", "16:9");
+        let (_, rels) = SlideXml::render(1, "image1", 640, 480, "fill", "16:9");
         assert!(rels.contains("../media/image1.png"));
     }
 }

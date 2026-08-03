@@ -97,7 +97,7 @@ impl PptxWriter {
             &mut zip,
             "ppt/presentation.xml",
             options,
-            PresentationXml::new(&existing_slides, &self.page_ratio)
+            PresentationXml::render(&existing_slides, &self.page_ratio)
                 .to_string()
                 .as_bytes(),
         )?;
@@ -105,7 +105,7 @@ impl PptxWriter {
             &mut zip,
             "ppt/_rels/presentation.xml.rels",
             options,
-            PresentationRelsXml::new(&existing_slides)
+            PresentationRelsXml::render(&existing_slides)
                 .to_string()
                 .as_bytes(),
         )?;
@@ -171,7 +171,7 @@ impl PptxWriter {
             // If PNG not found on disk, fall back to the record's stored dimensions
             let (img_w, img_h) =
                 img_dimensions.unwrap_or_else(|| (record.width.max(1), record.height.max(1)));
-            let (slide_xml, rels_xml) = SlideXml::new(
+            let (slide_xml, rels_xml) = SlideXml::render(
                 *num,
                 &format!("image{}", num),
                 img_w,
