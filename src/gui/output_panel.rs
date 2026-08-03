@@ -93,3 +93,14 @@ impl OutputPanel {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn configured_filename_is_owned_by_the_output_panel() {
+        let panel = OutputPanel::new_with_filename("configured.pptx");
+        assert_eq!(panel.output_filename, "configured.pptx");
+    }
+}

@@ -69,6 +69,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn saves_png_under_the_derived_slides_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = ImageStore::new(temp.path().to_path_buf()).unwrap();
+        let frame = Frame::new(vec![0, 0, 255, 255], 1, 1, 4, 0, 0);
+
+        let saved = store.save_png(&frame, 3).unwrap();
+
+        assert_eq!(saved, temp.path().join("slides/slide_0003.png"));
+        assert!(saved.is_file());
+    }
+
+    #[test]
     fn constructor_reports_when_slides_directory_cannot_be_created() {
         let temp = tempfile::tempdir().unwrap();
         let blocking_file = temp.path().join("not-a-directory");
