@@ -145,4 +145,3 @@ Add focused tests for the warning-baseline and changed-file-formatting scripts u
 - Release jobs validate tags and run tests before packaging.
 - Local validation and GitHub Actions complete successfully.
 - The finished change is merged into `main` and pushed to GitHub.
-
