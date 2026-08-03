@@ -6,10 +6,24 @@ PACKAGER="$PROJECT_ROOT/scripts/package-macos-dmg.sh"
 TEST_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ppt-capture-dmg-test.XXXXXX")"
 MOUNT_DIR="$TEST_TMP_DIR/mount"
 IS_MOUNTED=0
+DISK_IMAGE_BACKEND="hdiutil"
+
+if command -v diskutil >/dev/null 2>&1 \
+  && diskutil image attach --help >/dev/null 2>&1; then
+  DISK_IMAGE_BACKEND="diskutil"
+fi
+
+detach_disk_image() {
+  if [[ "$DISK_IMAGE_BACKEND" == "diskutil" ]]; then
+    diskutil eject "$MOUNT_DIR" >/dev/null
+  else
+    hdiutil detach "$MOUNT_DIR" -quiet
+  fi
+}
 
 cleanup() {
   if [[ "$IS_MOUNTED" -eq 1 ]]; then
-    hdiutil detach "$MOUNT_DIR" -quiet || true
+    detach_disk_image || true
   fi
   rm -rf "$TEST_TMP_DIR"
 }
@@ -61,15 +75,31 @@ if [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]]; then
   }
 
   OUTPUT_DMG="$TEST_TMP_DIR/ppt-auto-capture-gui-macos-apple-silicon.dmg"
-  "$PACKAGER" "$ARM64_EXECUTABLE" "1.23" "$OUTPUT_DMG"
+  if ! PACKAGER_OUTPUT="$("$PACKAGER" "$ARM64_EXECUTABLE" "1.23" "$OUTPUT_DMG" 2>&1)"; then
+    printf '%s\n' "$PACKAGER_OUTPUT"
+    exit 1
+  fi
+  printf '%s\n' "$PACKAGER_OUTPUT"
+  if [[ "$PACKAGER_OUTPUT" == *"deprecated"* ]]; then
+    printf 'DMG packager used a deprecated macOS disk image command\n'
+    exit 1
+  fi
   test -f "$OUTPUT_DMG"
 
   mkdir -p "$MOUNT_DIR"
-  hdiutil attach \
-    -readonly \
-    -nobrowse \
-    -mountpoint "$MOUNT_DIR" \
-    "$OUTPUT_DMG" >/dev/null
+  if [[ "$DISK_IMAGE_BACKEND" == "diskutil" ]]; then
+    diskutil image attach \
+      --readOnly \
+      --mountOptions nobrowse \
+      --mountPoint "$MOUNT_DIR" \
+      "$OUTPUT_DMG" >/dev/null
+  else
+    hdiutil attach \
+      -readonly \
+      -nobrowse \
+      -mountpoint "$MOUNT_DIR" \
+      "$OUTPUT_DMG" >/dev/null
+  fi
   IS_MOUNTED=1
 
   APP_PATH="$MOUNT_DIR/PPT Auto Capture.app"
@@ -95,7 +125,7 @@ if [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]]; then
   file "$APP_EXECUTABLE" | grep -F "arm64" >/dev/null
   codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
-  hdiutil detach "$MOUNT_DIR" -quiet
+  detach_disk_image
   IS_MOUNTED=0
   printf 'macOS DMG end-to-end packaging test passed\n'
 fi

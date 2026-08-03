@@ -33,10 +33,25 @@ APP_PATH="$BUILD_DIR/$APP_NAME"
 STAGING_DIR="$BUILD_DIR/staging"
 VERIFY_MOUNT="$BUILD_DIR/mount"
 IS_MOUNTED=0
+DISK_IMAGE_BACKEND="hdiutil"
+
+if command -v diskutil >/dev/null 2>&1 \
+  && diskutil image create from --help >/dev/null 2>&1 \
+  && diskutil image attach --help >/dev/null 2>&1; then
+  DISK_IMAGE_BACKEND="diskutil"
+fi
+
+detach_disk_image() {
+  if [[ "$DISK_IMAGE_BACKEND" == "diskutil" ]]; then
+    diskutil eject "$VERIFY_MOUNT" >/dev/null
+  else
+    hdiutil detach "$VERIFY_MOUNT" -quiet
+  fi
+}
 
 cleanup() {
   if [[ "$IS_MOUNTED" -eq 1 ]]; then
-    hdiutil detach "$VERIFY_MOUNT" -quiet || true
+    detach_disk_image || true
   fi
   rm -rf "$BUILD_DIR"
 }
@@ -93,18 +108,30 @@ ln -s /Applications "$STAGING_DIR/Applications"
 
 mkdir -p "$(dirname "$OUTPUT_DMG")"
 rm -f "$OUTPUT_DMG"
-hdiutil create \
-  -volname "$VOLUME_NAME" \
-  -srcfolder "$STAGING_DIR" \
-  -ov \
-  -format UDZO \
-  "$OUTPUT_DMG"
-
-hdiutil attach \
-  -readonly \
-  -nobrowse \
-  -mountpoint "$VERIFY_MOUNT" \
-  "$OUTPUT_DMG" >/dev/null
+if [[ "$DISK_IMAGE_BACKEND" == "diskutil" ]]; then
+  diskutil image create from \
+    --volumeName "$VOLUME_NAME" \
+    --format UDZO \
+    "$STAGING_DIR" \
+    "$OUTPUT_DMG"
+  diskutil image attach \
+    --readOnly \
+    --mountOptions nobrowse \
+    --mountPoint "$VERIFY_MOUNT" \
+    "$OUTPUT_DMG" >/dev/null
+else
+  hdiutil create \
+    -volname "$VOLUME_NAME" \
+    -srcfolder "$STAGING_DIR" \
+    -ov \
+    -format UDZO \
+    "$OUTPUT_DMG"
+  hdiutil attach \
+    -readonly \
+    -nobrowse \
+    -mountpoint "$VERIFY_MOUNT" \
+    "$OUTPUT_DMG" >/dev/null
+fi
 IS_MOUNTED=1
 
 MOUNTED_APP="$VERIFY_MOUNT/$APP_NAME"
@@ -125,7 +152,7 @@ if [[ "$MOUNTED_FILE_DESCRIPTION" != *"Mach-O"* || "$MOUNTED_FILE_DESCRIPTION" !
 fi
 
 codesign --verify --deep --strict --verbose=2 "$MOUNTED_APP"
-hdiutil detach "$VERIFY_MOUNT" -quiet
+detach_disk_image
 IS_MOUNTED=0
 
 printf 'Created validated Apple Silicon DMG: %s\n' "$OUTPUT_DMG"
