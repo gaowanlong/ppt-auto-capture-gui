@@ -29,13 +29,13 @@ else
 fi
 
 declare -a rust_files=()
-for file in "${candidates[@]}"; do
+for file in "${candidates[@]-}"; do
   if [[ "$file" == *.rs && -f "$file" ]]; then
     rust_files+=("$file")
   fi
 done
 
-if [[ "${#rust_files[@]}" -eq 0 ]]; then
+if [[ -z "${rust_files[*]-}" ]]; then
   printf 'No changed Rust files to format-check\n'
   exit 0
 fi
