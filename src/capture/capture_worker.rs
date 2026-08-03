@@ -10,7 +10,7 @@ use crossbeam_channel::{Sender};
 use crate::capture::capture_source::CaptureSource;
 use crate::capture::capture_state::CaptureState;
 use crate::detection::{ChangeDetector, StabilityDetector, DuplicateDetector, BlackFrameDetector};
-use crate::model::{Frame, MonitorInfo, Region};
+use crate::model::{Frame, MonitorInfo};
 use crate::pptx::PptxWriter;
 use crate::storage::{ImageStore, ManifestStore};
 use crate::windows::{DxgiCapturer, GdiCapturer};
@@ -356,9 +356,7 @@ impl WorkerLoop {
                     let mut monitor = self.create_monitor_info_for_source(&source);
                     // Also clip to window for test capture
                     if let Ok(ref mut mon) = monitor {
-                        let mut window_client_w = 0u32;
-                            let mut window_client_h = 0u32;
-                            if source.window_hwnd != 0 {
+                        if source.window_hwnd != 0 {
                             if let Ok(window_rect) = crate::windows::get_client_window_rect(source.window_hwnd) {
                                 if window_rect.width > 10 && window_rect.height > 10
                                     && window_rect.x > -32000 && window_rect.y > -32000
@@ -519,7 +517,7 @@ self.gdi_capturer.capture_frame()?
                 if !saved {
                     if let Some(ref ref_frame) = self.change_detector.get_reference_frame().cloned() {
                         log::info!("Saving reference frame as fallback before rapid transition");
-                        if let Err(e) = self.save_frame(&ref_frame) {
+                        if let Err(e) = self.save_frame(ref_frame) {
                             error!("Failed to save reference frame: {}", e);
                         }
                     }
