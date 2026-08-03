@@ -357,7 +357,11 @@ for test_script in tests/*.sh; do bash "$test_script"; done
 for test_script in tests/test_*.rb; do ruby "$test_script"; done
 bash scripts/check-rustfmt-changed.sh origin/main
 bash scripts/check-clippy-baseline.sh
-bash scripts/build-macos-dmg.sh
+cargo build --release --target aarch64-apple-darwin
+bash scripts/package-macos-dmg.sh \
+  target/aarch64-apple-darwin/release/ppt-auto-capture-gui \
+  1.1.0 \
+  artifacts/ppt-auto-capture-gui-macos-apple-silicon.dmg
 git diff --check origin/main..HEAD
 ```
 
