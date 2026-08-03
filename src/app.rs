@@ -133,23 +133,13 @@ impl PptAutoCaptureApp {
             self.display_panel.selected_hmonitor,
             self.display_panel.selected_description.clone(),
         );
-        source.output_dir = self.output_panel.output_dir.clone();
-        source.output_filename = self.output_panel.output_filename.clone();
-        source.page_ratio = self.output_panel.page_ratio.clone();
-        source.image_fit = self.output_panel.image_fit.clone();
+        apply_output_to_source(&self.output_panel, &mut source);
         if let Some(tx) = self.cmd_tx.as_ref() {
             let _ = tx.send(WorkerCommand::Start(source));
         }
         self.worker = Some(worker);
         self.dashboard.session_active = true;
-        self.dashboard.output_path = format!(
-            "{}/{}",
-            self.output_panel
-                .output_dir
-                .trim_end_matches('/')
-                .trim_end_matches('\\'),
-            self.output_panel.output_filename
-        );
+        self.dashboard.output_path = output_path(&self.output_panel);
 
         if self.source_panel.full_screen_selected {
             self.dashboard.source_window_title = "📺 Full Screen".to_string();
@@ -190,10 +180,7 @@ impl PptAutoCaptureApp {
             self.display_panel.selected_hmonitor,
             self.display_panel.selected_description.clone(),
         );
-        source.output_dir = self.output_panel.output_dir.clone();
-        source.output_filename = self.output_panel.output_filename.clone();
-        source.page_ratio = self.output_panel.page_ratio.clone();
-        source.image_fit = self.output_panel.image_fit.clone();
+        apply_output_to_source(&self.output_panel, &mut source);
 
         if let Some(ref tx) = self.cmd_tx {
             let _ = tx.send(WorkerCommand::TestCapture(source));
@@ -325,6 +312,32 @@ fn apply_macos_source_default(panel: &mut SourcePanel) {
     panel.full_screen_selected = true;
 }
 
+fn apply_output_to_source(panel: &OutputPanel, source: &mut CaptureSource) {
+    source.output_dir = panel.output_dir.clone();
+    source.output_filename = panel.output_filename.clone();
+    source.page_ratio = panel.page_ratio.clone();
+    source.image_fit = panel.image_fit.clone();
+}
+
+fn output_path(panel: &OutputPanel) -> String {
+    format!(
+        "{}/{}",
+        panel
+            .output_dir
+            .trim_end_matches('/')
+            .trim_end_matches('\\'),
+        panel.output_filename
+    )
+}
+
+fn apply_output_to_config(panel: &OutputPanel, config: &mut AppConfig) {
+    config.output_dir = panel.output_dir.clone();
+    config.output_filename = panel.output_filename.clone();
+    config.page_ratio = panel.page_ratio.clone();
+    config.image_fit = panel.image_fit.clone();
+    config.keep_previous = panel.keep_previous;
+}
+
 impl eframe::App for PptAutoCaptureApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.process_events();
@@ -445,14 +458,7 @@ impl eframe::App for PptAutoCaptureApp {
             match self.active_tab {
                 Tab::Dashboard => {
                     // Sync output info to dashboard
-                    self.dashboard.output_path = format!(
-                        "{}/{}",
-                        self.output_panel
-                            .output_dir
-                            .trim_end_matches('/')
-                            .trim_end_matches('\\'),
-                        self.output_panel.output_filename
-                    );
+                    self.dashboard.output_path = output_path(&self.output_panel);
                     self.dashboard.render(
                         ui,
                         self.language,
@@ -519,14 +525,7 @@ impl eframe::App for PptAutoCaptureApp {
                         }
                     }
                     // Sync output filename to dashboard
-                    self.dashboard.output_path = format!(
-                        "{}/{}",
-                        self.output_panel
-                            .output_dir
-                            .trim_end_matches('/')
-                            .trim_end_matches('\\'),
-                        self.output_panel.output_filename
-                    );
+                    self.dashboard.output_path = output_path(&self.output_panel);
                 }
             }
         });
@@ -537,8 +536,7 @@ impl eframe::App for PptAutoCaptureApp {
 
 impl Drop for PptAutoCaptureApp {
     fn drop(&mut self) {
-        self.config.output_dir = self.output_dir.clone();
-        self.config.output_filename = self.output_panel.output_filename.clone();
+        apply_output_to_config(&self.output_panel, &mut self.config);
         // Save settings panel values
         let scfg = self.settings_panel.get_config();
         self.config.sample_interval_ms = scfg.sample_interval_ms;
@@ -593,5 +591,30 @@ mod tests {
         apply_macos_source_default(&mut panel);
         assert_eq!(panel.selected_hwnd, 0);
         assert!(panel.full_screen_selected);
+    }
+
+    #[test]
+    fn output_panel_is_the_single_source_for_capture_dashboard_and_persistence() {
+        let mut panel = OutputPanel::new_with_filename("configured.pptx");
+        panel.output_dir = "/tmp/captures/".into();
+        panel.page_ratio = "4:3".into();
+        panel.image_fit = "fill".into();
+        panel.keep_previous = false;
+
+        let mut source = CaptureSource::new(1, "Slides".into(), 2, "Display".into());
+        apply_output_to_source(&panel, &mut source);
+        assert_eq!(source.output_dir, "/tmp/captures/");
+        assert_eq!(source.output_filename, "configured.pptx");
+        assert_eq!(source.page_ratio, "4:3");
+        assert_eq!(source.image_fit, "fill");
+        assert_eq!(output_path(&panel), "/tmp/captures/configured.pptx");
+
+        let mut config = AppConfig::default();
+        apply_output_to_config(&panel, &mut config);
+        assert_eq!(config.output_dir, "/tmp/captures/");
+        assert_eq!(config.output_filename, "configured.pptx");
+        assert_eq!(config.page_ratio, "4:3");
+        assert_eq!(config.image_fit, "fill");
+        assert!(!config.keep_previous);
     }
 }
