@@ -56,7 +56,6 @@ impl BlackFrameDetector {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -86,21 +85,30 @@ mod tests {
     fn test_all_black_is_black() {
         let detector = BlackFrameDetector::new(0.95);
         let frame = all_black_frame(100, 100);
-        assert!(detector.is_black(&frame), "All-black frame should be detected");
+        assert!(
+            detector.is_black(&frame),
+            "All-black frame should be detected"
+        );
     }
 
     #[test]
     fn test_all_white_is_not_black() {
         let detector = BlackFrameDetector::new(0.95);
         let frame = all_white_frame(100, 100);
-        assert!(!detector.is_black(&frame), "All-white frame should not be black");
+        assert!(
+            !detector.is_black(&frame),
+            "All-white frame should not be black"
+        );
     }
 
     #[test]
     fn test_low_threshold_detects_mixed() {
         let detector = BlackFrameDetector::new(0.40);
         let frame = mixed_frame(); // 50% black
-        assert!(detector.is_black(&frame), "Mixed 50% black should be detected with 40% threshold");
+        assert!(
+            detector.is_black(&frame),
+            "Mixed 50% black should be detected with 40% threshold"
+        );
     }
 
     #[test]
@@ -108,10 +116,11 @@ mod tests {
         let mut detector = BlackFrameDetector::new(0.95);
         detector.set_threshold(0.05);
         let frame = all_white_frame(10, 10);
-        assert!(!detector.is_black(&frame), "All-white frame should not be black even with 5% threshold");
+        assert!(
+            !detector.is_black(&frame),
+            "All-white frame should not be black even with 5% threshold"
+        );
     }
-
-
 
     /// 70% dark frame should not be flagged as black at 80% threshold.
     #[test]
@@ -123,7 +132,10 @@ mod tests {
             *byte = 255;
         }
         let frame = Frame::new(data, 100, 100, 400, 0, 0);
-        assert!(!detector.is_black(&frame), "70% dark should not be black at 80% threshold");
+        assert!(
+            !detector.is_black(&frame),
+            "70% dark should not be black at 80% threshold"
+        );
     }
 
     /// 1x1 pixel frames.

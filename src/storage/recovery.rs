@@ -2,9 +2,9 @@ use anyhow::Result;
 use log::{info, warn};
 use std::path::Path;
 
+use super::ManifestStore;
 use crate::model::SlideRecord;
 use crate::pptx::PptxWriter;
-use super::ManifestStore;
 
 /// Check if a previous session exists and has uncommitted work.
 pub fn detect_incomplete_session(output_dir: &Path) -> Result<Option<Vec<SlideRecord>>> {
@@ -54,7 +54,10 @@ pub fn recover_session(output_dir: &Path) -> Result<()> {
             pptx_writer.add_slide(record, &png_path)?;
             info!("Recovered slide {}", record.slide_number);
         } else {
-            warn!("Missing PNG for slide {}: {:?}", record.slide_number, png_path);
+            warn!(
+                "Missing PNG for slide {}: {:?}",
+                record.slide_number, png_path
+            );
         }
     }
 

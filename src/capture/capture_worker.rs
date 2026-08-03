@@ -5,11 +5,11 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use crossbeam_channel::{Sender};
+use crossbeam_channel::Sender;
 
 use crate::capture::capture_source::CaptureSource;
 use crate::capture::capture_state::CaptureState;
-use crate::detection::{ChangeDetector, StabilityDetector, DuplicateDetector, BlackFrameDetector};
+use crate::detection::{BlackFrameDetector, ChangeDetector, DuplicateDetector, StabilityDetector};
 use crate::model::{Frame, MonitorInfo};
 use crate::pptx::PptxWriter;
 use crate::storage::{ImageStore, ManifestStore};
@@ -28,14 +28,28 @@ pub enum WorkerCommand {
 #[derive(Debug, Clone)]
 pub enum WorkerEvent {
     StateChanged(CaptureState),
-    FrameCaptured { frame_index: u64, timestamp_ms: u64 },
-    ChangeDetected { frame_index: u64, diff_ratio: f64 },
-    FrameStable { frame_index: u64 },
-    SlideSaved { slide_number: u32, png_filename: String },
+    FrameCaptured {
+        frame_index: u64,
+        timestamp_ms: u64,
+    },
+    ChangeDetected {
+        frame_index: u64,
+        diff_ratio: f64,
+    },
+    FrameStable {
+        frame_index: u64,
+    },
+    SlideSaved {
+        slide_number: u32,
+        png_filename: String,
+    },
     MonitorLost(String),
     Error(String),
     TestFrame(Vec<u8>, u32, u32),
-    Progress { saved_count: u32, current_state: CaptureState },
+    Progress {
+        saved_count: u32,
+        current_state: CaptureState,
+    },
     BlackFrameDetected,
     ProtectedContent,
 }
@@ -173,11 +187,14 @@ impl WorkerLoop {
                             warn!("DXGI lost, pausing capture");
                             self.state = CaptureState::Paused;
                             let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
-                        } else if msg.contains("No capturer initialized") && capture_backend_unavailable_message().is_some() {
+                        } else if msg.contains("No capturer initialized")
+                            && capture_backend_unavailable_message().is_some()
+                        {
                             warn!("Capture not available on this platform. PPTX test mode.");
                             self.state = CaptureState::Idle;
                             let _ = self.event_tx.send(WorkerEvent::Error(
-                                capture_backend_unavailable_message().unwrap().into()));
+                                capture_backend_unavailable_message().unwrap().into(),
+                            ));
                         } else {
                             self.state = CaptureState::Error;
                             let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
@@ -224,11 +241,16 @@ impl WorkerLoop {
                             let mut window_client_h = 0u32;
                             if source.window_hwnd != 0 {
                                 // Use client rect for accurate content capture (excludes title bar, borders, shadow)
-                                if let Ok(window_rect) = crate::windows::get_client_window_rect(source.window_hwnd) {
+                                if let Ok(window_rect) =
+                                    crate::windows::get_client_window_rect(source.window_hwnd)
+                                {
                                     // Validate window rect - skip if off-screen or too small
-                                    if window_rect.width > 10 && window_rect.height > 10
-                                        && window_rect.x > -32000 && window_rect.y > -32000
-                                        && window_rect.x < 50000 && window_rect.y < 50000
+                                    if window_rect.width > 10
+                                        && window_rect.height > 10
+                                        && window_rect.x > -32000
+                                        && window_rect.y > -32000
+                                        && window_rect.x < 50000
+                                        && window_rect.y < 50000
                                     {
                                         let rx = mon.region.x.max(window_rect.x);
                                         // Save client dims for PrintWindow-based capture (RDP compatible)
@@ -242,9 +264,15 @@ impl WorkerLoop {
                                         if rr > rx && rb > ry {
                                             let new_w = (rr - rx) as u32;
                                             let new_h = (rb - ry) as u32;
-                                            mon.region = crate::model::Region::new(rx, ry, new_w, new_h);
-                                            log::info!("Capture clipped to window: {}x{} @ ({},{})",
-                                                new_w, new_h, rx, ry);
+                                            mon.region =
+                                                crate::model::Region::new(rx, ry, new_w, new_h);
+                                            log::info!(
+                                                "Capture clipped to window: {}x{} @ ({},{})",
+                                                new_w,
+                                                new_h,
+                                                rx,
+                                                ry
+                                            );
                                         } else {
                                             log::warn!("Window is outside monitor bounds, capturing full monitor");
                                         }
@@ -259,9 +287,19 @@ impl WorkerLoop {
                                     Err(e) => {
                                         warn!("DXGI init failed ({}), falling back to GDI", e);
                                         match self.gdi_capturer.initialize(&mon) {
-                                            Ok(()) => { info!("GDI capturer initialized (fallback)"); self.gdi_capturer.set_window_hwnd(source.window_hwnd, window_client_w, window_client_h); },
+                                            Ok(()) => {
+                                                info!("GDI capturer initialized (fallback)");
+                                                self.gdi_capturer.set_window_hwnd(
+                                                    source.window_hwnd,
+                                                    window_client_w,
+                                                    window_client_h,
+                                                );
+                                            }
                                             Err(e2) => {
-                                                let msg = format!("Both DXGI and GDI failed: {} / {}", e, e2);
+                                                let msg = format!(
+                                                    "Both DXGI and GDI failed: {} / {}",
+                                                    e, e2
+                                                );
                                                 error!("{}", msg);
                                                 self.state = CaptureState::Error;
                                                 let _ = self.event_tx.send(WorkerEvent::Error(msg));
@@ -272,7 +310,14 @@ impl WorkerLoop {
                                 }
                             } else {
                                 match self.gdi_capturer.initialize(&mon) {
-                                    Ok(()) => { info!("GDI capturer initialized"); self.gdi_capturer.set_window_hwnd(source.window_hwnd, window_client_w, window_client_h); },
+                                    Ok(()) => {
+                                        info!("GDI capturer initialized");
+                                        self.gdi_capturer.set_window_hwnd(
+                                            source.window_hwnd,
+                                            window_client_w,
+                                            window_client_h,
+                                        );
+                                    }
                                     Err(e) => {
                                         let msg = format!("GDI init failed: {}", e);
                                         error!("{}", msg);
@@ -287,7 +332,8 @@ impl WorkerLoop {
                             let image_store = match ImageStore::new(out_dir.clone()) {
                                 Ok(store) => store,
                                 Err(e) => {
-                                    let msg = format!("Failed to initialize output directory: {}", e);
+                                    let msg =
+                                        format!("Failed to initialize output directory: {}", e);
                                     error!("{}", msg);
                                     self.state = CaptureState::Error;
                                     let _ = self.event_tx.send(WorkerEvent::Error(msg));
@@ -295,8 +341,13 @@ impl WorkerLoop {
                                 }
                             };
                             self.image_store = Some(image_store);
-                            self.manifest_store = Some(ManifestStore::new(out_dir.join("manifest.jsonl")));
-                            self.pptx_writer = Some(PptxWriter::new(&out_dir.join(&source.output_filename), &source.page_ratio, &source.image_fit));
+                            self.manifest_store =
+                                Some(ManifestStore::new(out_dir.join("manifest.jsonl")));
+                            self.pptx_writer = Some(PptxWriter::new(
+                                &out_dir.join(&source.output_filename),
+                                &source.page_ratio,
+                                &source.image_fit,
+                            ));
 
                             let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
                         }
@@ -347,9 +398,12 @@ impl WorkerLoop {
                 WorkerCommand::UpdateConfig(cfg) => {
                     info!("Updating capture config");
                     self.config = cfg;
-                    self.change_detector.set_threshold(self.config.change_threshold);
-                    self.stability_detector.set_required_stable(self.config.stability_frames);
-                    self.black_frame_detector.set_threshold(self.config.black_threshold);
+                    self.change_detector
+                        .set_threshold(self.config.change_threshold);
+                    self.stability_detector
+                        .set_required_stable(self.config.stability_frames);
+                    self.black_frame_detector
+                        .set_threshold(self.config.black_threshold);
                 }
                 WorkerCommand::TestCapture(source) => {
                     info!("Test capture requested");
@@ -357,9 +411,13 @@ impl WorkerLoop {
                     // Also clip to window for test capture
                     if let Ok(ref mut mon) = monitor {
                         if source.window_hwnd != 0 {
-                            if let Ok(window_rect) = crate::windows::get_client_window_rect(source.window_hwnd) {
-                                if window_rect.width > 10 && window_rect.height > 10
-                                    && window_rect.x > -32000 && window_rect.y > -32000
+                            if let Ok(window_rect) =
+                                crate::windows::get_client_window_rect(source.window_hwnd)
+                            {
+                                if window_rect.width > 10
+                                    && window_rect.height > 10
+                                    && window_rect.x > -32000
+                                    && window_rect.y > -32000
                                 {
                                     let rx = mon.region.x.max(window_rect.x);
                                     let ry = mon.region.y.max(window_rect.y);
@@ -368,8 +426,17 @@ impl WorkerLoop {
                                     let rb = (mon.region.y + mon.region.height as i32)
                                         .min(window_rect.y + window_rect.height as i32);
                                     if rr > rx && rb > ry {
-                                        mon.region = crate::model::Region::new(rx, ry, (rr - rx) as u32, (rb - ry) as u32);
-                                        log::info!("Test capture clipped to window: {}x{}", mon.region.width, mon.region.height);
+                                        mon.region = crate::model::Region::new(
+                                            rx,
+                                            ry,
+                                            (rr - rx) as u32,
+                                            (rb - ry) as u32,
+                                        );
+                                        log::info!(
+                                            "Test capture clipped to window: {}x{}",
+                                            mon.region.width,
+                                            mon.region.height
+                                        );
                                     }
                                 }
                             }
@@ -385,17 +452,22 @@ impl WorkerLoop {
                                         match test_gdi.capture_frame() {
                                             Ok(frame) => {
                                                 let thumb = frame.thumbnail(320, 240);
-                                                let _ = self.event_tx.send(WorkerEvent::TestFrame(thumb, 320, 240));
+                                                let _ = self
+                                                    .event_tx
+                                                    .send(WorkerEvent::TestFrame(thumb, 320, 240));
                                             }
                                             Err(e) => {
                                                 let _ = self.event_tx.send(WorkerEvent::Error(
-                                                    format!("Test window capture failed: {}", e)));
+                                                    format!("Test window capture failed: {}", e),
+                                                ));
                                             }
                                         }
                                     }
                                     Err(e) => {
-                                        let _ = self.event_tx.send(WorkerEvent::Error(
-                                            format!("Test window capture init failed: {}", e)));
+                                        let _ = self.event_tx.send(WorkerEvent::Error(format!(
+                                            "Test window capture init failed: {}",
+                                            e
+                                        )));
                                     }
                                 }
                                 continue;
@@ -407,10 +479,14 @@ impl WorkerLoop {
                                     match test_dxgi.capture_frame(2000) {
                                         Ok(Some(frame)) => {
                                             let thumb = frame.thumbnail(320, 240);
-                                            let _ = self.event_tx.send(WorkerEvent::TestFrame(thumb, 320, 240));
+                                            let _ = self
+                                                .event_tx
+                                                .send(WorkerEvent::TestFrame(thumb, 320, 240));
                                         }
                                         Ok(None) => {
-                                            let _ = self.event_tx.send(WorkerEvent::Error("Test capture timed out".into()));
+                                            let _ = self.event_tx.send(WorkerEvent::Error(
+                                                "Test capture timed out".into(),
+                                            ));
                                         }
                                         Err(e) => {
                                             info!("DXGI test failed ({}), trying GDI", e);
@@ -418,7 +494,9 @@ impl WorkerLoop {
                                             if test_gdi.initialize(&mon).is_ok() {
                                                 if let Ok(frame) = test_gdi.capture_frame() {
                                                     let thumb = frame.thumbnail(320, 240);
-                                                    let _ = self.event_tx.send(WorkerEvent::TestFrame(thumb, 320, 240));
+                                                    let _ = self.event_tx.send(
+                                                        WorkerEvent::TestFrame(thumb, 320, 240),
+                                                    );
                                                 }
                                             }
                                         }
@@ -426,12 +504,17 @@ impl WorkerLoop {
                                     test_dxgi.release();
                                 }
                                 Err(e) => {
-                                    let _ = self.event_tx.send(WorkerEvent::Error(format!("Test capture init failed: {}", e)));
+                                    let _ = self.event_tx.send(WorkerEvent::Error(format!(
+                                        "Test capture init failed: {}",
+                                        e
+                                    )));
                                 }
                             }
                         }
                         Err(e) => {
-                            let _ = self.event_tx.send(WorkerEvent::Error(format!("Monitor lookup failed: {}", e)));
+                            let _ = self
+                                .event_tx
+                                .send(WorkerEvent::Error(format!("Monitor lookup failed: {}", e)));
                         }
                     }
                 }
@@ -441,12 +524,15 @@ impl WorkerLoop {
 
     fn do_capture_cycle(&mut self) -> Result<()> {
         let frame = if self.dxgi_capturer.is_initialized() {
-            match self.dxgi_capturer.capture_frame(self.config.sample_interval_ms as u32)? {
+            match self
+                .dxgi_capturer
+                .capture_frame(self.config.sample_interval_ms as u32)?
+            {
                 Some(f) => f,
                 None => return Ok(()),
             }
         } else if self.gdi_capturer.is_initialized() {
-self.gdi_capturer.capture_frame()?
+            self.gdi_capturer.capture_frame()?
         } else {
             return Err(anyhow::anyhow!("No capturer initialized"));
         };
@@ -472,7 +558,10 @@ self.gdi_capturer.capture_frame()?
             self.change_detector.update_reference(&frame);
             if let Err(e) = self.save_frame(&frame) {
                 error!("Failed to save frame after black recovery: {}", e);
-                let _ = self.event_tx.send(WorkerEvent::Error(format!("Black-recovery save failed: {}", e)));
+                let _ = self.event_tx.send(WorkerEvent::Error(format!(
+                    "Black-recovery save failed: {}",
+                    e
+                )));
             }
             return Ok(());
         }
@@ -484,11 +573,14 @@ self.gdi_capturer.capture_frame()?
             self.change_detector.update_reference(&frame);
             if let Err(e) = self.save_frame(&frame) {
                 error!("Failed to save first frame: {}", e);
-                let _ = self.event_tx.send(WorkerEvent::Error(format!("First frame save failed: {}", e)));
+                let _ = self.event_tx.send(WorkerEvent::Error(format!(
+                    "First frame save failed: {}",
+                    e
+                )));
             }
             // Still continue with normal detection after the first save
         }
-        
+
         let (changed, diff_ratio) = self.change_detector.detect_change(&frame);
         let _ = self.event_tx.send(WorkerEvent::FrameCaptured {
             frame_index: frame.frame_index,
@@ -515,7 +607,8 @@ self.gdi_capturer.capture_frame()?
                 // Fallback: save the change detector's reference frame (last known good frame).
                 // This catches the case where stability was just reset (stable_count = 0).
                 if !saved {
-                    if let Some(ref ref_frame) = self.change_detector.get_reference_frame().cloned() {
+                    if let Some(ref ref_frame) = self.change_detector.get_reference_frame().cloned()
+                    {
                         log::info!("Saving reference frame as fallback before rapid transition");
                         if let Err(e) = self.save_frame(ref_frame) {
                             error!("Failed to save reference frame: {}", e);
@@ -535,7 +628,8 @@ self.gdi_capturer.capture_frame()?
 
         if self.state == CaptureState::WaitingForStable {
             let is_stable = self.stability_detector.check_stable(&frame);
-            let timed_out = self.animation_timer
+            let timed_out = self
+                .animation_timer
                 .map(|t| t.elapsed() >= Duration::from_millis(self.config.animation_timeout_ms))
                 .unwrap_or(false);
 
@@ -548,7 +642,9 @@ self.gdi_capturer.capture_frame()?
 
                 if let Err(e) = self.save_frame(&frame) {
                     error!("Failed to save frame: {}", e);
-                    let _ = self.event_tx.send(WorkerEvent::Error(format!("Save failed: {}", e)));
+                    let _ = self
+                        .event_tx
+                        .send(WorkerEvent::Error(format!("Save failed: {}", e)));
                 }
 
                 self.state = CaptureState::Running;
@@ -581,10 +677,14 @@ self.gdi_capturer.capture_frame()?
         let png_filename = format!("slide_{:04}.png", slide_number);
         let png_relative = format!("slides/{}", png_filename);
 
-        let source_name = self.source.as_ref()
+        let source_name = self
+            .source
+            .as_ref()
             .map(|s| s.window_title.clone())
             .unwrap_or_default();
-        let monitor_name = self.source.as_ref()
+        let monitor_name = self
+            .source
+            .as_ref()
             .map(|s| s.monitor_description.clone())
             .unwrap_or_default();
 
@@ -600,7 +700,10 @@ self.gdi_capturer.capture_frame()?
             monitor_name,
         );
 
-        let image_store = self.image_store.as_ref().context("Image store not initialized")?;
+        let image_store = self
+            .image_store
+            .as_ref()
+            .context("Image store not initialized")?;
         let png_path = image_store.save_png(frame, slide_number)?;
 
         if let Some(ref manifest_store) = self.manifest_store {
@@ -626,7 +729,8 @@ self.gdi_capturer.capture_frame()?
 
     fn create_monitor_info_for_source(&self, source: &CaptureSource) -> Result<MonitorInfo> {
         let monitors = crate::windows::enumerate_monitors()?;
-        let mon = monitors.into_iter()
+        let mon = monitors
+            .into_iter()
             .find(|m| m.hmonitor == source.monitor_hmonitor)
             .ok_or_else(|| anyhow::anyhow!("Monitor {} not found", source.monitor_hmonitor))?;
         Ok(mon)

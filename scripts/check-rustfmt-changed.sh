@@ -42,4 +42,4 @@ fi
 
 printf 'Checking Rust formatting for:\n'
 printf '  %s\n' "${rust_files[@]}"
-rustfmt --edition 2021 --check "${rust_files[@]}"
+rustfmt --edition 2021 --config skip_children=true --check "${rust_files[@]}"

@@ -13,7 +13,14 @@ pub struct Frame {
 }
 
 impl Frame {
-    pub fn new(data: Vec<u8>, width: u32, height: u32, stride: u32, frame_index: u64, timestamp_ms: u64) -> Self {
+    pub fn new(
+        data: Vec<u8>,
+        width: u32,
+        height: u32,
+        stride: u32,
+        frame_index: u64,
+        timestamp_ms: u64,
+    ) -> Self {
         let region = Region::new(0, 0, width, height);
         Self {
             data,
@@ -70,7 +77,6 @@ impl Frame {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -82,10 +88,10 @@ mod tests {
         for y in 0..h {
             for x in 0..w {
                 let idx = (y * stride + x * 4) as usize;
-                data[idx] = b_val;     // B
-                data[idx+1] = g_val;   // G
-                data[idx+2] = r_val;   // R
-                data[idx+3] = 255;     // A
+                data[idx] = b_val; // B
+                data[idx + 1] = g_val; // G
+                data[idx + 2] = r_val; // R
+                data[idx + 3] = 255; // A
             }
         }
         Frame::new(data, w, h, stride, 1, 1000)
@@ -135,12 +141,10 @@ mod tests {
         assert_eq!(thumb.len(), 800, "Expected 20x10x4 = 800 bytes");
     }
 
-
-
     #[test]
     fn test_frame_clone_preserves_pixel_data() {
-        let mut data = vec![0u8; 4 * 4 * 4];  // 4x4 RGBA
-        // Set each pixel to a unique value
+        let mut data = vec![0u8; 4 * 4 * 4]; // 4x4 RGBA
+                                             // Set each pixel to a unique value
         for (i, byte) in data.iter_mut().enumerate() {
             *byte = (i % 256) as u8;
         }
@@ -159,10 +163,10 @@ mod tests {
         for y in 25..75 {
             for x in 25..75 {
                 let idx = (y * 400 + x * 4) as usize;
-                data[idx] = 0;     // B
-                data[idx+1] = 0;   // G
-                data[idx+2] = 255; // R
-                data[idx+3] = 255; // A
+                data[idx] = 0; // B
+                data[idx + 1] = 0; // G
+                data[idx + 2] = 255; // R
+                data[idx + 3] = 255; // A
             }
         }
         let f = Frame::new(data, 100, 100, 400, 1, 1000);
@@ -181,8 +185,6 @@ mod tests {
         assert_eq!(thumb.len(), 400, "Should not upscale");
     }
 
-
-
     /// All-zero frame.
     #[test]
     fn test_empty_frame_all_zero() {
@@ -195,13 +197,17 @@ mod tests {
     /// Frame with padded stride.
     #[test]
     fn test_frame_padded_stride() {
-        let stride = 28; let w = 6; let h = 5;
+        let stride = 28;
+        let w = 6;
+        let h = 5;
         let mut data = vec![0u8; (stride * h) as usize];
         for y in 0..h {
             for x in 0..w {
                 let off = (y * stride + x * 4) as usize;
-                data[off] = (x * 255 / w) as u8; data[off+1] = (y * 255 / h) as u8;
-                data[off+2] = 128; data[off+3] = 255;
+                data[off] = (x * 255 / w) as u8;
+                data[off + 1] = (y * 255 / h) as u8;
+                data[off + 2] = 128;
+                data[off + 3] = 255;
             }
         }
         let f = Frame::new(data, w, h, stride, 0, 0);

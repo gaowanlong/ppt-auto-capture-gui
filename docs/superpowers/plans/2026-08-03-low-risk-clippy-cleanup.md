@@ -253,6 +253,10 @@ git commit -m "test: remove mechanical Clippy warnings"
 - Consumes: `scripts/check-clippy-baseline.sh` structured Cargo JSON counter.
 - Produces: a lower Linux warning ceiling enforced by CI and release preflight.
 
+- [ ] **Step 0: Correct changed-file rustfmt recursion**
+
+Extend `tests/test_changed_rustfmt.sh` with a formatted `main.rs` that declares an unformatted `child.rs`, list only `main.rs` through `CHANGED_RUST_FILES`, and verify the old checker fails. Then pass `--config skip_children=true` from `scripts/check-rustfmt-changed.sh` so only explicitly selected files are checked. Run `bash tests/test_changed_rustfmt.sh` and expect all formatting-gate cases to pass.
+
 - [ ] **Step 1: Measure the fresh local result**
 
 Run:

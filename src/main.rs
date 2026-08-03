@@ -11,11 +11,11 @@ use eframe::egui;
 use log::info;
 
 mod app;
-mod config;
-mod i18n;
 mod capture;
+mod config;
 mod detection;
 mod gui;
+mod i18n;
 mod model;
 mod pptx;
 mod storage;
@@ -33,15 +33,15 @@ fn main() -> Result<(), eframe::Error> {
         extern "system" {
             fn SetProcessDPIAware() -> i32;
         }
-        { let _ = unsafe { SetProcessDPIAware() }; }
+        {
+            let _ = unsafe { SetProcessDPIAware() };
+        }
     }
 
     // Initialize logging
-    env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("info")
-    )
-    .format_timestamp_millis()
-    .init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .format_timestamp_millis()
+        .init();
 
     info!("PPT Auto Capture GUI starting...");
 
@@ -89,8 +89,14 @@ fn setup_cjk_fonts(ctx: &egui::Context) {
     for (i, path) in font_list.iter().enumerate() {
         if let Ok(data) = std::fs::read(path) {
             let name = format!("cjk_{}", i);
-            fonts.font_data.insert(name.clone(), egui::FontData::from_owned(data).into());
-            fonts.families.entry(egui::FontFamily::Proportional).or_default().insert(0, name);
+            fonts
+                .font_data
+                .insert(name.clone(), egui::FontData::from_owned(data).into());
+            fonts
+                .families
+                .entry(egui::FontFamily::Proportional)
+                .or_default()
+                .insert(0, name);
         }
     }
     ctx.set_fonts(fonts);

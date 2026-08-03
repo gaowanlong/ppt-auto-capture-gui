@@ -1,8 +1,8 @@
 //! Detects duplicate slides (same content as previously saved).
 //! Uses a SHA256 hash of the pixel data.
 
-use sha2::{Sha256, Digest};
 use crate::model::Frame;
+use sha2::{Digest, Sha256};
 
 pub struct DuplicateDetector {
     /// SHA256 hash of the last saved slide
@@ -54,7 +54,6 @@ impl DuplicateDetector {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -80,7 +79,10 @@ mod tests {
         let f = make_frame(&[100u8; 400], 10, 10);
         let hash = detector.compute_hash(&f);
         detector.update_last(hash.clone());
-        assert!(detector.is_duplicate(&hash), "Same hash should be duplicate");
+        assert!(
+            detector.is_duplicate(&hash),
+            "Same hash should be duplicate"
+        );
     }
 
     #[test]
@@ -93,7 +95,10 @@ mod tests {
         // Frame 2 (different data)
         let f2 = make_frame(&[200u8; 400], 10, 10);
         let h2 = detector.compute_hash(&f2);
-        assert!(!detector.is_duplicate(&h2), "Different hash should not be duplicate");
+        assert!(
+            !detector.is_duplicate(&h2),
+            "Different hash should not be duplicate"
+        );
     }
 
     #[test]

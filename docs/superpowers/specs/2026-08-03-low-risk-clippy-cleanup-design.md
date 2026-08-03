@@ -28,6 +28,8 @@ Warnings will be handled in small groups by lint category. Before each group, th
 
 Conditional compilation will be preferred over underscore renaming when a symbol is genuinely platform-specific. Test-only warnings will be corrected in test code without weakening assertions. Existing `allow` attributes will not be broadened.
 
+The changed-file rustfmt gate must check only the paths explicitly selected by Git. A changed crate root must not cause rustfmt to recurse into unchanged modules; the checker will use `skip_children=true`, backed by a module-tree regression fixture.
+
 ## Quality gates
 
 The existing Clippy baseline script remains the source of truth. After local tests pass, GitHub CI supplies the authoritative Linux warning count. `.clippy-warning-baseline` will be reduced to that count, never increased as part of this cleanup.

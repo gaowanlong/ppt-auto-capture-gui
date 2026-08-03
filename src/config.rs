@@ -1,7 +1,7 @@
 //! Application configuration, persisted to disk as JSON.
 
-use anyhow::{Context, Result};
 use crate::i18n::Language;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -52,7 +52,10 @@ impl Default for AppConfig {
             black_threshold: 0.80,
             filter_duplicates: true,
             output_dir: "output".to_string(),
-            output_filename: format!("ppt-capture-{}.pptx", chrono::Local::now().format("%Y%m%d-%H%M%S")),
+            output_filename: format!(
+                "ppt-capture-{}.pptx",
+                chrono::Local::now().format("%Y%m%d-%H%M%S")
+            ),
             page_ratio: "16:9".to_string(),
             image_fit: "fit".to_string(),
             keep_previous: true,
@@ -75,22 +78,22 @@ impl AppConfig {
         let path = Path::new(Self::CONFIG_FILE);
         if path.exists() {
             match std::fs::read_to_string(path) {
-                Ok(content) => {
-                    match serde_json::from_str::<Self>(&content) {
-                        Ok(mut config) => {
-                            config.output_dir = platform_output_dir(&config.output_dir);
-                            return config;
-                        }
-                        Err(e) => log::warn!("Failed to parse config file: {}", e),
+                Ok(content) => match serde_json::from_str::<Self>(&content) {
+                    Ok(mut config) => {
+                        config.output_dir = platform_output_dir(&config.output_dir);
+                        return config;
                     }
-                }
+                    Err(e) => log::warn!("Failed to parse config file: {}", e),
+                },
                 Err(e) => log::warn!("Failed to read config file: {}", e),
             }
         }
         let mut cfg = Self::default();
         // Generate a fresh timestamp-based filename on first run
-        cfg.output_filename = format!("ppt-capture-{}.pptx",
-            chrono::Local::now().format("%Y%m%d-%H%M%S"));
+        cfg.output_filename = format!(
+            "ppt-capture-{}.pptx",
+            chrono::Local::now().format("%Y%m%d-%H%M%S")
+        );
         cfg.output_dir = platform_output_dir(&cfg.output_dir);
         cfg
     }
@@ -98,10 +101,8 @@ impl AppConfig {
     /// Save config to default location.
     pub fn save(&self) -> Result<()> {
         let path = Path::new(Self::CONFIG_FILE);
-        let content = serde_json::to_string_pretty(self)
-            .context("Failed to serialize config")?;
-        std::fs::write(path, content)
-            .context("Failed to write config file")?;
+        let content = serde_json::to_string_pretty(self).context("Failed to serialize config")?;
+        std::fs::write(path, content).context("Failed to write config file")?;
         Ok(())
     }
 }
@@ -135,7 +136,6 @@ fn resolve_output_dir(path: &Path, home: Option<&Path>, is_macos: bool) -> PathB
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,11 +165,8 @@ mod tests {
 
     #[test]
     fn macos_default_output_is_in_the_users_documents_directory() {
-        let resolved = resolve_output_dir(
-            Path::new("output"),
-            Some(Path::new("/Users/tester")),
-            true,
-        );
+        let resolved =
+            resolve_output_dir(Path::new("output"), Some(Path::new("/Users/tester")), true);
         assert_eq!(
             resolved,
             Path::new("/Users/tester/Documents/PPT Auto Capture")

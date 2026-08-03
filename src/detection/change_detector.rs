@@ -96,7 +96,6 @@ impl ChangeDetector {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,7 +110,10 @@ mod tests {
         for y in 0..h {
             for x in 0..w {
                 let i = (y * w * 4 + x * 4) as usize;
-                data[i] = b; data[i+1] = g; data[i+2] = r; data[i+3] = 255;
+                data[i] = b;
+                data[i + 1] = g;
+                data[i + 2] = r;
+                data[i + 3] = 255;
             }
         }
         Frame::new(data, w, h, w * 4, 0, 0)
@@ -152,7 +154,10 @@ mod tests {
         for i in 0..1000 {
             let idx = (i * 4) as usize;
             if idx < data.len() {
-                data[idx] = 255; data[idx+1] = 255; data[idx+2] = 255; data[idx+3] = 255;
+                data[idx] = 255;
+                data[idx + 1] = 255;
+                data[idx + 2] = 255;
+                data[idx + 3] = 255;
             }
         }
         let f2 = Frame::new(data, 100, 100, 400, 0, 0);
@@ -160,7 +165,10 @@ mod tests {
         detector.update_reference(&f1);
         let (changed, _) = detector.detect_change(&f2);
         // 10% change should be below 50% threshold
-        assert!(!changed, "Small change should be filtered by high threshold");
+        assert!(
+            !changed,
+            "Small change should be filtered by high threshold"
+        );
     }
 
     #[test]
@@ -174,8 +182,6 @@ mod tests {
         let (changed, _) = detector.detect_change(&f);
         assert!(!changed, "After reset, first frame sets reference");
     }
-
-
 
     /// Simulate a PPT slide change: old slide → black transition → new slide.
     /// Verifies the full change + stability pipeline.
@@ -197,27 +203,48 @@ mod tests {
         // Phase 1: Slide 1 displayed, no changes
         let (changed, _) = change_det.detect_change(&slide1);
         change_det.update_reference(&slide1);
-        assert!(!changed, "First frame should set reference, not detect change");
+        assert!(
+            !changed,
+            "First frame should set reference, not detect change"
+        );
 
         // Phase 2: Black transition frame
         let (changed, _) = change_det.detect_change(&black_frame);
         change_det.update_reference(&black_frame);
-        assert!(changed, "Black frame should be detected as change from slide1");
+        assert!(
+            changed,
+            "Black frame should be detected as change from slide1"
+        );
 
         // Phase 3: Slide 2 appears (like a new slide after transition)
         let (changed, _) = change_det.detect_change(&slide2);
         change_det.update_reference(&slide2);
-        assert!(changed, "Slide 2 should be detected as change from black frame");
+        assert!(
+            changed,
+            "Slide 2 should be detected as change from black frame"
+        );
 
         // Phase 4: Stability check — Slide 2 stabilizes
-        assert!(!stable_det.check_stable(&slide2), "First stable check sets reference");
-        assert!(!stable_det.check_stable(&slide2), "Second check: stable_count=1");
-        assert!(stable_det.check_stable(&slide2), "Third check: stable_count=2 => stable!");
+        assert!(
+            !stable_det.check_stable(&slide2),
+            "First stable check sets reference"
+        );
+        assert!(
+            !stable_det.check_stable(&slide2),
+            "Second check: stable_count=1"
+        );
+        assert!(
+            stable_det.check_stable(&slide2),
+            "Third check: stable_count=2 => stable!"
+        );
 
         // Phase 5: After stability, no more changes detected for same content
         change_det.update_reference(&slide2);
         let (changed, _) = change_det.detect_change(&slide2);
-        assert!(!changed, "Same slide should not trigger change after reference update");
+        assert!(
+            !changed,
+            "Same slide should not trigger change after reference update"
+        );
     }
     #[test]
     fn test_set_threshold() {
@@ -230,8 +257,6 @@ mod tests {
         let (changed, _) = detector.detect_change(&f2);
         assert!(changed, "100% pixel change should exceed 90% threshold");
     }
-
-
 
     /// Simulates the full capture cycle: old slide → change detected →
     /// wait for stability → new slide stabilizes → confirmed by no further changes.
@@ -255,9 +280,15 @@ mod tests {
         change_det.update_reference(&slide2);
         assert!(changed, "New slide should trigger change");
 
-        assert!(!stable_det.check_stable(&slide2), "First stable check sets ref");
+        assert!(
+            !stable_det.check_stable(&slide2),
+            "First stable check sets ref"
+        );
         assert!(!stable_det.check_stable(&slide2), "Second: stable_count=1");
-        assert!(stable_det.check_stable(&slide2), "Third: stable_count=2 => stable!");
+        assert!(
+            stable_det.check_stable(&slide2),
+            "Third: stable_count=2 => stable!"
+        );
 
         let (changed, _) = change_det.detect_change(&slide2);
         change_det.update_reference(&slide2);
@@ -282,9 +313,9 @@ mod tests {
         for i in 1..n {
             // Use colors with high luminance contrast (not just hue shift)
             let new_slide = if i % 2 == 0 {
-                solid_frame(255, 255, 255, 100, 100)  // white
+                solid_frame(255, 255, 255, 100, 100) // white
             } else {
-                solid_frame(0, 0, 0, 100, 100)        // black
+                solid_frame(0, 0, 0, 100, 100) // black
             };
             let (changed, _) = change_det.detect_change(&new_slide);
             change_det.update_reference(&new_slide);
@@ -295,7 +326,11 @@ mod tests {
             assert!(stable_det.check_stable(&new_slide));
             let (changed, _) = change_det.detect_change(&new_slide);
             change_det.update_reference(&new_slide);
-            assert!(!changed, "Slide {} should be stable after stabilization", i + 1);
+            assert!(
+                !changed,
+                "Slide {} should be stable after stabilization",
+                i + 1
+            );
             saved += 1;
         }
         assert_eq!(saved, n, "All {} slides should be captured", n);
@@ -308,8 +343,10 @@ mod tests {
         let mut stable_det = StabilityDetector::new(2);
         let a = solid_frame(255, 0, 0, 50, 50);
         let b = solid_frame(0, 255, 0, 50, 50);
-        assert!(!stable_det.check_stable(&a)); assert!(!stable_det.check_stable(&b));
-        assert!(!stable_det.check_stable(&a)); assert!(!stable_det.check_stable(&b));
+        assert!(!stable_det.check_stable(&a));
+        assert!(!stable_det.check_stable(&b));
+        assert!(!stable_det.check_stable(&a));
+        assert!(!stable_det.check_stable(&b));
     }
 
     /// Dimension change triggers detection at 1.0 diff.

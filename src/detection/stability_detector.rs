@@ -104,7 +104,6 @@ impl StabilityDetector {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,7 +114,10 @@ mod tests {
         for y in 0..4 {
             for x in 0..4 {
                 let i = (y * 16 + x * 4) as usize;
-                data[i] = b; data[i+1] = g; data[i+2] = r; data[i+3] = 255;
+                data[i] = b;
+                data[i + 1] = g;
+                data[i + 2] = r;
+                data[i + 3] = 255;
             }
         }
         Frame::new(data, 4, 4, 16, 0, 0)
@@ -138,23 +140,26 @@ mod tests {
         assert!(!detector.check_stable(&f));
         assert!(!detector.check_stable(&f));
         // 6th frame → stable_count = 5
-        assert!(detector.check_stable(&f), "Should be stable after 5 identical frames");
+        assert!(
+            detector.check_stable(&f),
+            "Should be stable after 5 identical frames"
+        );
     }
 
     #[test]
     fn test_different_frame_resets_counter() {
         let mut detector = StabilityDetector::new(3);
         let f1 = solid_frame(100, 100, 100);
-        assert!(!detector.check_stable(&f1));  // sets ref
-        assert!(!detector.check_stable(&f1));  // stable=1
-        // Different frame resets counter
+        assert!(!detector.check_stable(&f1)); // sets ref
+        assert!(!detector.check_stable(&f1)); // stable=1
+                                              // Different frame resets counter
         let f2 = different_frame();
-        assert!(!detector.check_stable(&f2));  // f2 != ref, counter=0
-        // After reset, first f1 call sets new ref, then 3 more for stable_count >= 3
-        assert!(!detector.check_stable(&f1));  // sets ref to f1, no compare
-        assert!(!detector.check_stable(&f1));  // stable=1
-        assert!(!detector.check_stable(&f1));  // stable=2
-        assert!(detector.check_stable(&f1));   // stable=3
+        assert!(!detector.check_stable(&f2)); // f2 != ref, counter=0
+                                              // After reset, first f1 call sets new ref, then 3 more for stable_count >= 3
+        assert!(!detector.check_stable(&f1)); // sets ref to f1, no compare
+        assert!(!detector.check_stable(&f1)); // stable=1
+        assert!(!detector.check_stable(&f1)); // stable=2
+        assert!(detector.check_stable(&f1)); // stable=3
     }
 
     #[test]
@@ -162,26 +167,29 @@ mod tests {
         let mut detector = StabilityDetector::new(10);
         detector.set_required_stable(2);
         let f = solid_frame(50, 100, 150);
-        assert!(!detector.check_stable(&f));  // sets ref
-        assert!(!detector.check_stable(&f));  // stable=1
-        assert!(detector.check_stable(&f),   // stable=2
-            "Should be stable after 3 calls (1st sets ref, 2 more = stable=2)");
+        assert!(!detector.check_stable(&f)); // sets ref
+        assert!(!detector.check_stable(&f)); // stable=1
+        assert!(
+            detector.check_stable(&f), // stable=2
+            "Should be stable after 3 calls (1st sets ref, 2 more = stable=2)"
+        );
     }
 
     #[test]
     fn test_reset() {
         let mut detector = StabilityDetector::new(3);
         let f = solid_frame(100, 100, 100);
-        detector.check_stable(&f);  // sets ref
-        detector.check_stable(&f);  // stable=1
+        detector.check_stable(&f); // sets ref
+        detector.check_stable(&f); // stable=1
         detector.reset();
-        assert!(!detector.check_stable(&f), "Reset clears ref, first call sets new ref");
-        assert!(!detector.check_stable(&f));  // stable=1
-        assert!(!detector.check_stable(&f));  // stable=2
-        assert!(detector.check_stable(&f));   // stable=3
+        assert!(
+            !detector.check_stable(&f),
+            "Reset clears ref, first call sets new ref"
+        );
+        assert!(!detector.check_stable(&f)); // stable=1
+        assert!(!detector.check_stable(&f)); // stable=2
+        assert!(detector.check_stable(&f)); // stable=3
     }
-
-
 
     #[test]
     fn test_stability_resets_on_dimension_change() {
@@ -192,7 +200,10 @@ mod tests {
         // Frame with different dimensions triggers reset
         let data = vec![100u8; 8 * 8 * 4];
         let f2 = Frame::new(data, 8, 8, 32, 0, 0);
-        assert!(!detector.check_stable(&f2), "Dimension change resets stable_count");
+        assert!(
+            !detector.check_stable(&f2),
+            "Dimension change resets stable_count"
+        );
     }
 
     #[test]
