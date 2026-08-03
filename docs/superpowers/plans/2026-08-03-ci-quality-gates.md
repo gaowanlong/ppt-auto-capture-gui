@@ -6,7 +6,7 @@
 
 **Architecture:** Keep continuous integration in a new `.github/workflows/ci.yml` and artifact publishing in the existing release workflow. Put nontrivial warning and formatting logic in locally testable shell scripts, then protect both workflows with repository contract tests.
 
-**Tech Stack:** GitHub Actions YAML, Bash, Git, Rust/Cargo, Python 3 for parsing Cargo JSON diagnostics.
+**Tech Stack:** GitHub Actions YAML, Bash, Git, Rust/Cargo, Python 3 for parsing Cargo JSON diagnostics, Ruby/Psych for structural YAML contract tests.
 
 ## Global Constraints
 
@@ -116,7 +116,7 @@ git commit -m "ci: prevent new Clippy warnings"
 
 **Files:**
 - Create: `.github/workflows/ci.yml`
-- Create: `tests/test_ci_workflow.sh`
+- Create: `tests/test_ci_workflow.rb`
 
 **Interfaces:**
 - Consumes: pushes to `main`, PRs targeting `main`, and manual dispatch.
@@ -124,11 +124,11 @@ git commit -m "ci: prevent new Clippy warnings"
 
 - [ ] **Step 1: Write the failing workflow contract test**
 
-Assert the workflow contains main push/PR triggers, concurrency cancellation, the full Cargo test command, both local script-test commands, changed-rustfmt and Clippy checkers, and the three exact runner/target combinations.
+Parse the workflow with Ruby's standard Psych YAML parser. Assert its actual mapping structure contains main push/PR triggers, concurrency cancellation, the full Cargo test command, both local script-test commands, changed-rustfmt and Clippy checkers, and the three exact runner/target combinations. Normalize Psych's YAML 1.1 boolean interpretation of the `on` key before assertions.
 
 - [ ] **Step 2: Verify RED**
 
-Run `bash tests/test_ci_workflow.sh`; expected FAIL because `ci.yml` is absent.
+Run `ruby tests/test_ci_workflow.rb`; expected FAIL because `ci.yml` is absent.
 
 - [ ] **Step 3: Implement `ci.yml`**
 
@@ -143,8 +143,8 @@ Add:
 - [ ] **Step 4: Verify GREEN and commit**
 
 ```bash
-bash tests/test_ci_workflow.sh
-git add .github/workflows/ci.yml tests/test_ci_workflow.sh
+ruby tests/test_ci_workflow.rb
+git add .github/workflows/ci.yml tests/test_ci_workflow.rb
 git commit -m "ci: validate main across supported platforms"
 ```
 
@@ -181,8 +181,8 @@ The tag script uses a Bash regex anchored to the complete input. Add one Ubuntu 
 ```bash
 bash tests/test_release_tag.sh
 bash tests/test_release_workflow.sh
-bash tests/test_ci_workflow.sh
-git add .github/workflows/build-release.yml scripts/validate-release-tag.sh tests/test_release_tag.sh tests/test_release_workflow.sh tests/test_ci_workflow.sh
+ruby tests/test_ci_workflow.rb
+git add .github/workflows/build-release.yml scripts/validate-release-tag.sh tests/test_release_tag.sh tests/test_release_workflow.sh tests/test_ci_workflow.rb
 git commit -m "ci: add release preflight validation"
 ```
 
@@ -221,4 +221,3 @@ Push `codex/ci-quality-gates`. Because branch pushes intentionally do not trigge
 - [ ] **Step 5: Report integration**
 
 Report commits, local test counts, warning baseline, workflow run URL/status, and the final `main` SHA. Preserve the user's untracked `dist/` directory.
-
