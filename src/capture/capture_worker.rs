@@ -688,17 +688,17 @@ impl WorkerLoop {
             .map(|s| s.monitor_description.clone())
             .unwrap_or_default();
 
-        let record = crate::model::SlideRecord::new(
+        let record = crate::model::SlideRecord::new(crate::model::SlideRecordInput {
             slide_number,
-            png_filename.clone(),
-            png_relative,
-            frame.frame_index,
-            frame.width,
-            frame.height,
-            content_hash.clone(),
+            png_filename: png_filename.clone(),
+            png_relative_path: png_relative,
+            frame_index: frame.frame_index,
+            width: frame.width,
+            height: frame.height,
+            content_hash: content_hash.clone(),
             source_name,
             monitor_name,
-        );
+        });
 
         let image_store = self
             .image_store

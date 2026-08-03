@@ -311,7 +311,7 @@ fn extract_attr_value(s: &str, after: &str, until: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::SlideRecord;
+    use crate::model::{SlideRecord, SlideRecordInput};
     use std::collections::HashSet;
     use std::io::Read;
     use std::path::{Component, Path, PathBuf};
@@ -342,17 +342,17 @@ mod tests {
         let output_path = dir.path().join("output.pptx");
         let writer = PptxWriter::new(&output_path, "16:9", "fit");
         // Create slide record
-        let record = SlideRecord::new(
-            1,
-            "slide_0001.png".into(),
-            "slides/slide_0001.png".into(),
-            1,
-            2,
-            2,
-            "test_hash".into(),
-            "Test".into(),
-            "Monitor".into(),
-        );
+        let record = SlideRecord::new(SlideRecordInput {
+            slide_number: 1,
+            png_filename: "slide_0001.png".into(),
+            png_relative_path: "slides/slide_0001.png".into(),
+            frame_index: 1,
+            width: 2,
+            height: 2,
+            content_hash: "test_hash".into(),
+            source_name: "Test".into(),
+            monitor_name: "Monitor".into(),
+        });
         (dir, writer, record)
     }
 
@@ -697,17 +697,17 @@ mod tests {
         std::fs::write(slides_dir.join("slide_0001.png"), &png_data).unwrap();
         let output_path = dir.path().join("output.pptx");
         let writer = PptxWriter::new(&output_path, "16:9", "fit");
-        let record1 = SlideRecord::new(
-            1,
-            "slide_0001.png".into(),
-            "slides/slide_0001.png".into(),
-            1,
-            2,
-            2,
-            "hash1".into(),
-            "Test".into(),
-            "Monitor".into(),
-        );
+        let record1 = SlideRecord::new(SlideRecordInput {
+            slide_number: 1,
+            png_filename: "slide_0001.png".into(),
+            png_relative_path: "slides/slide_0001.png".into(),
+            frame_index: 1,
+            width: 2,
+            height: 2,
+            content_hash: "hash1".into(),
+            source_name: "Test".into(),
+            monitor_name: "Monitor".into(),
+        });
         writer
             .add_slide(&record1, &slides_dir.join("slide_0001.png"))
             .unwrap();
@@ -716,17 +716,17 @@ mod tests {
         // Slide 2 (uses read_existing_slides to re-add slide 1)
         std::fs::write(slides_dir.join("slide_0002.png"), &png_data).unwrap();
         let writer2 = PptxWriter::new(&output_path, "16:9", "fit");
-        let record2 = SlideRecord::new(
-            2,
-            "slide_0002.png".into(),
-            "slides/slide_0002.png".into(),
-            2,
-            2,
-            2,
-            "hash2".into(),
-            "Test".into(),
-            "Monitor".into(),
-        );
+        let record2 = SlideRecord::new(SlideRecordInput {
+            slide_number: 2,
+            png_filename: "slide_0002.png".into(),
+            png_relative_path: "slides/slide_0002.png".into(),
+            frame_index: 2,
+            width: 2,
+            height: 2,
+            content_hash: "hash2".into(),
+            source_name: "Test".into(),
+            monitor_name: "Monitor".into(),
+        });
         writer2
             .add_slide(&record2, &slides_dir.join("slide_0002.png"))
             .unwrap();
@@ -781,17 +781,17 @@ mod tests {
             expected_media.push(png);
 
             let writer = PptxWriter::new(&output_path, "16:9", "fit");
-            let record = SlideRecord::new(
-                number,
-                format!("slide_{number:04}.png"),
-                format!("slides/slide_{number:04}.png"),
-                number as u64,
-                2,
-                2,
-                format!("hash{number}"),
-                "Test".into(),
-                "Monitor".into(),
-            );
+            let record = SlideRecord::new(SlideRecordInput {
+                slide_number: number,
+                png_filename: format!("slide_{number:04}.png"),
+                png_relative_path: format!("slides/slide_{number:04}.png"),
+                frame_index: number as u64,
+                width: 2,
+                height: 2,
+                content_hash: format!("hash{number}"),
+                source_name: "Test".into(),
+                monitor_name: "Monitor".into(),
+            });
             writer
                 .add_slide(&record, &slides_dir.join(format!("slide_{number:04}.png")))
                 .unwrap();
@@ -841,17 +841,17 @@ mod tests {
             let output = base.join(name);
             let writer = PptxWriter::new(&output, "16:9", "fit");
             for i in 1..=n {
-                let record = SlideRecord::new(
-                    i,
-                    format!("slide_{:04}.png", i),
-                    format!("slides/slide_{:04}.png", i),
-                    i as u64,
-                    2,
-                    2,
-                    format!("hash{}", i),
-                    "Test".into(),
-                    "Monitor".into(),
-                );
+                let record = SlideRecord::new(SlideRecordInput {
+                    slide_number: i,
+                    png_filename: format!("slide_{:04}.png", i),
+                    png_relative_path: format!("slides/slide_{:04}.png", i),
+                    frame_index: i as u64,
+                    width: 2,
+                    height: 2,
+                    content_hash: format!("hash{}", i),
+                    source_name: "Test".into(),
+                    monitor_name: "Monitor".into(),
+                });
                 writer
                     .add_slide(&record, &slides_dir.join(format!("slide_{:04}.png", i)))
                     .unwrap();

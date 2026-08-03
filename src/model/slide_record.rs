@@ -27,31 +27,33 @@ pub struct SlideRecord {
     pub monitor_name: String,
 }
 
+pub struct SlideRecordInput {
+    pub slide_number: u32,
+    pub png_filename: String,
+    pub png_relative_path: String,
+    pub frame_index: u64,
+    pub width: u32,
+    pub height: u32,
+    pub content_hash: String,
+    pub source_name: String,
+    pub monitor_name: String,
+}
+
 impl SlideRecord {
     /// Create a new slide record.
-    pub fn new(
-        slide_number: u32,
-        png_filename: String,
-        png_relative_path: String,
-        frame_index: u64,
-        width: u32,
-        height: u32,
-        content_hash: String,
-        source_name: String,
-        monitor_name: String,
-    ) -> Self {
+    pub fn new(input: SlideRecordInput) -> Self {
         Self {
             slide_id: uuid::Uuid::new_v4().to_string(),
-            slide_number,
-            png_filename,
-            png_relative_path,
+            slide_number: input.slide_number,
+            png_filename: input.png_filename,
+            png_relative_path: input.png_relative_path,
             captured_at: Utc::now(),
-            frame_index,
-            width,
-            height,
-            content_hash,
-            source_name,
-            monitor_name,
+            frame_index: input.frame_index,
+            width: input.width,
+            height: input.height,
+            content_hash: input.content_hash,
+            source_name: input.source_name,
+            monitor_name: input.monitor_name,
         }
     }
 }
@@ -63,11 +65,17 @@ mod tests {
 
     #[test]
     fn test_slide_record_new() {
-        let r = SlideRecord::new(
-            1, "slide_0001.png".into(), "slides/slide_0001.png".into(),
-            42, 1920, 1080, "abc123".into(),
-            "TestWindow".into(), "Monitor1".into(),
-        );
+        let r = SlideRecord::new(SlideRecordInput {
+            slide_number: 1,
+            png_filename: "slide_0001.png".into(),
+            png_relative_path: "slides/slide_0001.png".into(),
+            frame_index: 42,
+            width: 1920,
+            height: 1080,
+            content_hash: "abc123".into(),
+            source_name: "TestWindow".into(),
+            monitor_name: "Monitor1".into(),
+        });
         assert_eq!(r.slide_number, 1);
         assert_eq!(r.png_filename, "slide_0001.png");
         assert_eq!(r.png_relative_path, "slides/slide_0001.png");
