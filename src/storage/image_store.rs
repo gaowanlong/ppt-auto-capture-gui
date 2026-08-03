@@ -30,7 +30,8 @@ impl ImageStore {
 
         // Convert BGRA frame data to RGB (drop alpha — some PowerPoint versions 
         // fail to render RGBA PNG and delete the image content silently).
-        let mut rgb_data = Vec::with_capacity((frame.width as usize * frame.height as usize * 3) as usize);
+        let mut rgb_data =
+            Vec::with_capacity(frame.width as usize * frame.height as usize * 3);
 
         for y in 0..frame.height {
             for x in 0..frame.width {

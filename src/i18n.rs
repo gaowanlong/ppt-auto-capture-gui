@@ -2,9 +2,10 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
 pub enum Language {
     Chinese,
+    #[default]
     English,
 }
 
@@ -21,12 +22,6 @@ impl Language {
             Language::Chinese => Language::English,
             Language::English => Language::Chinese,
         }
-    }
-}
-
-impl Default for Language {
-    fn default() -> Self {
-        Language::English
     }
 }
 

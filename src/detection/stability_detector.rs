@@ -46,7 +46,7 @@ impl StabilityDetector {
         // Auto-adjust downsample by resolution (same formula as ChangeDetector)
         let target: u64 = 500_000;
         let total = frame.width as u64 * frame.height as u64;
-        let ds = ((total as f64 / target as f64).sqrt().ceil() as u32).max(1).min(8);
+        let ds = ((total as f64 / target as f64).sqrt().ceil() as u32).clamp(1, 8);
         self.downsample = ds;
 
         let step = self.downsample as usize;

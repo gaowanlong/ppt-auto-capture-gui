@@ -110,9 +110,9 @@ fn platform_output_dir(configured: &str) -> String {
     #[cfg(target_os = "macos")]
     {
         let home = std::env::var_os("HOME").map(PathBuf::from);
-        return resolve_output_dir(Path::new(configured), home.as_deref(), true)
+        resolve_output_dir(Path::new(configured), home.as_deref(), true)
             .to_string_lossy()
-            .into_owned();
+            .into_owned()
     }
     #[cfg(not(target_os = "macos"))]
     {

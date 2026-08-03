@@ -51,7 +51,7 @@ impl Frame {
         let new_w = new_w.max(1);
         let new_h = new_h.max(1);
 
-        let mut thumb = vec![0u8; (new_w * new_h * 4) as usize];
+        let mut thumb = vec![0u8; new_w * new_h * 4];
         for ty in 0..new_h {
             for tx in 0..new_w {
                 let sx = (tx as f32 / scale) as u32;

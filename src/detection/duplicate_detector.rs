@@ -25,7 +25,11 @@ impl DuplicateDetector {
             while x < frame.width {
                 let offset = (y * frame.stride + x * 4) as usize;
                 if offset + 3 < frame.data.len() {
-                    hasher.update(&[frame.data[offset], frame.data[offset+1], frame.data[offset+2]]);
+                    hasher.update([
+                        frame.data[offset],
+                        frame.data[offset + 1],
+                        frame.data[offset + 2],
+                    ]);
                 }
                 x += step as u32;
             }
