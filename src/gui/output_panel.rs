@@ -12,10 +12,6 @@ pub struct OutputPanel {
 }
 
 impl OutputPanel {
-    pub fn new() -> Self {
-        Self::new_with_filename("output.pptx")
-    }
-
     pub fn new_with_filename(filename: &str) -> Self {
         Self {
             output_dir: "output".into(),
