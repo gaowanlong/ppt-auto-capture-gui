@@ -14,6 +14,7 @@ mod app;
 mod capture;
 mod config;
 mod detection;
+mod diagnostics;
 mod gui;
 mod i18n;
 mod model;
