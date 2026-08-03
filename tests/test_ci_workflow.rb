@@ -30,6 +30,7 @@ quality_commands = Array(quality["steps"]).map { |step| step["run"] }.compact.jo
   "bash tests/test_macos_dmg_packaging.sh",
   "bash tests/test_release_workflow.sh",
   "ruby tests/test_ci_workflow.rb",
+  "ruby tests/test_action_runtime_versions.rb",
   "bash tests/test_changed_rustfmt.sh",
   "bash tests/test_clippy_baseline.sh",
   "bash scripts/check-rustfmt-changed.sh",

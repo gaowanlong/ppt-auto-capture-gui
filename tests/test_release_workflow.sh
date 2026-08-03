@@ -47,6 +47,7 @@ commands = Array(preflight["steps"]).map { |step| step["run"] }.compact.join("\n
   "bash tests/test_macos_dmg_packaging.sh",
   "bash tests/test_release_tag.sh",
   "ruby tests/test_ci_workflow.rb",
+  "ruby tests/test_action_runtime_versions.rb",
   "bash scripts/check-rustfmt-changed.sh",
   "bash scripts/check-clippy-baseline.sh"
 ].each do |command|
