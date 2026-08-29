@@ -1,4 +1,5 @@
 use crate::capture::CaptureState;
+use crate::diagnostics::DiagnosticHistory;
 use crate::i18n::{self, Language};
 use egui::*;
 
@@ -14,6 +15,22 @@ pub struct DashboardPanel {
     pub last_error: Option<String>,
     pub state_message: String,
     pub session_active: bool,
+    pub copy_diagnostics_requested: bool,
+    pub open_log_directory_requested: bool,
+    pub diagnostics_status: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dashboard_starts_with_diagnostic_requests_cleared() {
+        let dashboard = DashboardPanel::new();
+
+        assert!(!dashboard.copy_diagnostics_requested);
+        assert!(!dashboard.open_log_directory_requested);
+    }
 }
 
 impl DashboardPanel {
@@ -30,6 +47,9 @@ impl DashboardPanel {
             last_error: None,
             state_message: CaptureState::Idle.label().to_string(),
             session_active: false,
+            copy_diagnostics_requested: false,
+            open_log_directory_requested: false,
+            diagnostics_status: None,
         }
     }
 
@@ -37,6 +57,8 @@ impl DashboardPanel {
         &mut self,
         ui: &mut Ui,
         language: Language,
+        diagnostic_history: &DiagnosticHistory,
+        persistent_log_available: bool,
         start_btn: &mut bool,
         pause_btn: &mut bool,
         stop_btn: &mut bool,
@@ -89,6 +111,42 @@ impl DashboardPanel {
                 ui.colored_label(Color32::RED, format!("⚠ {}", err));
                 ui.separator();
             }
+
+            ui.label(RichText::new(i18n::t_diagnostics(language)).strong());
+            if let Some(status) = &self.diagnostics_status {
+                ui.label(status);
+            }
+            if !persistent_log_available {
+                ui.colored_label(
+                    Color32::YELLOW,
+                    i18n::t_persistent_logging_unavailable(language),
+                );
+            }
+            for entry in diagnostic_history.entries_newest_first().take(5) {
+                ui.label(format!(
+                    "{} [{}] {}: {}",
+                    entry.timestamp.format("%Y-%m-%d %H:%M:%S %:z"),
+                    entry.level,
+                    entry.category,
+                    entry.message,
+                ));
+            }
+            ui.horizontal(|ui| {
+                if ui.button(i18n::t_copy_diagnostics(language)).clicked() {
+                    self.copy_diagnostics_requested = true;
+                }
+                if ui
+                    .add_enabled(
+                        persistent_log_available,
+                        Button::new(i18n::t_open_log_folder(language)),
+                    )
+                    .clicked()
+                {
+                    self.open_log_directory_requested = true;
+                }
+            });
+
+            ui.separator();
 
             ui.horizontal(|ui| {
                 if ui

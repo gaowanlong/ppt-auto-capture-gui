@@ -66,6 +66,37 @@ pub fn t_tab_output(lang: Language) -> &'static str {
 }
 
 // --- Dashboard ---
+pub fn t_diagnostics(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Diagnostics",
+        Language::Chinese => "诊断",
+    }
+}
+pub fn t_copy_diagnostics(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Copy diagnostics",
+        Language::Chinese => "复制诊断信息",
+    }
+}
+pub fn t_open_log_folder(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Open log folder",
+        Language::Chinese => "打开日志文件夹",
+    }
+}
+pub fn t_diagnostics_copied(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Diagnostics copied",
+        Language::Chinese => "诊断信息已复制",
+    }
+}
+pub fn t_persistent_logging_unavailable(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Persistent logging unavailable",
+        Language::Chinese => "持久日志不可用",
+    }
+}
+
 pub fn t_status(lang: Language) -> &'static str {
     match lang {
         Language::English => "Status:",
@@ -448,6 +479,11 @@ mod tests {
             assert!(!t_capture_display(*lang).is_empty());
             assert!(!t_settings_title(*lang).is_empty());
             assert!(!t_output_settings(*lang).is_empty());
+            assert!(!t_diagnostics(*lang).is_empty());
+            assert!(!t_copy_diagnostics(*lang).is_empty());
+            assert!(!t_open_log_folder(*lang).is_empty());
+            assert!(!t_diagnostics_copied(*lang).is_empty());
+            assert!(!t_persistent_logging_unavailable(*lang).is_empty());
         }
     }
 
@@ -455,6 +491,26 @@ mod tests {
     fn test_chinese_and_english_different() {
         assert_ne!(t_status(Language::English), t_status(Language::Chinese));
         assert_ne!(t_start(Language::English), t_start(Language::Chinese));
+        assert_ne!(
+            t_diagnostics(Language::English),
+            t_diagnostics(Language::Chinese)
+        );
+        assert_ne!(
+            t_copy_diagnostics(Language::English),
+            t_copy_diagnostics(Language::Chinese)
+        );
+        assert_ne!(
+            t_open_log_folder(Language::English),
+            t_open_log_folder(Language::Chinese)
+        );
+        assert_ne!(
+            t_diagnostics_copied(Language::English),
+            t_diagnostics_copied(Language::Chinese)
+        );
+        assert_ne!(
+            t_persistent_logging_unavailable(Language::English),
+            t_persistent_logging_unavailable(Language::Chinese)
+        );
     }
 
     #[test]

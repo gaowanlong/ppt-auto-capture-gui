@@ -556,11 +556,23 @@ impl eframe::App for PptAutoCaptureApp {
                     self.dashboard.render(
                         ui,
                         self.language,
+                        &self.diagnostic_history,
+                        self.log_directory.is_some(),
                         &mut self.pending_start,
                         &mut self.pending_pause,
                         &mut self.pending_stop,
                         &mut self.pending_resume,
                     );
+                    if self.dashboard.copy_diagnostics_requested {
+                        self.dashboard.copy_diagnostics_requested = false;
+                        self.copy_diagnostics(ctx);
+                        self.dashboard.diagnostics_status =
+                            Some(i18n::t_diagnostics_copied(self.language).to_string());
+                    }
+                    if self.dashboard.open_log_directory_requested {
+                        self.dashboard.open_log_directory_requested = false;
+                        self.open_log_directory();
+                    }
                 }
                 Tab::Source => {
                     self.source_panel.render(
