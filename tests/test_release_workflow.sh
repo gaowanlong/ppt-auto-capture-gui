@@ -70,5 +70,9 @@ assert_contains "right-click" "$README"
 assert_contains "Screen Recording" "$README"
 assert_contains "Apple Silicon" "$README"
 assert_contains "not notarized" "$README"
+assert_contains "~/Library/Logs/PPT Auto Capture" "$README"
+assert_contains "newest ten application logs" "$README"
+assert_contains "Copy diagnostics" "$README"
+assert_contains "screenshots and slide contents" "$README"
 
 printf 'release workflow contract tests passed\n'

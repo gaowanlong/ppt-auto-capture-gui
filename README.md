@@ -39,6 +39,12 @@ Moving or maximizing another application's window is disabled on macOS because i
 
 The macOS app starts with the primary display and full-screen capture selected. Its default writable output directory is `~/Documents/PPT Auto Capture`; it can be changed in the Output tab.
 
+### macOS troubleshooting and diagnostics
+
+Application logs are stored at `~/Library/Logs/PPT Auto Capture`; the app retains the newest ten application logs. On the Dashboard, choose **Copy diagnostics** to put a concise report on the clipboard. The report includes application, OS, architecture, capture-state, approved selected source/display descriptions, and local output/log paths so a support report has useful context.
+
+Diagnostics exclude screenshots and slide contents: they do not include screenshot pixels, window or slide contents, existing clipboard data, arbitrary environment variables, or serialized configuration. If persistent logging cannot be initialized, capture remains available and diagnostics continue through the in-app history and standard error output.
+
 ## Building from Source
 
 ### Prerequisites
