@@ -60,10 +60,10 @@ fn main() -> Result<(), eframe::Error> {
     eframe::run_native(
         "PPT Auto Capture",
         options,
-        Box::new(|cc| {
+        Box::new(move |cc| {
             // Load CJK fonts for Chinese text support
             setup_cjk_fonts(&cc.egui_ctx);
-            Ok(Box::new(app::PptAutoCaptureApp::new()))
+            Ok(Box::new(app::PptAutoCaptureApp::new(logging)))
         }),
     )
 }

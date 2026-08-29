@@ -1,5 +1,5 @@
 use eframe::egui;
-use log::{error, info};
+use log::{error, info, warn};
 
 use crossbeam_channel::{Receiver, Sender};
 
@@ -12,6 +12,10 @@ use crate::gui::source_panel::SourcePanel;
 use crate::i18n::{self, Language};
 
 use crate::config::AppConfig;
+use crate::diagnostics::{
+    render_diagnostic_report, DiagnosticEntry, DiagnosticHistory, DiagnosticLevel,
+    DiagnosticReportContext, LoggingSetup,
+};
 use crate::model::{MonitorInfo, WindowInfo};
 use crate::storage::{detect_incomplete_session, recover_session};
 use crate::windows::{enumerate_monitors, enumerate_windows};
@@ -39,6 +43,9 @@ pub struct PptAutoCaptureApp {
     recovery_accepted: bool,
     recovery_declined: bool,
     language: Language,
+    diagnostic_history: DiagnosticHistory,
+    log_directory: Option<std::path::PathBuf>,
+    log_file: Option<std::path::PathBuf>,
 }
 
 #[derive(PartialEq)]
@@ -51,7 +58,7 @@ enum Tab {
 }
 
 impl PptAutoCaptureApp {
-    pub fn new() -> Self {
+    pub fn new(logging: LoggingSetup) -> Self {
         let config = AppConfig::load();
         let mut app = Self {
             config: config.clone(),
@@ -76,7 +83,24 @@ impl PptAutoCaptureApp {
             recovery_accepted: false,
             recovery_declined: false,
             language: config.language,
+            diagnostic_history: DiagnosticHistory::new(20),
+            log_directory: logging.log_directory,
+            log_file: logging.log_file,
         };
+        if let Some(warning) = logging.warning {
+            warn!("{warning}");
+            app.diagnostic_history.push(DiagnosticEntry::new(
+                DiagnosticLevel::Warning,
+                "logging",
+                warning,
+            ));
+        }
+        if let Some(log_directory) = app.log_directory.as_ref() {
+            info!("Diagnostic log directory: {}", log_directory.display());
+        }
+        if let Some(log_file) = app.log_file.as_ref() {
+            info!("Diagnostic log file: {}", log_file.display());
+        }
         // Load saved settings into settings panel
         {
             let cfg = crate::capture::CaptureConfig {
@@ -108,6 +132,62 @@ impl PptAutoCaptureApp {
         app
     }
 
+    fn record_error(&mut self, category: &str, message: String) {
+        error!("{category}: {message}");
+        self.dashboard.last_error = Some(message.clone());
+        self.diagnostic_history.push(DiagnosticEntry::new(
+            DiagnosticLevel::Error,
+            category,
+            message,
+        ));
+    }
+
+    fn copy_diagnostics(&mut self, ctx: &egui::Context) {
+        let source = if self.source_panel.full_screen_selected {
+            "Full Screen"
+        } else {
+            self.source_panel.selected_title.as_str()
+        };
+        let display = self.display_panel.selected_description.as_str();
+        let output_path = output_path(&self.output_panel);
+        let report = render_diagnostic_report(
+            DiagnosticReportContext {
+                version: env!("CARGO_PKG_VERSION"),
+                os: std::env::consts::OS,
+                architecture: std::env::consts::ARCH,
+                capture_state: self.dashboard.current_state.label(),
+                source,
+                display,
+                output_path: &output_path,
+                log_directory: self.log_directory.as_deref().and_then(|path| path.to_str()),
+            },
+            &self.diagnostic_history,
+        );
+        ctx.copy_text(report);
+    }
+
+    fn open_log_directory(&mut self) {
+        let Some(directory) = self.log_directory.as_ref() else {
+            self.record_error("diagnostics", "Log directory is unavailable".into());
+            return;
+        };
+
+        #[cfg(target_os = "windows")]
+        let command = "explorer";
+        #[cfg(target_os = "macos")]
+        let command = "open";
+        #[cfg(target_os = "linux")]
+        let command = "xdg-open";
+
+        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+        if let Err(error) = std::process::Command::new(command).arg(directory).spawn() {
+            self.record_error(
+                "diagnostics",
+                format!("Unable to open log directory: {error}"),
+            );
+        }
+    }
+
     fn check_recovery(&mut self) {
         if let Ok(Some(records)) = detect_incomplete_session(std::path::Path::new(&self.output_dir))
         {
@@ -118,7 +198,15 @@ impl PptAutoCaptureApp {
     }
 
     fn start_capture(&mut self) {
-        info!("Starting capture");
+        let source = if self.source_panel.full_screen_selected {
+            "Full Screen"
+        } else {
+            self.source_panel.selected_title.as_str()
+        };
+        info!(
+            "Starting capture with source: {source}; display: {}",
+            self.display_panel.selected_description
+        );
         let worker = CaptureWorker::new();
         self.event_rx = Some(worker.event_rx());
         self.cmd_tx = Some(worker.command_tx());
@@ -171,6 +259,7 @@ impl PptAutoCaptureApp {
         self.dashboard.current_state = CaptureState::Stopped;
         self.dashboard.state_message = CaptureState::Stopped.label().to_string();
         self.dashboard.session_active = false;
+        info!("Capture state changed: {:?}", CaptureState::Stopped);
     }
 
     fn send_test_capture(&mut self) {
@@ -186,37 +275,40 @@ impl PptAutoCaptureApp {
             let _ = tx.send(WorkerCommand::TestCapture(source));
             info!("Test capture command sent");
         } else {
-            self.dashboard.last_error = Some(i18n::t_no_worker_error(self.language));
+            self.record_error("worker", i18n::t_no_worker_error(self.language));
         }
     }
 
     fn process_events(&mut self) {
-        let rx = match self.event_rx.as_ref() {
-            Some(r) => r,
-            None => return,
-        };
         loop {
-            let event = match rx.try_recv() {
-                Ok(e) => e,
-                Err(crossbeam_channel::TryRecvError::Empty) => break,
-                Err(crossbeam_channel::TryRecvError::Disconnected) => {
-                    error!("Worker disconnected");
-                    if let Some(mut worker) = self.worker.take() {
-                        worker.stop();
+            let event = {
+                let rx = match self.event_rx.as_ref() {
+                    Some(rx) => rx,
+                    None => return,
+                };
+                match rx.try_recv() {
+                    Ok(event) => event,
+                    Err(crossbeam_channel::TryRecvError::Empty) => break,
+                    Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                        error!("Worker disconnected");
+                        if let Some(mut worker) = self.worker.take() {
+                            worker.stop();
+                        }
+                        break;
                     }
-                    break;
                 }
             };
             match event {
                 WorkerEvent::StateChanged(s) => {
                     self.dashboard.current_state = s;
                     self.dashboard.state_message = s.label().to_string();
+                    info!("Capture state changed: {s:?}");
                 }
                 WorkerEvent::SlideSaved { slide_number, .. } => {
                     self.dashboard.saved_slides_count = slide_number
                 }
                 WorkerEvent::Error(msg) => {
-                    self.dashboard.last_error = Some(msg);
+                    self.record_error("worker", msg);
                 }
                 WorkerEvent::TestFrame(d, w, h) => {
                     self.dashboard.test_frame_rgba = Some(d);
@@ -373,8 +465,10 @@ impl eframe::App for PptAutoCaptureApp {
         if self.pending_start {
             self.pending_start = false;
             if self.display_panel.selected_hmonitor == 0 {
-                self.dashboard.last_error =
-                    Some(i18n::t_no_display_selected(self.language).to_string());
+                self.record_error(
+                    "capture",
+                    i18n::t_no_display_selected(self.language).to_string(),
+                );
             } else {
                 self.dashboard.last_error = None;
                 self.start_capture();
@@ -561,6 +655,7 @@ impl Drop for PptAutoCaptureApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::diagnostics::LoggingSetup;
     use crate::model::Region;
 
     fn monitor(id: u64, primary: bool) -> MonitorInfo {
@@ -616,5 +711,25 @@ mod tests {
         assert_eq!(config.page_ratio, "4:3");
         assert_eq!(config.image_fit, "fill");
         assert!(!config.keep_previous);
+    }
+
+    #[test]
+    fn worker_errors_keep_history_and_latest_dashboard_error() {
+        let mut app = std::mem::ManuallyDrop::new(PptAutoCaptureApp::new(LoggingSetup {
+            log_directory: None,
+            log_file: None,
+            warning: None,
+        }));
+
+        app.record_error("worker", "first error".into());
+        app.record_error("worker", "second error".into());
+
+        assert_eq!(app.dashboard.last_error.as_deref(), Some("second error"));
+        let messages: Vec<_> = app
+            .diagnostic_history
+            .entries_newest_first()
+            .map(|entry| entry.message.as_str())
+            .collect();
+        assert_eq!(messages, ["second error", "first error"]);
     }
 }
