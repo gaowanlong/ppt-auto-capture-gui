@@ -2,6 +2,9 @@ use crate::capture::CaptureState;
 use crate::diagnostics::DiagnosticHistory;
 use crate::i18n::{self, Language};
 use egui::*;
+use std::time::{Duration, Instant};
+
+const DIAGNOSTICS_STATUS_DURATION: Duration = Duration::from_secs(3);
 
 pub struct DashboardPanel {
     pub current_state: CaptureState,
@@ -18,11 +21,13 @@ pub struct DashboardPanel {
     pub copy_diagnostics_requested: bool,
     pub open_log_directory_requested: bool,
     pub diagnostics_status: Option<String>,
+    diagnostics_status_expires_at: Option<Instant>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
 
     #[test]
     fn dashboard_starts_with_diagnostic_requests_cleared() {
@@ -30,6 +35,19 @@ mod tests {
 
         assert!(!dashboard.copy_diagnostics_requested);
         assert!(!dashboard.open_log_directory_requested);
+    }
+
+    #[test]
+    fn dashboard_clears_diagnostic_success_status_after_its_expiry() {
+        let mut dashboard = DashboardPanel::new();
+        let expiry = Instant::now();
+        dashboard.last_error = Some("capture failed".into());
+
+        dashboard.set_diagnostics_status_until("Diagnostics copied".into(), expiry);
+        dashboard.clear_expired_diagnostics_status(expiry);
+
+        assert!(dashboard.diagnostics_status.is_none());
+        assert_eq!(dashboard.last_error.as_deref(), Some("capture failed"));
     }
 }
 
@@ -50,6 +68,26 @@ impl DashboardPanel {
             copy_diagnostics_requested: false,
             open_log_directory_requested: false,
             diagnostics_status: None,
+            diagnostics_status_expires_at: None,
+        }
+    }
+
+    pub fn show_diagnostics_status(&mut self, status: String) {
+        self.set_diagnostics_status_until(status, Instant::now() + DIAGNOSTICS_STATUS_DURATION);
+    }
+
+    fn set_diagnostics_status_until(&mut self, status: String, expires_at: Instant) {
+        self.diagnostics_status = Some(status);
+        self.diagnostics_status_expires_at = Some(expires_at);
+    }
+
+    fn clear_expired_diagnostics_status(&mut self, now: Instant) {
+        if self
+            .diagnostics_status_expires_at
+            .is_some_and(|expires_at| now >= expires_at)
+        {
+            self.diagnostics_status = None;
+            self.diagnostics_status_expires_at = None;
         }
     }
 
@@ -64,6 +102,8 @@ impl DashboardPanel {
         stop_btn: &mut bool,
         resume_btn: &mut bool,
     ) {
+        self.clear_expired_diagnostics_status(Instant::now());
+
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(i18n::t_status(language)).strong());

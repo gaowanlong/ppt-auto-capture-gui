@@ -566,8 +566,9 @@ impl eframe::App for PptAutoCaptureApp {
                     if self.dashboard.copy_diagnostics_requested {
                         self.dashboard.copy_diagnostics_requested = false;
                         self.copy_diagnostics(ctx);
-                        self.dashboard.diagnostics_status =
-                            Some(i18n::t_diagnostics_copied(self.language).to_string());
+                        self.dashboard.show_diagnostics_status(
+                            i18n::t_diagnostics_copied(self.language).to_string(),
+                        );
                     }
                     if self.dashboard.open_log_directory_requested {
                         self.dashboard.open_log_directory_requested = false;
