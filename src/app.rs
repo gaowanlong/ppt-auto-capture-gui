@@ -4,7 +4,7 @@ use log::{error, info, warn};
 use crossbeam_channel::{Receiver, Sender};
 
 use crate::capture::{CaptureSource, CaptureState, CaptureWorker, WorkerCommand, WorkerEvent};
-use crate::gui::dashboard::DashboardPanel;
+use crate::gui::dashboard::{DashboardPanel, DashboardRenderInput};
 use crate::gui::display_panel::DisplayPanel;
 use crate::gui::output_panel::OutputPanel;
 use crate::gui::settings_panel::SettingsPanel;
@@ -556,12 +556,14 @@ impl eframe::App for PptAutoCaptureApp {
                     self.dashboard.render(
                         ui,
                         self.language,
-                        &self.diagnostic_history,
-                        self.log_directory.is_some(),
-                        &mut self.pending_start,
-                        &mut self.pending_pause,
-                        &mut self.pending_stop,
-                        &mut self.pending_resume,
+                        DashboardRenderInput {
+                            diagnostic_history: &self.diagnostic_history,
+                            persistent_log_available: self.log_directory.is_some(),
+                            start_requested: &mut self.pending_start,
+                            pause_requested: &mut self.pending_pause,
+                            stop_requested: &mut self.pending_stop,
+                            resume_requested: &mut self.pending_resume,
+                        },
                     );
                     if self.dashboard.copy_diagnostics_requested {
                         self.dashboard.copy_diagnostics_requested = false;

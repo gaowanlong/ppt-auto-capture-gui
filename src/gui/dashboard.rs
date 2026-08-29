@@ -24,31 +24,13 @@ pub struct DashboardPanel {
     diagnostics_status_expires_at: Option<Instant>,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::time::Instant;
-
-    #[test]
-    fn dashboard_starts_with_diagnostic_requests_cleared() {
-        let dashboard = DashboardPanel::new();
-
-        assert!(!dashboard.copy_diagnostics_requested);
-        assert!(!dashboard.open_log_directory_requested);
-    }
-
-    #[test]
-    fn dashboard_clears_diagnostic_success_status_after_its_expiry() {
-        let mut dashboard = DashboardPanel::new();
-        let expiry = Instant::now();
-        dashboard.last_error = Some("capture failed".into());
-
-        dashboard.set_diagnostics_status_until("Diagnostics copied".into(), expiry);
-        dashboard.clear_expired_diagnostics_status(expiry);
-
-        assert!(dashboard.diagnostics_status.is_none());
-        assert_eq!(dashboard.last_error.as_deref(), Some("capture failed"));
-    }
+pub struct DashboardRenderInput<'a> {
+    pub diagnostic_history: &'a DiagnosticHistory,
+    pub persistent_log_available: bool,
+    pub start_requested: &'a mut bool,
+    pub pause_requested: &'a mut bool,
+    pub stop_requested: &'a mut bool,
+    pub resume_requested: &'a mut bool,
 }
 
 impl DashboardPanel {
@@ -91,17 +73,7 @@ impl DashboardPanel {
         }
     }
 
-    pub fn render(
-        &mut self,
-        ui: &mut Ui,
-        language: Language,
-        diagnostic_history: &DiagnosticHistory,
-        persistent_log_available: bool,
-        start_btn: &mut bool,
-        pause_btn: &mut bool,
-        stop_btn: &mut bool,
-        resume_btn: &mut bool,
-    ) {
+    pub fn render(&mut self, ui: &mut Ui, language: Language, input: DashboardRenderInput<'_>) {
         self.clear_expired_diagnostics_status(Instant::now());
 
         ui.vertical(|ui| {
@@ -156,13 +128,13 @@ impl DashboardPanel {
             if let Some(status) = &self.diagnostics_status {
                 ui.label(status);
             }
-            if !persistent_log_available {
+            if !input.persistent_log_available {
                 ui.colored_label(
                     Color32::YELLOW,
                     i18n::t_persistent_logging_unavailable(language),
                 );
             }
-            for entry in diagnostic_history.entries_newest_first().take(5) {
+            for entry in input.diagnostic_history.entries_newest_first().take(5) {
                 ui.label(format!(
                     "{} [{}] {}: {}",
                     entry.timestamp.format("%Y-%m-%d %H:%M:%S %:z"),
@@ -177,7 +149,7 @@ impl DashboardPanel {
                 }
                 if ui
                     .add_enabled(
-                        persistent_log_available,
+                        input.persistent_log_available,
                         Button::new(i18n::t_open_log_folder(language)),
                     )
                     .clicked()
@@ -198,7 +170,7 @@ impl DashboardPanel {
                     )
                     .clicked()
                 {
-                    *start_btn = true;
+                    *input.start_requested = true;
                 }
 
                 if ui
@@ -210,7 +182,7 @@ impl DashboardPanel {
                     )
                     .clicked()
                 {
-                    *pause_btn = true;
+                    *input.pause_requested = true;
                 }
 
                 if ui
@@ -220,7 +192,7 @@ impl DashboardPanel {
                     )
                     .clicked()
                 {
-                    *resume_btn = true;
+                    *input.resume_requested = true;
                 }
 
                 if ui
@@ -232,7 +204,7 @@ impl DashboardPanel {
                     )
                     .clicked()
                 {
-                    *stop_btn = true;
+                    *input.stop_requested = true;
                 }
             });
 
@@ -288,5 +260,71 @@ impl DashboardPanel {
                 );
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostics::{DiagnosticEntry, DiagnosticLevel};
+    use std::time::Instant;
+
+    #[test]
+    fn dashboard_starts_with_diagnostic_requests_cleared() {
+        let dashboard = DashboardPanel::new();
+
+        assert!(!dashboard.copy_diagnostics_requested);
+        assert!(!dashboard.open_log_directory_requested);
+    }
+
+    #[test]
+    fn dashboard_clears_diagnostic_success_status_after_its_expiry() {
+        let mut dashboard = DashboardPanel::new();
+        let expiry = Instant::now();
+        dashboard.last_error = Some("capture failed".into());
+
+        dashboard.set_diagnostics_status_until("Diagnostics copied".into(), expiry);
+        dashboard.clear_expired_diagnostics_status(expiry);
+
+        assert!(dashboard.diagnostics_status.is_none());
+        assert_eq!(dashboard.last_error.as_deref(), Some("capture failed"));
+    }
+
+    #[test]
+    fn dashboard_render_input_keeps_history_and_action_requests_separate() {
+        let mut history = DiagnosticHistory::new(20);
+        history.push(DiagnosticEntry::new(
+            DiagnosticLevel::Error,
+            "capture",
+            "Capture failed",
+        ));
+        let mut start_requested = false;
+        let mut pause_requested = false;
+        let mut stop_requested = false;
+        let mut resume_requested = false;
+        {
+            let input = DashboardRenderInput {
+                diagnostic_history: &history,
+                persistent_log_available: true,
+                start_requested: &mut start_requested,
+                pause_requested: &mut pause_requested,
+                stop_requested: &mut stop_requested,
+                resume_requested: &mut resume_requested,
+            };
+
+            assert_eq!(
+                input
+                    .diagnostic_history
+                    .entries_newest_first()
+                    .next()
+                    .map(|entry| entry.message.as_str()),
+                Some("Capture failed")
+            );
+            *input.start_requested = true;
+        }
+        assert!(start_requested);
+        assert!(!pause_requested);
+        assert!(!stop_requested);
+        assert!(!resume_requested);
     }
 }
