@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use chrono::{DateTime, Local};
 
 static LOG_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+const LOG_FILE_CREATE_ATTEMPTS: u64 = 128;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosticLevel {
@@ -244,15 +245,10 @@ fn prepare_logging_with_writer(directory: PathBuf) -> (LoggingSetup, TeeWriter) 
     let result = (|| -> io::Result<(PathBuf, File, Option<String>)> {
         fs::create_dir_all(&directory)?;
 
-        let sequence = LOG_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let file_path = directory.join(format!(
-            "ppt-auto-capture-{}-{sequence:020}.log",
-            Local::now().format("%Y%m%d-%H%M%S%.3f")
-        ));
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&file_path)?;
+        let timestamp = Local::now().format("%Y%m%d-%H%M%S%.3f").to_string();
+        let sequence = LOG_FILE_SEQUENCE.fetch_add(LOG_FILE_CREATE_ATTEMPTS, Ordering::Relaxed);
+        let (file_path, file) =
+            create_unique_log_file(&directory, &timestamp, sequence, LOG_FILE_CREATE_ATTEMPTS)?;
         let retention_warning = retain_recent_logs(&directory, 10)
             .err()
             .map(|error| format!("Persistent log retention could not be completed: {error}"));
@@ -278,6 +274,30 @@ fn prepare_logging_with_writer(directory: PathBuf) -> (LoggingSetup, TeeWriter) 
             TeeWriter::new(None),
         ),
     }
+}
+
+fn create_unique_log_file(
+    directory: &Path,
+    timestamp: &str,
+    first_suffix: u64,
+    attempts: u64,
+) -> io::Result<(PathBuf, File)> {
+    for offset in 0..attempts {
+        let Some(suffix) = first_suffix.checked_add(offset) else {
+            break;
+        };
+        let path = directory.join(format!("ppt-auto-capture-{timestamp}-{suffix:020}.log"));
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(file) => return Ok((path, file)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "Could not create a unique diagnostic log file after bounded retries",
+    ))
 }
 
 pub fn initialize_logging() -> LoggingSetup {
@@ -405,6 +425,45 @@ mod tests {
         let second = prepare_logging(directory.path.clone());
 
         assert_ne!(first.log_file, second.log_file);
+    }
+
+    #[test]
+    fn launch_log_creation_skips_a_conflicting_existing_file_without_appending() {
+        let directory = TestDirectory::new();
+        let timestamp = "20260803-120000.000";
+        let existing = directory
+            .path
+            .join(format!("ppt-auto-capture-{timestamp}-{:020}.log", 0));
+        fs::write(&existing, "first launch").unwrap();
+
+        let (created, mut file) = create_unique_log_file(&directory.path, timestamp, 0, 2)
+            .expect("a conflicting launch log should use the next suffix");
+        file.write_all(b"second launch").unwrap();
+        drop(file);
+
+        assert_ne!(created, existing);
+        assert_eq!(fs::read_to_string(&existing).unwrap(), "first launch");
+        assert_eq!(fs::read_to_string(created).unwrap(), "second launch");
+    }
+
+    #[test]
+    fn launch_log_creation_stops_after_the_configured_collision_attempts() {
+        let directory = TestDirectory::new();
+        let timestamp = "20260803-120000.000";
+        for suffix in 0..2 {
+            fs::write(
+                directory
+                    .path
+                    .join(format!("ppt-auto-capture-{timestamp}-{suffix:020}.log")),
+                "existing launch",
+            )
+            .unwrap();
+        }
+
+        let error = create_unique_log_file(&directory.path, timestamp, 0, 2)
+            .expect_err("creation should stop after bounded collision retries");
+
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
     }
 
     #[test]
