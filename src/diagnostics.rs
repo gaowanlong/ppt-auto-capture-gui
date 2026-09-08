@@ -2,8 +2,11 @@ use std::collections::VecDeque;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::{DateTime, Local};
+
+static LOG_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosticLevel {
@@ -166,11 +169,35 @@ pub fn retain_recent_logs(directory: &Path, keep: usize) -> io::Result<()> {
 
     logs.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| right.1.cmp(&left.1)));
 
-    for (_, _, path) in logs.into_iter().skip(keep) {
-        fs::remove_file(path)?;
+    remove_expired_logs(
+        logs.into_iter().skip(keep).map(|(_, _, path)| path),
+        |path| fs::remove_file(path),
+    )
+}
+
+fn remove_expired_logs<F>(
+    paths: impl IntoIterator<Item = PathBuf>,
+    mut remove_file: F,
+) -> io::Result<()>
+where
+    F: FnMut(&Path) -> io::Result<()>,
+{
+    let mut failures = Vec::new();
+
+    for path in paths {
+        if let Err(error) = remove_file(&path) {
+            failures.push(format!("{}: {error}", path.display()));
+        }
     }
 
-    Ok(())
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "Could not remove expired diagnostics logs: {}",
+            failures.join("; ")
+        )))
+    }
 }
 
 struct TeeWriter {
@@ -217,9 +244,10 @@ fn prepare_logging_with_writer(directory: PathBuf) -> (LoggingSetup, TeeWriter) 
     let result = (|| -> io::Result<(PathBuf, File, Option<String>)> {
         fs::create_dir_all(&directory)?;
 
+        let sequence = LOG_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let file_path = directory.join(format!(
-            "ppt-auto-capture-{}.log",
-            Local::now().format("%Y%m%d-%H%M%S")
+            "ppt-auto-capture-{}-{sequence:020}.log",
+            Local::now().format("%Y%m%d-%H%M%S%.3f")
         ));
         let file = OpenOptions::new()
             .create(true)
@@ -367,6 +395,39 @@ mod tests {
 
         assert!(setup.warning.is_some());
         assert_eq!(setup.log_file, None);
+    }
+
+    #[test]
+    fn successive_log_preparations_use_distinct_log_files() {
+        let directory = TestDirectory::new();
+
+        let first = prepare_logging(directory.path.clone());
+        let second = prepare_logging(directory.path.clone());
+
+        assert_ne!(first.log_file, second.log_file);
+    }
+
+    #[test]
+    fn expired_log_removal_continues_after_a_single_failure() {
+        let expired = vec![
+            PathBuf::from("/diagnostics/ppt-auto-capture-oldest.log"),
+            PathBuf::from("/diagnostics/ppt-auto-capture-middle.log"),
+            PathBuf::from("/diagnostics/ppt-auto-capture-newest.log"),
+        ];
+        let mut attempted = Vec::new();
+
+        let error = remove_expired_logs(expired.clone(), |path| {
+            attempted.push(path.to_path_buf());
+            if path == expired[1] {
+                Err(io::Error::new(io::ErrorKind::PermissionDenied, "denied"))
+            } else {
+                Ok(())
+            }
+        })
+        .expect_err("the failed removal is reported after all expired logs are attempted");
+
+        assert_eq!(attempted, expired);
+        assert!(error.to_string().contains("ppt-auto-capture-middle.log"));
     }
 
     #[test]

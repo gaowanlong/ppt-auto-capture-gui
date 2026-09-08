@@ -599,7 +599,7 @@ impl WorkerLoop {
                 if let Some(ref pframe) = pending_frame {
                     log::info!("Saving pending stable frame before rapid transition");
                     if let Err(e) = self.save_frame(pframe) {
-                        error!("Failed to save pending stable frame: {}", e);
+                        self.report_rapid_transition_save_failure("pending stable frame", e);
                     } else {
                         saved = true;
                     }
@@ -611,7 +611,10 @@ impl WorkerLoop {
                     {
                         log::info!("Saving reference frame as fallback before rapid transition");
                         if let Err(e) = self.save_frame(ref_frame) {
-                            error!("Failed to save reference frame: {}", e);
+                            self.report_rapid_transition_save_failure(
+                                "fallback reference frame",
+                                e,
+                            );
                         }
                     }
                 }
@@ -654,6 +657,12 @@ impl WorkerLoop {
 
         self.change_detector.update_reference(&frame);
         Ok(())
+    }
+
+    fn report_rapid_transition_save_failure(&self, frame_kind: &str, error: anyhow::Error) {
+        let message = format!("Rapid-transition {frame_kind} save failed: {error:#}");
+        error!("{message}");
+        let _ = self.event_tx.send(WorkerEvent::Error(message));
     }
 
     fn save_frame(&mut self, frame: &Frame) -> Result<()> {
@@ -762,6 +771,42 @@ fn capture_backend_unavailable_message() -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rapid_transition_save_failure_emits_complete_worker_error() {
+        let (_command_tx, command_rx) = crossbeam_channel::unbounded();
+        let (event_tx, event_rx) = crossbeam_channel::unbounded();
+        let worker = WorkerLoop::new(command_rx, event_tx);
+        let error = anyhow::Error::msg("disk full").context("writing slide PNG");
+
+        worker.report_rapid_transition_save_failure("pending stable frame", error);
+
+        let WorkerEvent::Error(message) = event_rx.try_recv().expect("worker error event") else {
+            panic!("expected a worker error event");
+        };
+        assert_eq!(
+            message,
+            "Rapid-transition pending stable frame save failed: writing slide PNG: disk full"
+        );
+    }
+
+    #[test]
+    fn rapid_transition_fallback_failure_emits_complete_worker_error() {
+        let (_command_tx, command_rx) = crossbeam_channel::unbounded();
+        let (event_tx, event_rx) = crossbeam_channel::unbounded();
+        let worker = WorkerLoop::new(command_rx, event_tx);
+        let error = anyhow::Error::msg("permission denied").context("saving fallback PNG");
+
+        worker.report_rapid_transition_save_failure("fallback reference frame", error);
+
+        let WorkerEvent::Error(message) = event_rx.try_recv().expect("worker error event") else {
+            panic!("expected a worker error event");
+        };
+        assert_eq!(
+            message,
+            "Rapid-transition fallback reference frame save failed: saving fallback PNG: permission denied"
+        );
+    }
 
     #[test]
     fn macos_is_not_reported_as_an_unsupported_capture_backend() {

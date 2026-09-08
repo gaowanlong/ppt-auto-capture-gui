@@ -290,11 +290,8 @@ impl PptAutoCaptureApp {
                     Ok(event) => event,
                     Err(crossbeam_channel::TryRecvError::Empty) => break,
                     Err(crossbeam_channel::TryRecvError::Disconnected) => {
-                        error!("Worker disconnected");
-                        if let Some(mut worker) = self.worker.take() {
-                            worker.stop();
-                        }
-                        break;
+                        self.handle_worker_disconnected();
+                        return;
                     }
                 }
             };
@@ -321,6 +318,18 @@ impl PptAutoCaptureApp {
                 _ => {}
             }
         }
+    }
+
+    fn handle_worker_disconnected(&mut self) {
+        self.event_rx = None;
+        self.cmd_tx = None;
+        if let Some(mut worker) = self.worker.take() {
+            worker.stop();
+        }
+        self.dashboard.current_state = CaptureState::Error;
+        self.dashboard.state_message = CaptureState::Error.label().to_string();
+        self.dashboard.session_active = false;
+        self.record_error("worker", "Capture worker disconnected".into());
     }
 
     fn refresh_windows(&mut self) {
@@ -746,5 +755,39 @@ mod tests {
             .map(|entry| entry.message.as_str())
             .collect();
         assert_eq!(messages, ["second error", "first error"]);
+    }
+
+    #[test]
+    fn disconnected_worker_is_recorded_once_and_clears_capture_channels() {
+        let mut app = std::mem::ManuallyDrop::new(PptAutoCaptureApp::new(LoggingSetup {
+            log_directory: None,
+            log_file: None,
+            warning: None,
+        }));
+        let (event_tx, event_rx) = crossbeam_channel::unbounded();
+        drop(event_tx);
+        let (command_tx, _command_rx) = crossbeam_channel::unbounded();
+        app.event_rx = Some(event_rx);
+        app.cmd_tx = Some(command_tx);
+        app.dashboard.session_active = true;
+        app.dashboard.current_state = CaptureState::Running;
+
+        app.process_events();
+        app.process_events();
+
+        assert!(app.event_rx.is_none());
+        assert!(app.cmd_tx.is_none());
+        assert_eq!(app.dashboard.current_state, CaptureState::Error);
+        assert!(!app.dashboard.session_active);
+        assert_eq!(
+            app.dashboard.last_error.as_deref(),
+            Some("Capture worker disconnected")
+        );
+        let messages: Vec<_> = app
+            .diagnostic_history
+            .entries_newest_first()
+            .map(|entry| entry.message.as_str())
+            .collect();
+        assert_eq!(messages, ["Capture worker disconnected"]);
     }
 }
