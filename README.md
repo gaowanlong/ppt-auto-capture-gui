@@ -39,6 +39,14 @@ Moving or maximizing another application's window is disabled on macOS because i
 
 The macOS app starts with the primary display and full-screen capture selected. Its default writable output directory is `~/Documents/PPT Auto Capture`; it can be changed in the Output tab.
 
+### Recording files and recovery
+
+Each recording now has its own `sessions/<timestamp>-<unique-id>/` directory under the selected output folder. It contains the chosen PPTX filename, a `slides/` folder, and `session.json`. The dashboard shows the actual PPTX path. Starting another recording, even with the same filename, does not overwrite earlier recordings.
+
+If saving fails, capture pauses and retains the pending frame in memory. Resolve the storage problem (for example, close a PPTX locked by PowerPoint or free disk space), then choose **Resume** to retry that same page. **Stop** also retries finalization and keeps the session paused if it fails. The saved-page count advances only after PNG, journal, and PPTX publication succeed. Closing or force-quitting the application can lose frames not yet committed to the journal; resolve the error before closing.
+
+On restart, recovery rebuilds unfinished recordings from their journal and PNGs, preserving the original filename, slide size, and image-fit setting. Keep each session folder together. Missing/corrupt images or journals produce an error instead of a silently incomplete presentation; existing PPTX files remain intact. Legacy `manifest.jsonl` recordings lack layout metadata and therefore retain the old 16:9/fit recovery default. Recovery cannot infer pages already overwritten by older versions.
+
 ### macOS troubleshooting and diagnostics
 
 Application logs are stored at `~/Library/Logs/PPT Auto Capture`; the app retains the newest ten application logs. On the Dashboard, choose **Copy diagnostics** to put a concise report on the clipboard. The report includes application, OS, architecture, capture-state, approved selected source/display descriptions, and local output/log paths so a support report has useful context.
@@ -100,7 +108,7 @@ cargo zigbuild --target x86_64-pc-windows-gnu --release
                                      ┌────────▼─────────┐
                                      │   StorageWorker   │
                                      │  ├─ PNG (atomic)  │
-                                     │  ├─ manifest.jsonl│
+                                     │  ├─ session.json  │
                                      │  └─ output.pptx   │
                                      └──────────────────┘
 ```

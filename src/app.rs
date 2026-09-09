@@ -189,11 +189,17 @@ impl PptAutoCaptureApp {
     }
 
     fn check_recovery(&mut self) {
-        if let Ok(Some(records)) = detect_incomplete_session(std::path::Path::new(&self.output_dir))
-        {
-            self.recovery_available = true;
-            self.recovery_slides = records.len() as u32;
-            info!("Recovery: {} slides", self.recovery_slides);
+        match detect_incomplete_session(std::path::Path::new(&self.output_dir)) {
+            Ok(Some(records)) => {
+                self.recovery_available = true;
+                self.recovery_slides = records.len() as u32;
+                info!("Recovery: {} slides", self.recovery_slides);
+            }
+            Ok(None) => {}
+            Err(error) => self.record_error(
+                "recovery",
+                format!("Cannot inspect saved sessions: {error:#}"),
+            ),
         }
     }
 
@@ -210,11 +216,6 @@ impl PptAutoCaptureApp {
         let worker = CaptureWorker::new();
         self.event_rx = Some(worker.event_rx());
         self.cmd_tx = Some(worker.command_tx());
-        // Regenerate output filename with current timestamp
-        self.output_panel.output_filename = format!(
-            "ppt-capture-{}.pptx",
-            chrono::Local::now().format("%Y%m%d-%H%M%S")
-        );
         let mut source = CaptureSource::new(
             self.source_panel.selected_hwnd,
             self.source_panel.selected_title.clone(),
@@ -223,6 +224,9 @@ impl PptAutoCaptureApp {
         );
         apply_output_to_source(&self.output_panel, &mut source);
         if let Some(tx) = self.cmd_tx.as_ref() {
+            let _ = tx.send(WorkerCommand::UpdateConfig(
+                self.settings_panel.get_config(),
+            ));
             let _ = tx.send(WorkerCommand::Start(source));
         }
         self.worker = Some(worker);
@@ -251,15 +255,7 @@ impl PptAutoCaptureApp {
         if let Some(ref tx) = self.cmd_tx {
             let _ = tx.send(WorkerCommand::Stop);
         }
-        if let Some(mut worker) = self.worker.take() {
-            worker.stop();
-        }
-        self.cmd_tx = None;
-        self.event_rx = None;
-        self.dashboard.current_state = CaptureState::Stopped;
-        self.dashboard.state_message = CaptureState::Stopped.label().to_string();
-        self.dashboard.session_active = false;
-        info!("Capture state changed: {:?}", CaptureState::Stopped);
+        // Wait for successful finalization. On error the worker stays alive and retryable.
     }
 
     fn send_test_capture(&mut self) {
@@ -280,6 +276,10 @@ impl PptAutoCaptureApp {
     }
 
     fn process_events(&mut self) {
+        self.drain_events(true);
+    }
+
+    fn drain_events(&mut self, unexpected_disconnect: bool) {
         loop {
             let event = {
                 let rx = match self.event_rx.as_ref() {
@@ -290,16 +290,28 @@ impl PptAutoCaptureApp {
                     Ok(event) => event,
                     Err(crossbeam_channel::TryRecvError::Empty) => break,
                     Err(crossbeam_channel::TryRecvError::Disconnected) => {
-                        self.handle_worker_disconnected();
+                        if unexpected_disconnect && self.dashboard.session_active {
+                            self.handle_worker_disconnected();
+                        } else {
+                            self.event_rx = None;
+                        }
                         return;
                     }
                 }
             };
             match event {
+                WorkerEvent::SessionStarted(path) => self.dashboard.output_path = path,
                 WorkerEvent::StateChanged(s) => {
                     self.dashboard.current_state = s;
                     self.dashboard.state_message = s.label().to_string();
                     info!("Capture state changed: {s:?}");
+                    if s == CaptureState::Stopped {
+                        self.dashboard.session_active = false;
+                        if let Some(mut worker) = self.worker.take() {
+                            worker.stop();
+                        }
+                        self.cmd_tx = None;
+                    }
                 }
                 WorkerEvent::SlideSaved { slide_number, .. } => {
                     self.dashboard.saved_slides_count = slide_number
@@ -453,10 +465,18 @@ impl eframe::App for PptAutoCaptureApp {
                     ui.label(i18n::t_recovery_msg(self.language, self.recovery_slides));
                     ui.horizontal(|ui| {
                         if ui.button(i18n::t_recover(self.language)).clicked() {
-                            if let Ok(()) = recover_session(std::path::Path::new(&self.output_dir))
-                            {
-                                self.dashboard.saved_slides_count = self.recovery_slides;
-                                self.recovery_accepted = true;
+                            match recover_session(std::path::Path::new(&self.output_dir)) {
+                                Ok(paths) => {
+                                    self.dashboard.saved_slides_count = self.recovery_slides;
+                                    self.recovery_accepted = true;
+                                    if let Some(path) = paths.last() {
+                                        self.dashboard.output_path = path.display().to_string();
+                                    }
+                                }
+                                Err(error) => self.record_error(
+                                    "recovery",
+                                    format!("Recovery failed: {error:#}"),
+                                ),
                             }
                         }
                         if ui.button(i18n::t_skip(self.language)).clicked() {
@@ -561,7 +581,9 @@ impl eframe::App for PptAutoCaptureApp {
             match self.active_tab {
                 Tab::Dashboard => {
                     // Sync output info to dashboard
-                    self.dashboard.output_path = output_path(&self.output_panel);
+                    if self.dashboard.output_path.is_empty() {
+                        self.dashboard.output_path = output_path(&self.output_panel);
+                    }
                     self.dashboard.render(
                         ui,
                         self.language,
@@ -643,7 +665,9 @@ impl eframe::App for PptAutoCaptureApp {
                         }
                     }
                     // Sync output filename to dashboard
-                    self.dashboard.output_path = output_path(&self.output_panel);
+                    if self.dashboard.output_path.is_empty() {
+                        self.dashboard.output_path = output_path(&self.output_panel);
+                    }
                 }
             }
         });
@@ -755,6 +779,52 @@ mod tests {
             .map(|entry| entry.message.as_str())
             .collect();
         assert_eq!(messages, ["second error", "first error"]);
+    }
+
+    #[test]
+    fn stop_request_waits_for_worker_finalization() {
+        let mut app = std::mem::ManuallyDrop::new(PptAutoCaptureApp::new(LoggingSetup {
+            log_directory: None,
+            log_file: None,
+            warning: None,
+        }));
+        let (tx, rx) = crossbeam_channel::unbounded();
+        app.cmd_tx = Some(tx);
+        app.dashboard.session_active = true;
+        app.stop_capture();
+        assert!(matches!(rx.try_recv().unwrap(), WorkerCommand::Stop));
+        assert!(app.cmd_tx.is_some());
+        assert!(app.dashboard.session_active);
+    }
+
+    #[test]
+    fn intentional_stop_drains_final_errors_without_false_disconnect() {
+        let mut app = std::mem::ManuallyDrop::new(PptAutoCaptureApp::new(LoggingSetup {
+            log_directory: None,
+            log_file: None,
+            warning: None,
+        }));
+        let (tx, rx) = crossbeam_channel::unbounded();
+        app.event_rx = Some(rx);
+        tx.send(WorkerEvent::SessionStarted(
+            "sessions/unique/custom.pptx".into(),
+        ))
+        .unwrap();
+        tx.send(WorkerEvent::SlideSaved {
+            slide_number: 3,
+            png_filename: "slide_0003.png".into(),
+        })
+        .unwrap();
+        tx.send(WorkerEvent::Error("final save failed".into()))
+            .unwrap();
+        drop(tx);
+        app.drain_events(false);
+        assert_eq!(app.dashboard.output_path, "sessions/unique/custom.pptx");
+        assert_eq!(app.dashboard.saved_slides_count, 3);
+        assert_eq!(
+            app.dashboard.last_error.as_deref(),
+            Some("final save failed")
+        );
     }
 
     #[test]

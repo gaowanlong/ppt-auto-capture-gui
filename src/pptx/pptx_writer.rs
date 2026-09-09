@@ -16,21 +16,6 @@ pub struct PptxWriter {
     image_fit: String,
 }
 
-/// Read PNG dimensions from file (parses IHDR chunk).
-fn get_png_dimensions(slides_dir: &std::path::Path, num: u32) -> Option<(u32, u32)> {
-    let path = slides_dir.join(format!("slide_{:04}.png", num));
-    if path.exists() {
-        if let Ok(img) = std::fs::read(&path) {
-            if img.len() > 24 && img[0..8] == [137, 80, 78, 71, 13, 10, 26, 10] {
-                let w = u32::from_be_bytes([img[16], img[17], img[18], img[19]]);
-                let h = u32::from_be_bytes([img[20], img[21], img[22], img[23]]);
-                return Some((w, h));
-            }
-        }
-    }
-    None
-}
-
 /// Helper to write a file entry in the ZIP archive.
 fn zip_write<W: Write + std::io::Seek>(
     zip: &mut ZipWriter<W>,
@@ -45,11 +30,6 @@ fn zip_write<W: Write + std::io::Seek>(
 
 impl PptxWriter {
     pub fn new(output_path: &Path, page_ratio: &str, image_fit: &str) -> Self {
-        if output_path.exists() {
-            let backup = output_path.with_extension("previous.pptx");
-            let _ = std::fs::copy(output_path, &backup);
-            info!("Backed up existing PPTX to {:?}", backup);
-        }
         Self {
             output_path: output_path.to_path_buf(),
             page_ratio: page_ratio.to_string(),
@@ -57,9 +37,46 @@ impl PptxWriter {
         }
     }
 
-    pub fn add_slide(&self, record: &SlideRecord, _png_path: &Path) -> Result<()> {
-        let slide_number = record.slide_number;
-        let media_name = format!("image{}.png", slide_number);
+    /// Rebuild a complete snapshot using only the supplied records and directory.
+    pub fn write_slides(&self, records: &[SlideRecord], slides_dir: &Path) -> Result<()> {
+        let mut seen = std::collections::HashSet::new();
+        let mut slides = Vec::with_capacity(records.len());
+        for record in records {
+            anyhow::ensure!(
+                record.slide_number > 0 && seen.insert(record.slide_number),
+                "Invalid or duplicate slide number {}",
+                record.slide_number
+            );
+            let filename = Path::new(&record.png_filename);
+            anyhow::ensure!(
+                filename.components().count() == 1
+                    && matches!(
+                        filename.components().next(),
+                        Some(std::path::Component::Normal(_))
+                    ),
+                "PNG filename must be a single filename"
+            );
+            slides.push((record.slide_number, slides_dir.join(filename)));
+        }
+        self.write_images(&slides)
+    }
+
+    pub fn add_slide(&self, record: &SlideRecord, png_path: &Path) -> Result<()> {
+        let slides_dir = png_path.parent().unwrap_or(Path::new("."));
+        let mut slides = if self.output_path.exists() && record.slide_number > 1 {
+            self.read_existing_slides()
+                .into_iter()
+                .filter(|(num, _)| *num != record.slide_number)
+                .map(|(num, _)| (num, slides_dir.join(format!("slide_{num:04}.png"))))
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        slides.push((record.slide_number, png_path.to_path_buf()));
+        self.write_images(&slides)
+    }
+
+    fn write_images(&self, slides: &[(u32, PathBuf)]) -> Result<()> {
         // Use unique temp name to avoid conflicts with antivirus or previous crashes
         let tmp_suffix = format!(
             "tmp.{:x}.pptx",
@@ -70,13 +87,15 @@ impl PptxWriter {
         );
         let tmp_path = self.output_path.with_file_name(&tmp_suffix);
 
-        let mut existing_slides: Vec<(u32, String)> = Vec::new();
-        if self.output_path.exists() && record.slide_number > 1 {
-            existing_slides = self.read_existing_slides();
-        }
-        existing_slides.push((slide_number, media_name.clone()));
+        let existing_slides = slides
+            .iter()
+            .map(|(num, _)| (*num, format!("image{num}.png")))
+            .collect::<Vec<_>>();
 
-        let file = std::fs::File::create(&tmp_path)
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp_path)
             .with_context(|| format!("Failed to create tmp.pptx: {:?}", tmp_path))?;
         let mut zip = ZipWriter::new(file);
 
@@ -140,42 +159,30 @@ impl PptxWriter {
             THEME_XML.as_bytes(),
         )?;
 
-        let slides_dir = self
-            .output_path
-            .parent()
-            .unwrap_or(Path::new("."))
-            .join("slides");
-        let slides_dir = if slides_dir.exists() {
-            slides_dir
-        } else {
-            PathBuf::from("slides")
-        };
-
-        for (num, media) in &existing_slides {
-            let media_path = slides_dir.join(format!("slide_{:04}.png", num));
-            if media_path.exists() {
-                let media_bytes = std::fs::read(&media_path)
-                    .with_context(|| format!("Failed to read {:?}", media_path))?;
-                zip_write(
-                    &mut zip,
-                    &format!("ppt/media/{}", media),
-                    options,
-                    &media_bytes,
-                )?;
-            }
+        // Validate and embed one page at a time; never hold the entire deck's PNGs in memory.
+        // A missing/corrupt image aborts this candidate, leaving the good deck intact.
+        let mut images = Vec::with_capacity(slides.len());
+        for (num, path) in slides {
+            let bytes =
+                std::fs::read(path).with_context(|| format!("Failed to read PNG {:?}", path))?;
+            let decoded = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)
+                .with_context(|| format!("Invalid PNG {:?}", path))?;
+            images.push((*num, decoded.width(), decoded.height()));
+            drop(decoded);
+            zip_write(
+                &mut zip,
+                &format!("ppt/media/image{num}.png"),
+                options,
+                &bytes,
+            )?;
         }
 
-        for (num, _) in &existing_slides {
-            // Get image dimensions from the existing PNG file
-            let img_dimensions = get_png_dimensions(&slides_dir, *num);
-            // If PNG not found on disk, fall back to the record's stored dimensions
-            let (img_w, img_h) =
-                img_dimensions.unwrap_or_else(|| (record.width.max(1), record.height.max(1)));
+        for (num, img_w, img_h) in &images {
             let (slide_xml, rels_xml) = SlideXml::render(
                 *num,
                 &format!("image{}", num),
-                img_w,
-                img_h,
+                *img_w,
+                *img_h,
                 &self.image_fit,
                 &self.page_ratio,
             );
@@ -230,21 +237,19 @@ impl PptxWriter {
             DOC_PROPS_CORE_XML.as_bytes(),
         )?;
 
-        zip.finish()?;
+        let file = zip.finish()?;
+        file.sync_all()?;
+        drop(file);
 
-        // Atomic replace: try rename first, fall back to copy+delete
-        let replace_result = std::fs::rename(&tmp_path, &self.output_path);
-        match replace_result {
-            Ok(()) => {}
-            Err(_) => {
-                // Rename failed (antivirus or cross-device), try copy+delete
-                std::fs::copy(&tmp_path, &self.output_path).with_context(|| {
-                    format!("Failed to copy tmp to output: {:?}", self.output_path)
-                })?;
-                let _ = std::fs::remove_file(&tmp_path);
-            }
-        }
-        info!("PPTX updated: slide {} added", slide_number);
+        // std::fs::rename uses replace-existing semantics on Windows as well.
+        // Never copy over the good deck: a locked destination must remain intact.
+        std::fs::rename(&tmp_path, &self.output_path).with_context(|| {
+            format!(
+                "Failed to replace {:?}; completed deck retained at {:?}",
+                self.output_path, tmp_path
+            )
+        })?;
+        info!("PPTX updated: {} slides", slides.len());
         Ok(())
     }
 
@@ -299,6 +304,106 @@ mod tests {
     use std::collections::HashSet;
     use std::io::Read;
     use std::path::{Component, Path, PathBuf};
+
+    #[test]
+    fn snapshot_rebuilds_full_set_idempotently_from_exact_directory() {
+        let (dir, writer, first) = setup_pptx_test();
+        let images = dir.path().join("elsewhere");
+        std::fs::create_dir(&images).unwrap();
+        let mut second = first.clone();
+        second.slide_number = 2;
+        second.png_filename = "custom.png".into();
+        std::fs::write(images.join(&first.png_filename), make_test_png()).unwrap();
+        std::fs::write(images.join(&second.png_filename), make_test_png()).unwrap();
+        let records = [first, second];
+        writer.write_slides(&records, &images).unwrap();
+        let original = std::fs::read(&writer.output_path).unwrap();
+        writer.write_slides(&records, &images).unwrap();
+        assert_eq!(original, std::fs::read(&writer.output_path).unwrap());
+        let mut zip = ZipArchive::new(std::fs::File::open(&writer.output_path).unwrap()).unwrap();
+        assert!(read_zip_text(&mut zip, "docProps/app.xml").contains("<Slides>2</Slides>"));
+        assert!(zip.by_name("ppt/media/image2.png").is_ok());
+        assert_internal_relationship_graph_is_closed(&writer.output_path);
+    }
+
+    #[test]
+    fn snapshot_missing_or_corrupt_media_preserves_previous_deck() {
+        let (dir, writer, record) = setup_pptx_test();
+        let slides = dir.path().join("slides");
+        writer
+            .add_slide(&record, &slides.join(&record.png_filename))
+            .unwrap();
+        let original = std::fs::read(&writer.output_path).unwrap();
+        std::fs::remove_file(slides.join(&record.png_filename)).unwrap();
+        assert!(writer.write_slides(&[record.clone()], &slides).is_err());
+        assert_eq!(original, std::fs::read(&writer.output_path).unwrap());
+        std::fs::write(slides.join(&record.png_filename), b"not a PNG").unwrap();
+        assert!(writer.write_slides(&[record], &slides).is_err());
+        assert_eq!(original, std::fs::read(&writer.output_path).unwrap());
+    }
+
+    #[test]
+    fn add_slide_honors_supplied_png_path() {
+        let (dir, writer, record) = setup_pptx_test();
+        std::fs::remove_dir_all(dir.path().join("slides")).unwrap();
+        let supplied = dir.path().join("custom.png");
+        let png = make_test_png();
+        std::fs::write(&supplied, &png).unwrap();
+        writer.add_slide(&record, &supplied).unwrap();
+        let mut zip = ZipArchive::new(std::fs::File::open(&writer.output_path).unwrap()).unwrap();
+        let mut embedded = Vec::new();
+        zip.by_name("ppt/media/image1.png")
+            .unwrap()
+            .read_to_end(&mut embedded)
+            .unwrap();
+        assert_eq!(embedded, png);
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn windows_locked_deck_survives_failed_replacement() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let (dir, writer, record) = setup_pptx_test();
+        let slides = dir.path().join("slides");
+        writer
+            .write_slides(std::slice::from_ref(&record), &slides)
+            .unwrap();
+        let original = std::fs::read(&writer.output_path).unwrap();
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&writer.output_path)
+            .unwrap();
+        assert!(writer.write_slides(&[record], &slides).is_err());
+        drop(lock);
+        assert_eq!(std::fs::read(&writer.output_path).unwrap(), original);
+    }
+
+    #[test]
+    fn failed_replace_keeps_completed_temporary_deck() {
+        let (dir, writer, record) = setup_pptx_test();
+        std::fs::create_dir(&writer.output_path).unwrap();
+        std::fs::write(writer.output_path.join("untouched"), b"old data").unwrap();
+        assert!(writer
+            .write_slides(&[record], &dir.path().join("slides"))
+            .is_err());
+        assert_eq!(
+            std::fs::read(writer.output_path.join("untouched")).unwrap(),
+            b"old data"
+        );
+        let temporary = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("tmp.")
+            })
+            .unwrap();
+        assert_internal_relationship_graph_is_closed(&temporary);
+    }
 
     /// Create a standards-compliant 2x2 RGB PNG in memory.
     fn make_test_png() -> Vec<u8> {

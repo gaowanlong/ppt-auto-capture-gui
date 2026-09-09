@@ -50,6 +50,10 @@ impl ImageStore {
         let tmp_path = filepath.with_extension("tmp.png");
         img.save(&tmp_path)
             .with_context(|| format!("Failed to save PNG to {:?}", tmp_path))?;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&tmp_path)?
+            .sync_all()?;
 
         std::fs::rename(&tmp_path, &filepath)
             .with_context(|| format!("Failed to rename {:?} to {:?}", tmp_path, filepath))?;

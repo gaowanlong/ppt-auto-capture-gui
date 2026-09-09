@@ -27,8 +27,7 @@ impl ManifestStore {
             .open(&self.path)
             .with_context(|| format!("Failed to open manifest: {:?}", self.path))?;
 
-        let json = serde_json::to_string(record)
-            .context("Failed to serialize slide record")?;
+        let json = serde_json::to_string(record).context("Failed to serialize slide record")?;
 
         writeln!(file, "{}", json)
             .with_context(|| format!("Failed to write to manifest: {:?}", self.path))?;
@@ -48,16 +47,16 @@ impl ManifestStore {
             .with_context(|| format!("Failed to read manifest: {:?}", self.path))?;
 
         let mut records = Vec::new();
-        for line in content.lines() {
+        for (index, line) in content.lines().enumerate() {
             if line.trim().is_empty() {
                 continue;
             }
-            match serde_json::from_str::<SlideRecord>(line) {
-                Ok(r) => records.push(r),
-                Err(e) => {
-                    log::warn!("Skipping malformed manifest line: {} ({})", line, e);
-                }
-            }
+            records.push(serde_json::from_str::<SlideRecord>(line).with_context(|| {
+                format!(
+                    "Invalid manifest record at line {}; refusing partial recovery",
+                    index + 1
+                )
+            })?);
         }
 
         Ok(records)

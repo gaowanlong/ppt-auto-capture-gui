@@ -11,8 +11,7 @@ use crate::capture::capture_source::CaptureSource;
 use crate::capture::capture_state::CaptureState;
 use crate::detection::{BlackFrameDetector, ChangeDetector, DuplicateDetector, StabilityDetector};
 use crate::model::{Frame, MonitorInfo};
-use crate::pptx::PptxWriter;
-use crate::storage::{ImageStore, ManifestStore};
+use crate::storage::SessionStore;
 use crate::windows::{DxgiCapturer, GdiCapturer};
 
 #[derive(Debug, Clone)]
@@ -27,6 +26,7 @@ pub enum WorkerCommand {
 
 #[derive(Debug, Clone)]
 pub enum WorkerEvent {
+    SessionStarted(String),
     StateChanged(CaptureState),
     FrameCaptured {
         frame_index: u64,
@@ -134,9 +134,8 @@ struct WorkerLoop {
     state: CaptureState,
     config: CaptureConfig,
     source: Option<CaptureSource>,
-    image_store: Option<ImageStore>,
-    manifest_store: Option<ManifestStore>,
-    pptx_writer: Option<PptxWriter>,
+    session: Option<SessionStore>,
+    pending_save: Option<Frame>,
     slide_count: u32,
     last_slide_hash: Option<String>,
     animation_timer: Option<std::time::Instant>,
@@ -160,9 +159,8 @@ impl WorkerLoop {
             state: CaptureState::Idle,
             config: CaptureConfig::default(),
             source: None,
-            image_store: None,
-            manifest_store: None,
-            pptx_writer: None,
+            session: None,
+            pending_save: None,
             slide_count: 0,
             last_slide_hash: None,
             animation_timer: None,
@@ -210,6 +208,7 @@ impl WorkerLoop {
             }
         }
 
+        self.finish_session();
         info!("Capture worker stopped");
     }
 
@@ -226,12 +225,26 @@ impl WorkerLoop {
 
             match cmd {
                 WorkerCommand::Start(source) => {
+                    if self.session.is_some() {
+                        self.finish_session();
+                        if self.pending_save.is_some()
+                            || self.session.as_ref().is_some_and(|s| !s.completed)
+                        {
+                            let _ = self.event_tx.send(WorkerEvent::Error("Previous session has unsaved work; resume or restart to recover it before starting another session".into()));
+                            continue;
+                        }
+                        self.session = None;
+                    }
                     info!("Starting capture with source: {}", source.display_name());
                     self.source = Some(source.clone());
                     self.state = CaptureState::Running;
                     self.slide_count = 0;
                     self.last_slide_hash = None;
                     self.animation_timer = None;
+                    self.first_frame_saved = false;
+                    self.pending_save = None;
+                    self.change_detector.reset();
+                    self.stability_detector.reset();
 
                     let monitor = self.create_monitor_info_for_source(&source);
                     match monitor {
@@ -329,7 +342,12 @@ impl WorkerLoop {
                             }
 
                             let out_dir = std::path::PathBuf::from(&source.output_dir);
-                            let image_store = match ImageStore::new(out_dir.clone()) {
+                            let session = match SessionStore::create(
+                                &out_dir,
+                                &source.output_filename,
+                                &source.page_ratio,
+                                &source.image_fit,
+                            ) {
                                 Ok(store) => store,
                                 Err(e) => {
                                     let msg =
@@ -340,14 +358,10 @@ impl WorkerLoop {
                                     continue;
                                 }
                             };
-                            self.image_store = Some(image_store);
-                            self.manifest_store =
-                                Some(ManifestStore::new(out_dir.join("manifest.jsonl")));
-                            self.pptx_writer = Some(PptxWriter::new(
-                                &out_dir.join(&source.output_filename),
-                                &source.page_ratio,
-                                &source.image_fit,
+                            let _ = self.event_tx.send(WorkerEvent::SessionStarted(
+                                session.output_path().display().to_string(),
                             ));
+                            self.session = Some(session);
 
                             let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
                         }
@@ -361,7 +375,11 @@ impl WorkerLoop {
                 }
                 WorkerCommand::Stop => {
                     info!("Stopping capture");
-                    self.state = CaptureState::Stopped;
+                    self.state = if self.finish_session() {
+                        CaptureState::Stopped
+                    } else {
+                        CaptureState::Paused
+                    };
                     self.dxgi_capturer.release();
                     let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
                 }
@@ -523,6 +541,13 @@ impl WorkerLoop {
     }
 
     fn do_capture_cycle(&mut self) -> Result<()> {
+        // Never capture over a failed save. Resume retries exactly that frame first.
+        if let Some(frame) = self.pending_save.clone() {
+            if let Err(error) = self.save_frame(&frame) {
+                let _ = self.event_tx.send(WorkerEvent::Error(format!("Retry save failed: {error:#}. Resolve the output problem and resume to retry this slide.")));
+            }
+            return Ok(());
+        }
         let frame = if self.dxgi_capturer.is_initialized() {
             match self
                 .dxgi_capturer
@@ -568,7 +593,6 @@ impl WorkerLoop {
 
         // Save first frame immediately on starting capture
         if !self.first_frame_saved {
-            self.first_frame_saved = true;
             self.change_detector.detect_change(&frame);
             self.change_detector.update_reference(&frame);
             if let Err(e) = self.save_frame(&frame) {
@@ -577,6 +601,7 @@ impl WorkerLoop {
                     "First frame save failed: {}",
                     e
                 )));
+                return Ok(());
             }
             // Still continue with normal detection after the first save
         }
@@ -600,6 +625,7 @@ impl WorkerLoop {
                     log::info!("Saving pending stable frame before rapid transition");
                     if let Err(e) = self.save_frame(pframe) {
                         self.report_rapid_transition_save_failure("pending stable frame", e);
+                        return Ok(());
                     } else {
                         saved = true;
                     }
@@ -615,6 +641,7 @@ impl WorkerLoop {
                                 "fallback reference frame",
                                 e,
                             );
+                            return Ok(());
                         }
                     }
                 }
@@ -648,6 +675,7 @@ impl WorkerLoop {
                     let _ = self
                         .event_tx
                         .send(WorkerEvent::Error(format!("Save failed: {}", e)));
+                    return Ok(());
                 }
 
                 self.state = CaptureState::Running;
@@ -666,6 +694,45 @@ impl WorkerLoop {
     }
 
     fn save_frame(&mut self, frame: &Frame) -> Result<()> {
+        if self.pending_save.is_none() {
+            self.pending_save = Some(frame.clone());
+        }
+        let pending = self.pending_save.as_ref().unwrap().clone();
+        let result = self.commit_frame(&pending);
+        if result.is_ok() {
+            self.pending_save = None;
+            self.first_frame_saved = true;
+        } else {
+            self.state = CaptureState::Paused;
+            let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
+        }
+        result
+    }
+
+    fn finish_session(&mut self) -> bool {
+        if let Some(frame) = self.pending_save.clone() {
+            if let Err(error) = self.save_frame(&frame) {
+                let _ = self.event_tx.send(WorkerEvent::Error(format!(
+                    "Pending slide could not be saved: {error}"
+                )));
+                return false;
+            }
+        }
+        if let Some(session) = self.session.as_mut() {
+            if session.completed {
+                return true;
+            }
+            if let Err(error) = session.finish() {
+                let _ = self.event_tx.send(WorkerEvent::Error(format!(
+                    "Session finalization failed: {error}"
+                )));
+                return false;
+            }
+        }
+        true
+    }
+
+    fn commit_frame(&mut self, frame: &Frame) -> Result<()> {
         self.state = CaptureState::Saving;
         let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
 
@@ -681,8 +748,7 @@ impl WorkerLoop {
             }
         }
 
-        self.slide_count += 1;
-        let slide_number = self.slide_count;
+        let slide_number = self.slide_count + 1;
         let png_filename = format!("slide_{:04}.png", slide_number);
         let png_relative = format!("slides/{}", png_filename);
 
@@ -709,19 +775,11 @@ impl WorkerLoop {
             monitor_name,
         });
 
-        let image_store = self
-            .image_store
-            .as_ref()
-            .context("Image store not initialized")?;
-        let png_path = image_store.save_png(frame, slide_number)?;
-
-        if let Some(ref manifest_store) = self.manifest_store {
-            manifest_store.append(&record)?;
-        }
-
-        if let Some(ref pptx_writer) = self.pptx_writer {
-            pptx_writer.add_slide(&record, &png_path)?;
-        }
+        self.session
+            .as_mut()
+            .context("Session not initialized")?
+            .save(frame, record)?;
+        self.slide_count = slide_number;
 
         self.last_slide_hash = Some(content_hash);
 
@@ -771,6 +829,112 @@ fn capture_backend_unavailable_message() -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_first_frame_retries_same_page_without_success_event_or_gap() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_tx, rx) = crossbeam_channel::unbounded();
+        let (events, received) = crossbeam_channel::unbounded();
+        let mut worker = WorkerLoop::new(rx, events);
+        worker.session =
+            Some(SessionStore::create(dir.path(), "deck.pptx", "16:9", "fit").unwrap());
+        let output = worker.session.as_ref().unwrap().output_path();
+        std::fs::create_dir(&output).unwrap();
+        let frame = Frame::new(vec![0, 0, 255, 255], 1, 1, 4, 17, 0);
+        assert!(worker.save_frame(&frame).is_err());
+        assert_eq!(worker.slide_count, 0);
+        assert!(!worker.first_frame_saved);
+        assert!(worker.last_slide_hash.is_none());
+        assert_eq!(worker.state, CaptureState::Paused);
+        assert!(!received
+            .try_iter()
+            .any(|event| matches!(event, WorkerEvent::SlideSaved { .. })));
+        worker.do_capture_cycle().unwrap();
+        assert_eq!(worker.state, CaptureState::Paused);
+        assert_eq!(worker.slide_count, 0);
+        std::fs::remove_dir(output).unwrap();
+        // Retry before touching a capturer; its source has deliberately not been initialized.
+        worker.do_capture_cycle().unwrap();
+        assert_eq!(worker.slide_count, 1);
+        assert!(worker.first_frame_saved);
+        assert!(worker.pending_save.is_none());
+        let records = &worker.session.as_ref().unwrap().records;
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].frame_index, 17);
+        assert_eq!(
+            received
+                .try_iter()
+                .filter(|event| matches!(
+                    event,
+                    WorkerEvent::SlideSaved {
+                        slide_number: 1,
+                        ..
+                    }
+                ))
+                .count(),
+            1
+        );
+        let next = Frame::new(vec![255, 0, 0, 255], 1, 1, 4, 18, 0);
+        worker.save_frame(&next).unwrap();
+        assert_eq!(worker.slide_count, 2);
+        worker.finish_session();
+        assert!(worker.session.as_ref().unwrap().completed);
+    }
+
+    #[test]
+    fn stop_keeps_png_and_journal_failures_retryable() {
+        for fail_journal in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let (tx, rx) = crossbeam_channel::unbounded();
+            let (events, _received) = crossbeam_channel::unbounded();
+            let mut worker = WorkerLoop::new(rx, events);
+            worker.session =
+                Some(SessionStore::create(dir.path(), "deck.pptx", "16:9", "fit").unwrap());
+            let session_dir = worker.session.as_ref().unwrap().directory.clone();
+            let blocker = if fail_journal {
+                let journal = session_dir.join("session.json");
+                std::fs::remove_file(&journal).unwrap();
+                journal
+            } else {
+                session_dir.join("slides/slide_0001.tmp.png")
+            };
+            std::fs::create_dir(&blocker).unwrap();
+            assert!(worker
+                .save_frame(&Frame::new(vec![255; 4], 1, 1, 4, 42, 0))
+                .is_err());
+            tx.send(WorkerCommand::Stop).unwrap();
+            worker.process_commands();
+            assert_eq!(worker.state, CaptureState::Paused);
+            assert!(worker.pending_save.is_some());
+            assert_eq!(worker.slide_count, 0);
+            std::fs::remove_dir(blocker).unwrap();
+            tx.send(WorkerCommand::Stop).unwrap();
+            worker.process_commands();
+            assert_eq!(worker.state, CaptureState::Stopped);
+            let recovered = SessionStore::open(&session_dir).unwrap();
+            assert!(recovered.completed);
+            assert_eq!(recovered.records.len(), 1);
+            assert_eq!(recovered.records[0].frame_index, 42);
+        }
+    }
+
+    #[test]
+    fn shutdown_preserves_incomplete_journal_when_publication_still_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_tx, rx) = crossbeam_channel::unbounded();
+        let (events, _received) = crossbeam_channel::unbounded();
+        let mut worker = WorkerLoop::new(rx, events);
+        worker.session =
+            Some(SessionStore::create(dir.path(), "deck.pptx", "16:9", "fit").unwrap());
+        std::fs::create_dir(worker.session.as_ref().unwrap().output_path()).unwrap();
+        assert!(worker
+            .save_frame(&Frame::new(vec![255; 4], 1, 1, 4, 1, 0))
+            .is_err());
+        worker.run(Arc::new(AtomicBool::new(false)));
+        let reopened = SessionStore::open(&worker.session.as_ref().unwrap().directory).unwrap();
+        assert!(!reopened.completed);
+        assert_eq!(reopened.records.len(), 1);
+    }
 
     #[test]
     fn rapid_transition_save_failure_emits_complete_worker_error() {
