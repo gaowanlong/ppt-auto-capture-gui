@@ -1,5 +1,6 @@
 //! Real Win32 capture pressure tests. Reports contain metrics, never captured images.
 use super::*;
+use crate::capture::stress_support::FreshnessWatchdog;
 use crate::capture::CaptureWorker;
 use crate::windows::session_events::{capture_resources, CaptureResources};
 use std::time::{Duration, Instant};
@@ -113,7 +114,7 @@ fn run_native_stress(
     };
     let result = (|| -> Result<()> {
         use sha2::{Digest, Sha256};
-        let mut previous_fingerprint = None;
+        let mut freshness = FreshnessWatchdog::default();
         let mut next_sample = Duration::ZERO;
         while start.elapsed() < Duration::from_secs(seconds) {
             unsafe {
@@ -134,14 +135,10 @@ fn run_native_stress(
                 "Incomplete native window frame"
             );
             report.frames += 1;
-            let fingerprint = Sha256::digest(&frame.data);
-            if previous_fingerprint
-                .as_ref()
-                .is_some_and(|previous| *previous != fingerprint)
-            {
+            let fingerprint = Sha256::digest(&frame.data).into();
+            if freshness.observe(fingerprint, start.elapsed())? {
                 report.changed_frames += 1;
             }
-            previous_fingerprint = Some(fingerprint);
             drop(frame);
             if report.frames % 25 == 0 {
                 // Both early-return and selected-bitmap cleanup paths must remain flat.

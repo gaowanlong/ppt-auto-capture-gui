@@ -31,7 +31,7 @@ The same script uses Cargo automatically when the bundled executable is absent. 
 - GDI objects, USER objects, process handles, working-set memory and elapsed wall-clock time.
 - Resources sampled after warmup and once per minute. Reports have bounded size for a 24-hour test.
 
-The native test fails for fewer than ten frames, frame errors, GDI/USER growth exceeding eight objects, process-handle growth exceeding 32 handles, or working-set growth exceeding 256 MiB after warmup. Memory allowances accommodate allocator caching and are not a promise of zero memory growth. Review the time series for ongoing trends even when the final thresholds pass.
+The native test fails for fewer than ten frames, no changing content, more than ten seconds of frozen captured content, frame errors, GDI/USER growth exceeding eight objects, process-handle growth exceeding 32 handles, or working-set growth exceeding 256 MiB after warmup. Memory allowances accommodate allocator caching and are not a promise of zero memory growth. Review the time series for ongoing trends even when the final thresholds pass.
 
 Each run gets a unique directory containing `native-report.json`, `runner-result.json`, and `stress.log`. An early build/setup failure can produce only the runner result and log. `requested_seconds` is the requested test duration; `elapsed_seconds` measures actual native-loop time and excludes compilation and warmup. Synthetic frame-count tests are not counted as elapsed native runtime.
 

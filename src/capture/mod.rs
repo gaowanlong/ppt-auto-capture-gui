@@ -7,3 +7,5 @@ pub use capture_source::*;
 pub use capture_state::*;
 pub use capture_worker::*;
 pub use events::*;
+#[cfg(test)]
+pub(crate) mod stress_support;
