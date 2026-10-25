@@ -335,7 +335,9 @@ mod tests {
             .unwrap();
         let original = std::fs::read(&writer.output_path).unwrap();
         std::fs::remove_file(slides.join(&record.png_filename)).unwrap();
-        assert!(writer.write_slides(&[record.clone()], &slides).is_err());
+        assert!(writer
+            .write_slides(std::slice::from_ref(&record), &slides)
+            .is_err());
         assert_eq!(original, std::fs::read(&writer.output_path).unwrap());
         std::fs::write(slides.join(&record.png_filename), b"not a PNG").unwrap();
         assert!(writer.write_slides(&[record], &slides).is_err());

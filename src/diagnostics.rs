@@ -331,7 +331,7 @@ pub fn initialize_logging() -> LoggingSetup {
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
-    use std::fs::{self, File, FileTimes};
+    use std::fs::{self, FileTimes};
     use std::path::{Path, PathBuf};
     use std::time::{Duration, SystemTime};
 
@@ -374,7 +374,9 @@ mod tests {
                 .path
                 .join(format!("ppt-auto-capture-20260803-1200{index:02}.log"));
             fs::write(&path, "log").unwrap();
-            File::open(&path)
+            fs::OpenOptions::new()
+                .write(true)
+                .open(&path)
                 .unwrap()
                 .set_times(FileTimes::new().set_modified(timestamp))
                 .unwrap();
