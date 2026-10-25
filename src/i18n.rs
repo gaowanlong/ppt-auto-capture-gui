@@ -428,15 +428,6 @@ pub fn t_black_frame(lang: Language) -> &'static str {
         Language::Chinese => "黑屏帧",
     }
 }
-pub fn t_no_worker_error(lang: Language) -> String {
-    match lang {
-        Language::English => {
-            "No worker running. Please start capture first (Dashboard ▶ Start).".to_string()
-        }
-        Language::Chinese => "没有运行中的捕获任务。请先在主面板点击「开始」开始捕获。".to_string(),
-    }
-}
-
 pub fn t_none(lang: Language) -> &'static str {
     match lang {
         Language::English => "None",

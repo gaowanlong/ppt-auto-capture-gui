@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use crossbeam_channel::Sender;
 
+use super::{worker_event_channel, WorkerEventReceiver, WorkerEventSender};
 use crate::capture::capture_source::CaptureSource;
 use crate::capture::capture_state::CaptureState;
 use crate::detection::{
@@ -29,6 +30,7 @@ pub enum WorkerCommand {
 #[derive(Debug, Clone)]
 pub enum WorkerEvent {
     SessionStarted(String),
+    StartFailed(String),
     StateChanged(CaptureState),
     FrameCaptured {
         frame_index: u64,
@@ -79,17 +81,37 @@ impl Default for CaptureConfig {
     }
 }
 
+impl CaptureConfig {
+    pub fn normalized(mut self) -> Self {
+        let defaults = Self::default();
+        self.sample_interval_ms = self.sample_interval_ms.clamp(100, 5000);
+        self.stability_frames = self.stability_frames.clamp(1, 10);
+        self.animation_timeout_ms = self.animation_timeout_ms.clamp(1000, 30000);
+        self.change_threshold = if self.change_threshold.is_finite() {
+            self.change_threshold.clamp(0.001, 0.5)
+        } else {
+            defaults.change_threshold
+        };
+        self.black_threshold = if self.black_threshold.is_finite() {
+            self.black_threshold.clamp(0.5, 1.0)
+        } else {
+            defaults.black_threshold
+        };
+        self
+    }
+}
+
 pub struct CaptureWorker {
     handle: Option<thread::JoinHandle<()>>,
     running: Arc<AtomicBool>,
     cmd_tx: Sender<WorkerCommand>,
-    event_rx: crossbeam_channel::Receiver<WorkerEvent>,
+    event_rx: WorkerEventReceiver,
 }
 
 impl CaptureWorker {
     pub fn new() -> Self {
         let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
-        let (event_tx, event_rx) = crossbeam_channel::unbounded();
+        let (event_tx, event_rx) = worker_event_channel();
         let running = Arc::new(AtomicBool::new(true));
         let running_clone = running.clone();
 
@@ -118,12 +140,15 @@ impl CaptureWorker {
         self.cmd_tx.clone()
     }
 
-    pub fn event_rx(&self) -> crossbeam_channel::Receiver<WorkerEvent> {
+    pub fn event_rx(&self) -> WorkerEventReceiver {
         self.event_rx.clone()
     }
 
     pub fn stop(&mut self) {
         self.running.store(false, Ordering::SeqCst);
+        if self.handle.is_some() {
+            let _ = self.cmd_tx.send(WorkerCommand::Stop);
+        }
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
         }
@@ -138,7 +163,7 @@ impl Drop for CaptureWorker {
 
 struct WorkerLoop {
     cmd_rx: crossbeam_channel::Receiver<WorkerCommand>,
-    event_tx: crossbeam_channel::Sender<WorkerEvent>,
+    event_tx: WorkerEventSender,
     dxgi_capturer: DxgiCapturer,
     gdi_capturer: GdiCapturer,
     change_detector: ChangeDetector,
@@ -156,12 +181,13 @@ struct WorkerLoop {
     first_frame_saved: bool,
     motion_filter: MotionFilter,
     desktop_retry_at: Option<std::time::Instant>,
+    queued_command: Option<WorkerCommand>,
 }
 
 impl WorkerLoop {
     fn new(
         cmd_rx: crossbeam_channel::Receiver<WorkerCommand>,
-        event_tx: crossbeam_channel::Sender<WorkerEvent>,
+        event_tx: WorkerEventSender,
     ) -> Self {
         Self {
             cmd_rx,
@@ -183,6 +209,7 @@ impl WorkerLoop {
             first_frame_saved: false,
             motion_filter: MotionFilter::default(),
             desktop_retry_at: None,
+            queued_command: None,
         }
     }
 
@@ -255,10 +282,13 @@ impl WorkerLoop {
                 }
             }
 
-            if self.state.is_active() {
-                thread::sleep(Duration::from_millis(self.config.sample_interval_ms));
+            let delay = if self.state.is_active() {
+                self.config.sample_interval_ms
             } else {
-                thread::sleep(Duration::from_millis(100));
+                100
+            };
+            if !self.wait_for_work(Duration::from_millis(delay)) {
+                break;
             }
         }
 
@@ -320,9 +350,25 @@ impl WorkerLoop {
         Ok(())
     }
 
+    fn wait_for_work(&mut self, duration: Duration) -> bool {
+        match self.cmd_rx.recv_timeout(duration) {
+            Ok(command) => {
+                self.queued_command = Some(command);
+                true
+            }
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => true,
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => false,
+        }
+    }
+
     fn process_commands(&mut self) {
         loop {
-            let cmd = match self.cmd_rx.try_recv() {
+            let cmd = match self
+                .queued_command
+                .take()
+                .map(Ok)
+                .unwrap_or_else(|| self.cmd_rx.try_recv())
+            {
                 Ok(c) => c,
                 Err(crossbeam_channel::TryRecvError::Empty) => break,
                 Err(crossbeam_channel::TryRecvError::Disconnected) => {
@@ -424,7 +470,9 @@ impl WorkerLoop {
                                                 );
                                                 error!("{}", msg);
                                                 self.state = CaptureState::Error;
-                                                let _ = self.event_tx.send(WorkerEvent::Error(msg));
+                                                let _ = self
+                                                    .event_tx
+                                                    .send(WorkerEvent::StartFailed(msg));
                                                 continue;
                                             }
                                         }
@@ -444,7 +492,7 @@ impl WorkerLoop {
                                         let msg = format!("GDI init failed: {}", e);
                                         error!("{}", msg);
                                         self.state = CaptureState::Error;
-                                        let _ = self.event_tx.send(WorkerEvent::Error(msg));
+                                        let _ = self.event_tx.send(WorkerEvent::StartFailed(msg));
                                         continue;
                                     }
                                 }
@@ -463,7 +511,7 @@ impl WorkerLoop {
                                         format!("Failed to initialize output directory: {}", e);
                                     error!("{}", msg);
                                     self.state = CaptureState::Error;
-                                    let _ = self.event_tx.send(WorkerEvent::Error(msg));
+                                    let _ = self.event_tx.send(WorkerEvent::StartFailed(msg));
                                     continue;
                                 }
                             };
@@ -478,7 +526,7 @@ impl WorkerLoop {
                             let msg = format!("Failed to get monitor info: {}", e);
                             error!("{}", msg);
                             self.state = CaptureState::Error;
-                            let _ = self.event_tx.send(WorkerEvent::Error(msg));
+                            let _ = self.event_tx.send(WorkerEvent::StartFailed(msg));
                         }
                     }
                 }
@@ -513,7 +561,7 @@ impl WorkerLoop {
                 }
                 WorkerCommand::UpdateConfig(cfg) => {
                     info!("Updating capture config");
-                    self.config = cfg;
+                    self.config = cfg.normalized();
                     self.change_detector
                         .set_threshold(self.config.change_threshold);
                     self.stability_detector
@@ -521,125 +569,52 @@ impl WorkerLoop {
                     self.black_frame_detector
                         .set_threshold(self.config.black_threshold);
                 }
-                WorkerCommand::TestCapture(source) => {
-                    info!("Test capture requested");
-                    let mut monitor = self.create_monitor_info_for_source(&source);
-                    // Also clip to window for test capture
-                    if let Ok(ref mut mon) = monitor {
-                        if source.window_hwnd != 0 {
-                            if let Ok(window_rect) =
-                                crate::windows::get_client_window_rect(source.window_hwnd)
-                            {
-                                if window_rect.width > 10
-                                    && window_rect.height > 10
-                                    && window_rect.x > -32000
-                                    && window_rect.y > -32000
-                                {
-                                    let rx = mon.region.x.max(window_rect.x);
-                                    let ry = mon.region.y.max(window_rect.y);
-                                    let rr = (mon.region.x + mon.region.width as i32)
-                                        .min(window_rect.x + window_rect.width as i32);
-                                    let rb = (mon.region.y + mon.region.height as i32)
-                                        .min(window_rect.y + window_rect.height as i32);
-                                    if rr > rx && rb > ry {
-                                        mon.region = crate::model::Region::new(
-                                            rx,
-                                            ry,
-                                            (rr - rx) as u32,
-                                            (rb - ry) as u32,
-                                        );
-                                        log::info!(
-                                            "Test capture clipped to window: {}x{}",
-                                            mon.region.width,
-                                            mon.region.height
-                                        );
-                                    }
-                                }
-                            }
-                        }
+                WorkerCommand::TestCapture(source) => match self.capture_preview_frame(&source) {
+                    Ok(frame) => {
+                        let _ = self.event_tx.send(make_preview_event(&frame));
                     }
-                    match monitor {
-                        Ok(mon) => {
-                            if !should_use_display_capturer(&source) {
-                                let mut test_gdi = GdiCapturer::new();
-                                match test_gdi.initialize(&mon) {
-                                    Ok(()) => {
-                                        test_gdi.set_window_hwnd(
-                                            source.window_hwnd,
-                                            mon.region.width,
-                                            mon.region.height,
-                                        );
-                                        match test_gdi.capture_frame() {
-                                            Ok(frame) => {
-                                                let thumb = frame.thumbnail(320, 240);
-                                                let _ = self
-                                                    .event_tx
-                                                    .send(WorkerEvent::TestFrame(thumb, 320, 240));
-                                            }
-                                            Err(e) => {
-                                                let _ = self.event_tx.send(WorkerEvent::Error(
-                                                    format!("Test window capture failed: {}", e),
-                                                ));
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        let _ = self.event_tx.send(WorkerEvent::Error(format!(
-                                            "Test window capture init failed: {}",
-                                            e
-                                        )));
-                                    }
-                                }
-                                continue;
-                            }
-
-                            let mut test_dxgi = DxgiCapturer::new();
-                            match test_dxgi.initialize(&mon) {
-                                Ok(()) => {
-                                    match test_dxgi.capture_frame(2000) {
-                                        Ok(Some(frame)) => {
-                                            let thumb = frame.thumbnail(320, 240);
-                                            let _ = self
-                                                .event_tx
-                                                .send(WorkerEvent::TestFrame(thumb, 320, 240));
-                                        }
-                                        Ok(None) => {
-                                            let _ = self.event_tx.send(WorkerEvent::Error(
-                                                "Test capture timed out".into(),
-                                            ));
-                                        }
-                                        Err(e) => {
-                                            info!("DXGI test failed ({}), trying GDI", e);
-                                            let mut test_gdi = GdiCapturer::new();
-                                            if test_gdi.initialize(&mon).is_ok() {
-                                                if let Ok(frame) = test_gdi.capture_frame() {
-                                                    let thumb = frame.thumbnail(320, 240);
-                                                    let _ = self.event_tx.send(
-                                                        WorkerEvent::TestFrame(thumb, 320, 240),
-                                                    );
-                                                }
-                                            }
-                                        }
-                                    }
-                                    test_dxgi.release();
-                                }
-                                Err(e) => {
-                                    let _ = self.event_tx.send(WorkerEvent::Error(format!(
-                                        "Test capture init failed: {}",
-                                        e
-                                    )));
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            let _ = self
-                                .event_tx
-                                .send(WorkerEvent::Error(format!("Monitor lookup failed: {}", e)));
-                        }
+                    Err(error) => {
+                        let _ = self.event_tx.send(WorkerEvent::Error(format!(
+                            "Test screenshot failed: {error:#}"
+                        )));
                     }
-                }
+                },
             }
         }
+    }
+
+    fn capture_preview_frame(&self, source: &CaptureSource) -> Result<Frame> {
+        anyhow::ensure!(
+            crate::windows::input_desktop_available(),
+            "Desktop unavailable; unlock Windows and try again"
+        );
+        let mut monitor = self.create_monitor_info_for_source(source)?;
+        let (width, height) = if source.window_hwnd != 0 {
+            let region = crate::windows::get_client_window_rect(source.window_hwnd)?;
+            anyhow::ensure!(
+                region.is_valid(),
+                "Selected window is unavailable or minimized"
+            );
+            monitor.region = region;
+            (region.width, region.height)
+        } else {
+            (0, 0)
+        };
+        if should_use_display_capturer(source) {
+            let mut display = DxgiCapturer::new();
+            let frame = display
+                .initialize(&monitor)
+                .and_then(|_| display.capture_frame(2000));
+            display.release();
+            if let Ok(Some(frame)) = frame {
+                return Ok(frame);
+            }
+        }
+        // Use GDI on both initialization and capture failure, with the exact target window.
+        let mut capture = GdiCapturer::new();
+        capture.initialize(&monitor)?;
+        capture.set_window_hwnd(source.window_hwnd, width, height);
+        capture.capture_frame()
     }
 
     fn do_capture_cycle(&mut self) -> Result<()> {
@@ -872,12 +847,14 @@ impl WorkerLoop {
         if self.config.filter_duplicates {
             if self.motion_filter.is_duplicate(frame) {
                 self.state = CaptureState::Running;
+                let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
                 return Ok(());
             }
             if let Some(ref last_hash) = self.last_slide_hash {
                 if *last_hash == content_hash {
                     info!("Duplicate slide detected, skipping");
                     self.state = CaptureState::Running;
+                    let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
                     return Ok(());
                 }
             }
@@ -940,6 +917,11 @@ impl WorkerLoop {
     }
 }
 
+fn make_preview_event(frame: &Frame) -> WorkerEvent {
+    let (pixels, width, height) = frame.thumbnail_with_dimensions(320, 240);
+    WorkerEvent::TestFrame(pixels, width, height)
+}
+
 fn should_use_display_capturer(source: &CaptureSource) -> bool {
     #[cfg(target_os = "macos")]
     {
@@ -967,10 +949,169 @@ mod tests {
     use super::*;
 
     #[test]
+    fn stop_interrupts_a_long_sample_wait_and_is_processed_once() {
+        let (commands, rx) = crossbeam_channel::unbounded();
+        let (events, received) = worker_event_channel();
+        let mut worker = WorkerLoop::new(rx, events);
+        commands.send(WorkerCommand::Stop).unwrap();
+        let start = std::time::Instant::now();
+        assert!(worker.wait_for_work(Duration::from_secs(5)));
+        assert!(start.elapsed() < Duration::from_secs(1));
+        worker.process_commands();
+        assert_eq!(worker.state, CaptureState::Stopped);
+        assert_eq!(
+            received
+                .try_iter()
+                .filter(|e| matches!(e, WorkerEvent::StateChanged(CaptureState::Stopped)))
+                .count(),
+            1
+        );
+        drop(commands);
+        assert!(!worker.wait_for_work(Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn unsafe_config_does_not_create_zero_delay_capture_or_invalid_thresholds() {
+        let (commands, rx) = crossbeam_channel::unbounded();
+        let (events, _) = worker_event_channel();
+        let mut worker = WorkerLoop::new(rx, events);
+        commands
+            .send(WorkerCommand::UpdateConfig(CaptureConfig {
+                sample_interval_ms: 0,
+                stability_frames: 0,
+                animation_timeout_ms: u64::MAX,
+                change_threshold: f64::NAN,
+                black_threshold: f64::INFINITY,
+                filter_duplicates: true,
+            }))
+            .unwrap();
+        worker.process_commands();
+        assert!(worker.config.sample_interval_ms >= 100);
+        assert!(worker.config.stability_frames >= 1);
+        assert!(worker.config.animation_timeout_ms <= 30000);
+        assert!(worker.config.change_threshold.is_finite());
+        assert!(worker.config.black_threshold.is_finite());
+    }
+
+    #[test]
+    fn failed_start_reports_a_retryable_start_failure() {
+        let (commands, rx) = crossbeam_channel::unbounded();
+        let (events, received) = worker_event_channel();
+        let mut worker = WorkerLoop::new(rx, events);
+        commands
+            .send(WorkerCommand::Start(CaptureSource::new(
+                0,
+                String::new(),
+                u64::MAX,
+                "Unavailable".into(),
+            )))
+            .unwrap();
+        worker.process_commands();
+        assert_eq!(worker.state, CaptureState::Error);
+        assert!(received
+            .try_iter()
+            .any(|event| matches!(event, WorkerEvent::StartFailed(_))));
+        assert!(worker.session.is_none());
+    }
+
+    #[test]
+    fn preview_event_matches_actual_wide_tall_and_tiny_pixel_buffers() {
+        for (width, height, expected) in [
+            (1920, 1080, (320, 180)),
+            (900, 1600, (135, 240)),
+            (4, 4, (4, 4)),
+        ] {
+            let frame = Frame::new(
+                vec![255; (width * height * 4) as usize],
+                width,
+                height,
+                width * 4,
+                0,
+                0,
+            );
+            let WorkerEvent::TestFrame(pixels, w, h) = make_preview_event(&frame) else {
+                panic!("preview expected");
+            };
+            assert_eq!((w, h), expected);
+            assert_eq!(pixels.len(), (w * h * 4) as usize);
+        }
+    }
+
+    #[test]
+    fn duplicate_save_finishes_in_running_state_for_the_ui() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_commands, rx) = crossbeam_channel::unbounded();
+        let (tx, events) = worker_event_channel();
+        let mut worker = WorkerLoop::new(rx, tx);
+        worker.session =
+            Some(SessionStore::create(dir.path(), "deck.pptx", "16:9", "fit").unwrap());
+        let frame = Frame::new(vec![255; 16], 2, 2, 8, 0, 0);
+        worker.save_frame(&frame).unwrap();
+        for _ in events.try_iter() {}
+        worker.save_frame(&frame).unwrap();
+        let states: Vec<_> = events
+            .try_iter()
+            .filter_map(|e| {
+                if let WorkerEvent::StateChanged(s) = e {
+                    Some(s)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(states.last(), Some(&CaptureState::Running));
+        assert_eq!(worker.slide_count, 1);
+    }
+
+    #[test]
+    fn control_event_storm_is_bounded_and_preserves_latest_stop_and_page() {
+        let (_commands, rx) = crossbeam_channel::unbounded();
+        let (tx, events) = worker_event_channel();
+        let worker = WorkerLoop::new(rx, tx);
+        for number in 1..=100_000 {
+            worker
+                .event_tx
+                .send(WorkerEvent::StateChanged(CaptureState::Saving))
+                .unwrap();
+            worker
+                .event_tx
+                .send(WorkerEvent::SlideSaved {
+                    slide_number: number,
+                    png_filename: format!("slide_{number}.png"),
+                })
+                .unwrap();
+            worker
+                .event_tx
+                .send(WorkerEvent::Error(format!("transient {number}")))
+                .unwrap();
+        }
+        worker
+            .event_tx
+            .send(WorkerEvent::StateChanged(CaptureState::Stopped))
+            .unwrap();
+        assert!(
+            events.len() <= 64,
+            "Control event backlog grew to {}",
+            events.len()
+        );
+        let events: Vec<_> = events.try_iter().collect();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            WorkerEvent::SlideSaved {
+                slide_number: 100_000,
+                ..
+            }
+        )));
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, WorkerEvent::StateChanged(CaptureState::Stopped))));
+    }
+
+    #[test]
     fn settled_content_inside_a_previous_video_region_is_not_lost() {
         let dir = tempfile::tempdir().unwrap();
         let (_tx, rx) = crossbeam_channel::unbounded();
-        let (tx, _events) = crossbeam_channel::unbounded();
+        let (tx, _events) = worker_event_channel();
         let mut worker = WorkerLoop::new(rx, tx);
         worker.session =
             Some(SessionStore::create(dir.path(), "deck.pptx", "16:9", "fit").unwrap());
@@ -992,7 +1133,7 @@ mod tests {
     fn slow_ui_does_not_accumulate_per_frame_notifications() {
         let dir = tempfile::tempdir().unwrap();
         let (_tx, rx) = crossbeam_channel::unbounded();
-        let (tx, events) = crossbeam_channel::unbounded();
+        let (tx, events) = worker_event_channel();
         let mut worker = WorkerLoop::new(rx, tx);
         worker.session =
             Some(SessionStore::create(dir.path(), "deck.pptx", "16:9", "fit").unwrap());
@@ -1027,7 +1168,7 @@ mod tests {
     fn first_frame_after_unlock_saves_a_new_page_and_skips_an_unchanged_page() {
         let dir = tempfile::tempdir().unwrap();
         let (_tx, rx) = crossbeam_channel::unbounded();
-        let (tx, _events) = crossbeam_channel::unbounded();
+        let (tx, _events) = worker_event_channel();
         let mut worker = WorkerLoop::new(rx, tx);
         worker.session =
             Some(SessionStore::create(dir.path(), "deck.pptx", "16:9", "fit").unwrap());
@@ -1048,7 +1189,7 @@ mod tests {
     fn same_template_fast_pages_keep_intermediate_content() {
         let dir = tempfile::tempdir().unwrap();
         let (_tx, rx) = crossbeam_channel::unbounded();
-        let (tx, _events) = crossbeam_channel::unbounded();
+        let (tx, _events) = worker_event_channel();
         let mut worker = WorkerLoop::new(rx, tx);
         worker.session =
             Some(SessionStore::create(dir.path(), "deck.pptx", "16:9", "fit").unwrap());
@@ -1065,7 +1206,7 @@ mod tests {
     fn broad_rapid_slide_changes_keep_intermediate_pages() {
         let dir = tempfile::tempdir().unwrap();
         let (_tx, rx) = crossbeam_channel::unbounded();
-        let (tx, _events) = crossbeam_channel::unbounded();
+        let (tx, _events) = worker_event_channel();
         let mut worker = WorkerLoop::new(rx, tx);
         worker.session =
             Some(SessionStore::create(dir.path(), "deck.pptx", "16:9", "fit").unwrap());
@@ -1082,7 +1223,7 @@ mod tests {
     fn video_motion_timeout_and_new_slide_do_not_create_repeated_pages() {
         let dir = tempfile::tempdir().unwrap();
         let (_tx, rx) = crossbeam_channel::unbounded();
-        let (tx, events) = crossbeam_channel::unbounded();
+        let (tx, events) = worker_event_channel();
         let mut worker = WorkerLoop::new(rx, tx);
         worker.session =
             Some(SessionStore::create(dir.path(), "deck.pptx", "16:9", "fit").unwrap());
@@ -1111,7 +1252,7 @@ mod tests {
     #[test]
     fn lock_wait_does_not_override_user_pause_or_pending_save() {
         let (_tx, rx) = crossbeam_channel::unbounded();
-        let (tx, _events) = crossbeam_channel::unbounded();
+        let (tx, _events) = worker_event_channel();
         let mut worker = WorkerLoop::new(rx, tx);
         worker.state = CaptureState::Running;
         worker.pending_save = Some(Frame::new(vec![255; 4], 1, 1, 4, 42, 0));
@@ -1129,7 +1270,7 @@ mod tests {
     #[test]
     fn black_transition_can_return_to_capture_without_manual_resume() {
         let (_tx, rx) = crossbeam_channel::unbounded();
-        let (tx, _events) = crossbeam_channel::unbounded();
+        let (tx, _events) = worker_event_channel();
         let mut worker = WorkerLoop::new(rx, tx);
         worker.state = CaptureState::Running;
         worker
@@ -1143,7 +1284,7 @@ mod tests {
     fn cursor_motion_does_not_save_another_slide() {
         let dir = tempfile::tempdir().unwrap();
         let (_tx, rx) = crossbeam_channel::unbounded();
-        let (tx, _events) = crossbeam_channel::unbounded();
+        let (tx, _events) = worker_event_channel();
         let mut worker = WorkerLoop::new(rx, tx);
         worker.session =
             Some(SessionStore::create(dir.path(), "deck.pptx", "16:9", "fit").unwrap());
@@ -1162,7 +1303,7 @@ mod tests {
     fn failed_first_frame_retries_same_page_without_success_event_or_gap() {
         let dir = tempfile::tempdir().unwrap();
         let (_tx, rx) = crossbeam_channel::unbounded();
-        let (events, received) = crossbeam_channel::unbounded();
+        let (events, received) = worker_event_channel();
         let mut worker = WorkerLoop::new(rx, events);
         worker.session =
             Some(SessionStore::create(dir.path(), "deck.pptx", "16:9", "fit").unwrap());
@@ -1214,7 +1355,7 @@ mod tests {
         for fail_journal in [false, true] {
             let dir = tempfile::tempdir().unwrap();
             let (tx, rx) = crossbeam_channel::unbounded();
-            let (events, _received) = crossbeam_channel::unbounded();
+            let (events, _received) = worker_event_channel();
             let mut worker = WorkerLoop::new(rx, events);
             worker.session =
                 Some(SessionStore::create(dir.path(), "deck.pptx", "16:9", "fit").unwrap());
@@ -1250,7 +1391,7 @@ mod tests {
     fn shutdown_preserves_incomplete_journal_when_publication_still_fails() {
         let dir = tempfile::tempdir().unwrap();
         let (_tx, rx) = crossbeam_channel::unbounded();
-        let (events, _received) = crossbeam_channel::unbounded();
+        let (events, _received) = worker_event_channel();
         let mut worker = WorkerLoop::new(rx, events);
         worker.session =
             Some(SessionStore::create(dir.path(), "deck.pptx", "16:9", "fit").unwrap());
@@ -1267,7 +1408,7 @@ mod tests {
     #[test]
     fn rapid_transition_save_failure_emits_complete_worker_error() {
         let (_command_tx, command_rx) = crossbeam_channel::unbounded();
-        let (event_tx, event_rx) = crossbeam_channel::unbounded();
+        let (event_tx, event_rx) = worker_event_channel();
         let worker = WorkerLoop::new(command_rx, event_tx);
         let error = anyhow::Error::msg("disk full").context("writing slide PNG");
 
@@ -1285,7 +1426,7 @@ mod tests {
     #[test]
     fn rapid_transition_fallback_failure_emits_complete_worker_error() {
         let (_command_tx, command_rx) = crossbeam_channel::unbounded();
-        let (event_tx, event_rx) = crossbeam_channel::unbounded();
+        let (event_tx, event_rx) = worker_event_channel();
         let worker = WorkerLoop::new(command_rx, event_tx);
         let error = anyhow::Error::msg("permission denied").context("saving fallback PNG");
 

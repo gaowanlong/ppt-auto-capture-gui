@@ -149,6 +149,48 @@ impl SessionStore {
 mod tests {
     use super::*;
 
+    #[test]
+    fn repeated_sessions_survive_png_and_journal_faults_without_page_gaps() {
+        let root = tempfile::tempdir().unwrap();
+        for round in 0..64 {
+            let mut session =
+                SessionStore::create(root.path(), "same-name.pptx", "16:9", "fit").unwrap();
+            session.save(&frame(), record()).unwrap();
+            let original = std::fs::read(session.output_path()).unwrap();
+            let mut second = record();
+            second.slide_number = 2;
+            second.png_filename = "slide_0002.png".into();
+            second.png_relative_path = "slides/slide_0002.png".into();
+            second.content_hash = format!("round-{round}");
+            let blocker = session.directory.join("slides/slide_0002.tmp.png");
+            std::fs::create_dir(&blocker).unwrap();
+            assert!(session.save(&frame(), second.clone()).is_err());
+            assert_eq!(session.records.len(), 1);
+            assert_eq!(std::fs::read(session.output_path()).unwrap(), original);
+            std::fs::remove_dir(blocker).unwrap();
+            let journal = session.directory.join("session.json");
+            let saved_journal = std::fs::read(&journal).unwrap();
+            std::fs::remove_file(&journal).unwrap();
+            std::fs::create_dir(&journal).unwrap();
+            assert!(session.save(&frame(), second.clone()).is_err());
+            assert_eq!(session.records.len(), 1);
+            std::fs::remove_dir(&journal).unwrap();
+            std::fs::write(&journal, saved_journal).unwrap();
+            session.save(&frame(), second).unwrap();
+            let mut reopened = SessionStore::open(&session.directory).unwrap();
+            reopened.finish().unwrap();
+            assert_eq!(reopened.records.len(), 2);
+            let mut zip =
+                zip::ZipArchive::new(std::fs::File::open(session.output_path()).unwrap()).unwrap();
+            assert!(zip.by_name("ppt/slides/slide1.xml").is_ok());
+            assert!(zip.by_name("ppt/slides/slide2.xml").is_ok());
+            assert!(zip.by_name("ppt/slides/slide3.xml").is_err());
+        }
+        assert!(super::super::detect_incomplete_session(root.path())
+            .unwrap()
+            .is_none());
+    }
+
     fn record() -> SlideRecord {
         SlideRecord::new(crate::model::SlideRecordInput {
             slide_number: 1,

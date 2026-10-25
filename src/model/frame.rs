@@ -48,8 +48,15 @@ impl Frame {
         ((r as f32 * 0.299) + (g as f32 * 0.587) + (b as f32 * 0.114)) as u8
     }
 
-    /// Resize to a thumbnail for preview (simple nearest-neighbor downscale).
-    pub fn thumbnail(&self, max_width: u32, max_height: u32) -> Vec<u8> {
+    /// Pixel data and dimensions must travel together to the UI.
+    pub fn thumbnail_with_dimensions(
+        &self,
+        max_width: u32,
+        max_height: u32,
+    ) -> (Vec<u8>, u32, u32) {
+        if self.width == 0 || self.height == 0 || max_width == 0 || max_height == 0 {
+            return (Vec::new(), 0, 0);
+        }
         let scale_w = max_width as f32 / self.width as f32;
         let scale_h = max_height as f32 / self.height as f32;
         let scale = scale_w.min(scale_h).min(1.0);
@@ -73,7 +80,7 @@ impl Frame {
                 }
             }
         }
-        thumb
+        (thumb, new_w as u32, new_h as u32)
     }
 }
 
@@ -134,7 +141,7 @@ mod tests {
     #[test]
     fn test_thumbnail_downscale() {
         let f = make_frame(255, 0, 0, 100, 50);
-        let thumb = f.thumbnail(20, 20);
+        let thumb = f.thumbnail_with_dimensions(20, 20).0;
         // 100x50 scaled to fit within 20x20: scale = min(20/100, 20/50) = 0.2
         // new_w = 100 * 0.2 = 20, new_h = 50 * 0.2 = 10
         // size = 20 * 10 * 4 = 800
@@ -170,7 +177,7 @@ mod tests {
             }
         }
         let f = Frame::new(data, 100, 100, 400, 1, 1000);
-        let thumb = f.thumbnail(50, 50);
+        let thumb = f.thumbnail_with_dimensions(50, 50).0;
         // Thumbnail should be 50x50 RGBA = 10000 bytes
         assert_eq!(thumb.len(), 10000, "Thumbnail should be 50x50x4");
         // There should be some red pixels (R > 0) in the thumbnail
@@ -180,7 +187,7 @@ mod tests {
     #[test]
     fn test_thumbnail_upscale_not_happens() {
         let f = make_frame(0, 255, 0, 10, 10);
-        let thumb = f.thumbnail(100, 100);
+        let thumb = f.thumbnail_with_dimensions(100, 100).0;
         // Scale is capped at 1.0, so thumb should be same size: 10x10x4 = 400
         assert_eq!(thumb.len(), 400, "Should not upscale");
     }
@@ -190,7 +197,7 @@ mod tests {
     fn test_empty_frame_all_zero() {
         let f = Frame::new(vec![0u8; 400], 10, 10, 40, 0, 0);
         assert_eq!(f.luminance_at(5, 5), 0);
-        let thumb = f.thumbnail(5, 5);
+        let thumb = f.thumbnail_with_dimensions(5, 5).0;
         assert_eq!(thumb.len(), 5 * 5 * 4);
     }
 
@@ -219,7 +226,7 @@ mod tests {
     #[test]
     fn test_tiny_frame_no_upscale() {
         let f = Frame::new(vec![100u8; 64], 4, 4, 16, 0, 0);
-        let thumb = f.thumbnail(100, 100);
+        let thumb = f.thumbnail_with_dimensions(100, 100).0;
         assert_eq!(thumb.len(), 64, "Tiny frame should not upscale: 4x4x4=64");
     }
 }

@@ -1,0 +1,58 @@
+name: Windows native stress
+
+on:
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: Native capture duration in minutes
+        type: choice
+        options: ['1', '10', '30', '60']
+        default: '10'
+      resolution:
+        description: Controlled capture window size
+        type: choice
+        options: ['720p', '1080p', '4k']
+        default: '1080p'
+
+permissions:
+  contents: read
+
+jobs:
+  native-stress:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build standalone stress executable
+        shell: pwsh
+        run: |
+          $output = & cargo test --release --no-run --message-format=json
+          if ($LASTEXITCODE -ne 0) { throw 'Stress test executable build failed' }
+          $artifacts = @($output | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.reason -eq 'compiler-artifact' -and $_.profile.test -and $_.executable })
+          if ($artifacts.Count -ne 1) { throw 'Expected exactly one test executable' }
+          New-Item -ItemType Directory -Path stress-kit -Force | Out-Null
+          Copy-Item -LiteralPath $artifacts[0].executable -Destination stress-kit/ppt-capture-stress-tests.exe
+          Copy-Item scripts/run-windows-stress.ps1 stress-kit/
+          Copy-Item scripts/run-windows-stress-10min.cmd,scripts/run-windows-stress-24h.cmd stress-kit/
+          Copy-Item docs/testing/windows-stress.md stress-kit/README.md
+      - name: Run native capture stress
+        shell: pwsh
+        env:
+          STRESS_MINUTES: ${{ inputs.minutes }}
+          STRESS_RESOLUTION: ${{ inputs.resolution }}
+        run: ./scripts/run-windows-stress.ps1 -Minutes ([int]$env:STRESS_MINUTES) -Resolution $env:STRESS_RESOLUTION -OutputDirectory stress-reports -TestExecutable ./stress-kit/ppt-capture-stress-tests.exe
+      - name: Upload native reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-stress-reports
+          path: stress-reports/
+          if-no-files-found: warn
+      - name: Upload reusable Windows stress kit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-stress-kit
+          path: stress-kit/
+          if-no-files-found: warn

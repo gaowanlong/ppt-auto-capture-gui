@@ -27,6 +27,7 @@ impl SettingsPanel {
     }
 
     pub fn load_from_config(&mut self, cfg: &CaptureConfig) {
+        let cfg = cfg.clone().normalized();
         self.sample_interval_ms = cfg.sample_interval_ms;
         self.stability_frames = cfg.stability_frames;
         self.animation_timeout_ms = cfg.animation_timeout_ms;

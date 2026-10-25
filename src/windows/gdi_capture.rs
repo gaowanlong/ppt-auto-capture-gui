@@ -214,12 +214,22 @@ impl GdiCapturer {
 }
 
 #[cfg(test)]
+static NATIVE_CAPTURE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+#[path = "stress_tests.rs"]
+mod stress_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use windows::Win32::System::Threading::{GetCurrentProcess, GetGuiResources, GR_GDIOBJECTS};
 
     #[test]
     fn repeated_bitmap_success_and_early_failure_release_gdi_handles() {
+        let _serial = NATIVE_CAPTURE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         unsafe {
             let before = GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS);
             for _ in 0..2000 {

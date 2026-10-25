@@ -1,8 +1,9 @@
 use eframe::egui;
 use log::{error, info, warn};
 
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::Sender;
 
+use crate::capture::WorkerEventReceiver;
 use crate::capture::{CaptureSource, CaptureState, CaptureWorker, WorkerCommand, WorkerEvent};
 use crate::gui::dashboard::{DashboardPanel, DashboardRenderInput};
 use crate::gui::display_panel::DisplayPanel;
@@ -29,7 +30,7 @@ pub struct PptAutoCaptureApp {
     output_panel: OutputPanel,
     worker: Option<CaptureWorker>,
     cmd_tx: Option<Sender<WorkerCommand>>,
-    event_rx: Option<Receiver<WorkerEvent>>,
+    event_rx: Option<WorkerEventReceiver>,
     monitors: Vec<MonitorInfo>,
     windows: Vec<WindowInfo>,
     active_tab: Tab,
@@ -46,6 +47,7 @@ pub struct PptAutoCaptureApp {
     diagnostic_history: DiagnosticHistory,
     log_directory: Option<std::path::PathBuf>,
     log_file: Option<std::path::PathBuf>,
+    test_capture_pending: bool,
 }
 
 #[derive(PartialEq)]
@@ -86,6 +88,7 @@ impl PptAutoCaptureApp {
             diagnostic_history: DiagnosticHistory::new(20),
             log_directory: logging.log_directory,
             log_file: logging.log_file,
+            test_capture_pending: false,
         };
         if let Some(warning) = logging.warning {
             warn!("{warning}");
@@ -127,6 +130,7 @@ impl PptAutoCaptureApp {
         app.output_panel.page_ratio = config.page_ratio.clone();
         app.output_panel.image_fit = config.image_fit.clone();
         app.output_panel.keep_previous = config.keep_previous;
+        app.dashboard.output_path = output_path(&app.output_panel);
         app.refresh_displays();
         app.check_recovery();
         app
@@ -149,7 +153,7 @@ impl PptAutoCaptureApp {
             self.source_panel.selected_title.as_str()
         };
         let display = self.display_panel.selected_description.as_str();
-        let output_path = output_path(&self.output_panel);
+        let output_path = self.dashboard.output_path.clone();
         let report = render_diagnostic_report(
             DiagnosticReportContext {
                 version: env!("CARGO_PKG_VERSION"),
@@ -167,11 +171,14 @@ impl PptAutoCaptureApp {
     }
 
     fn open_log_directory(&mut self) {
-        let Some(directory) = self.log_directory.as_ref() else {
+        let Some(directory) = self.log_directory.clone() else {
             self.record_error("diagnostics", "Log directory is unavailable".into());
             return;
         };
+        self.open_directory(&directory);
+    }
 
+    fn open_directory(&mut self, directory: &std::path::Path) {
         #[cfg(target_os = "windows")]
         let command = "explorer";
         #[cfg(target_os = "macos")]
@@ -204,6 +211,9 @@ impl PptAutoCaptureApp {
     }
 
     fn start_capture(&mut self) {
+        if self.dashboard.session_active {
+            return;
+        }
         let source = if self.source_panel.full_screen_selected {
             "Full Screen"
         } else {
@@ -213,9 +223,7 @@ impl PptAutoCaptureApp {
             "Starting capture with source: {source}; display: {}",
             self.display_panel.selected_description
         );
-        let worker = CaptureWorker::new();
-        self.event_rx = Some(worker.event_rx());
-        self.cmd_tx = Some(worker.command_tx());
+        self.ensure_worker();
         let mut source = CaptureSource::new(
             self.source_panel.selected_hwnd,
             self.source_panel.selected_title.clone(),
@@ -229,8 +237,8 @@ impl PptAutoCaptureApp {
             ));
             let _ = tx.send(WorkerCommand::Start(source));
         }
-        self.worker = Some(worker);
         self.dashboard.session_active = true;
+        self.dashboard.saved_slides_count = 0;
         self.dashboard.output_path = output_path(&self.output_panel);
 
         if self.source_panel.full_screen_selected {
@@ -253,12 +261,36 @@ impl PptAutoCaptureApp {
     }
     fn stop_capture(&mut self) {
         if let Some(ref tx) = self.cmd_tx {
-            let _ = tx.send(WorkerCommand::Stop);
+            if tx.send(WorkerCommand::Stop).is_ok() {
+                self.dashboard.stopping = true;
+            } else {
+                self.handle_worker_disconnected();
+            }
         }
         // Wait for successful finalization. On error the worker stays alive and retryable.
     }
 
+    fn ensure_worker(&mut self) {
+        if self.cmd_tx.is_none() {
+            let worker = CaptureWorker::new();
+            self.event_rx = Some(worker.event_rx());
+            self.cmd_tx = Some(worker.command_tx());
+            self.worker = Some(worker);
+        }
+    }
+
     fn send_test_capture(&mut self) {
+        if self.test_capture_pending || self.dashboard.stopping {
+            return;
+        }
+        if self.display_panel.selected_hmonitor == 0 {
+            self.record_error(
+                "capture",
+                i18n::t_no_display_selected(self.language).to_string(),
+            );
+            return;
+        }
+        self.ensure_worker();
         let mut source = CaptureSource::new(
             self.source_panel.selected_hwnd,
             self.source_panel.selected_title.clone(),
@@ -268,10 +300,13 @@ impl PptAutoCaptureApp {
         apply_output_to_source(&self.output_panel, &mut source);
 
         if let Some(ref tx) = self.cmd_tx {
-            let _ = tx.send(WorkerCommand::TestCapture(source));
-            info!("Test capture command sent");
-        } else {
-            self.record_error("worker", i18n::t_no_worker_error(self.language));
+            match tx.send(WorkerCommand::TestCapture(source)) {
+                Ok(()) => {
+                    self.test_capture_pending = true;
+                    info!("Test capture command sent");
+                }
+                Err(_) => self.handle_worker_disconnected(),
+            }
         }
     }
 
@@ -280,28 +315,28 @@ impl PptAutoCaptureApp {
     }
 
     fn drain_events(&mut self, unexpected_disconnect: bool) {
-        loop {
-            let event = {
-                let rx = match self.event_rx.as_ref() {
-                    Some(rx) => rx,
-                    None => return,
-                };
-                match rx.try_recv() {
-                    Ok(event) => event,
-                    Err(crossbeam_channel::TryRecvError::Empty) => break,
-                    Err(crossbeam_channel::TryRecvError::Disconnected) => {
-                        if unexpected_disconnect && self.dashboard.session_active {
-                            self.handle_worker_disconnected();
-                        } else {
-                            self.event_rx = None;
-                        }
-                        return;
-                    }
-                }
-            };
+        // Drain at most one bounded batch; a fast producer cannot monopolize a UI frame.
+        let Some(receiver) = self.event_rx.as_ref() else {
+            return;
+        };
+        let mut pending = Vec::with_capacity(receiver.len().min(64));
+        pending.extend(receiver.try_iter().take(64));
+        for event in pending {
             match event {
+                WorkerEvent::StartFailed(message) => {
+                    self.dashboard.stopping = false;
+                    self.dashboard.session_active = false;
+                    self.dashboard.current_state = CaptureState::Error;
+                    self.record_error("capture", message);
+                }
                 WorkerEvent::SessionStarted(path) => self.dashboard.output_path = path,
                 WorkerEvent::StateChanged(s) => {
+                    if matches!(
+                        s,
+                        CaptureState::Paused | CaptureState::Stopped | CaptureState::Error
+                    ) {
+                        self.dashboard.stopping = false;
+                    }
                     self.dashboard.current_state = s;
                     self.dashboard.state_message = s.label().to_string();
                     info!("Capture state changed: {s:?}");
@@ -317,12 +352,18 @@ impl PptAutoCaptureApp {
                     self.dashboard.saved_slides_count = slide_number
                 }
                 WorkerEvent::Error(msg) => {
+                    self.test_capture_pending = false;
                     self.record_error("worker", msg);
                 }
                 WorkerEvent::TestFrame(d, w, h) => {
-                    self.dashboard.test_frame_rgba = Some(d);
-                    self.dashboard.test_frame_w = w;
-                    self.dashboard.test_frame_h = h;
+                    self.test_capture_pending = false;
+                    if self.dashboard.update_preview(d, w, h) {
+                        if !self.dashboard.session_active {
+                            self.dashboard.last_error = None;
+                        }
+                    } else {
+                        self.record_error("preview", "Invalid screenshot preview; refresh the selected window/display and try again".into());
+                    }
                 }
                 WorkerEvent::BlackFrameDetected => {
                     self.dashboard.state_message = "Black frame".into();
@@ -330,9 +371,22 @@ impl PptAutoCaptureApp {
                 _ => {}
             }
         }
+        if self
+            .event_rx
+            .as_ref()
+            .is_some_and(|rx| rx.is_disconnected())
+        {
+            if unexpected_disconnect && self.cmd_tx.is_some() {
+                self.handle_worker_disconnected();
+            } else {
+                self.event_rx = None;
+            }
+        }
     }
 
     fn handle_worker_disconnected(&mut self) {
+        self.dashboard.stopping = false;
+        self.test_capture_pending = false;
         self.event_rx = None;
         self.cmd_tx = None;
         if let Some(mut worker) = self.worker.take() {
@@ -455,6 +509,14 @@ impl eframe::App for PptAutoCaptureApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.process_events();
 
+        if self.dashboard.open_session_requested {
+            self.dashboard.open_session_requested = false;
+            let path = std::path::PathBuf::from(&self.dashboard.output_path);
+            if let Some(directory) = path.parent() {
+                self.open_directory(directory);
+            }
+        }
+
         if self.recovery_available && !self.recovery_accepted && !self.recovery_declined {
             let mut open = true;
             egui::Window::new("Session Recovery")
@@ -487,7 +549,7 @@ impl eframe::App for PptAutoCaptureApp {
             if !open {
                 self.recovery_declined = true;
             }
-            ctx.request_repaint();
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
             return;
         }
 
@@ -672,7 +734,7 @@ impl eframe::App for PptAutoCaptureApp {
             }
         });
 
-        ctx.request_repaint();
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
     }
 }
 
@@ -782,6 +844,75 @@ mod tests {
     }
 
     #[test]
+    fn test_screenshot_initializes_worker_without_starting_recording() {
+        let mut app = std::mem::ManuallyDrop::new(PptAutoCaptureApp::new(LoggingSetup {
+            log_directory: None,
+            log_file: None,
+            warning: None,
+        }));
+        app.display_panel.selected_hmonitor = u64::MAX;
+        app.send_test_capture();
+        assert!(app.worker.is_some());
+        assert!(app.test_capture_pending);
+        assert!(!app.dashboard.session_active);
+        app.worker.take().unwrap().stop();
+    }
+
+    #[test]
+    fn idle_worker_disconnect_clears_pending_preview_and_allows_restart() {
+        let mut app = std::mem::ManuallyDrop::new(PptAutoCaptureApp::new(LoggingSetup {
+            log_directory: None,
+            log_file: None,
+            warning: None,
+        }));
+        let (tx, rx) = crate::capture::worker_event_channel();
+        let (cmd, commands) = crossbeam_channel::unbounded();
+        app.event_rx = Some(rx);
+        app.cmd_tx = Some(cmd);
+        app.test_capture_pending = true;
+        drop(tx);
+        drop(commands);
+        app.process_events();
+        assert!(!app.test_capture_pending);
+        assert!(app.cmd_tx.is_none());
+        app.ensure_worker();
+        assert!(app.worker.is_some());
+        app.worker.take().unwrap().stop();
+    }
+
+    #[test]
+    fn start_failure_and_bad_preview_do_not_leave_ui_active_or_crash() {
+        let mut app = std::mem::ManuallyDrop::new(PptAutoCaptureApp::new(LoggingSetup {
+            log_directory: None,
+            log_file: None,
+            warning: None,
+        }));
+        let (tx, rx) = crate::capture::worker_event_channel();
+        app.event_rx = Some(rx);
+        app.dashboard.session_active = true;
+        tx.send(WorkerEvent::StartFailed("missing display".into()))
+            .unwrap();
+        app.process_events();
+        assert!(!app.dashboard.session_active);
+        assert_eq!(app.dashboard.current_state, CaptureState::Error);
+        tx.send(WorkerEvent::TestFrame(vec![0; 4], 320, 240))
+            .unwrap();
+        app.process_events();
+        assert!(app.dashboard.test_frame_rgba.is_none());
+        assert!(app
+            .dashboard
+            .last_error
+            .as_deref()
+            .unwrap()
+            .contains("preview"));
+        tx.send(WorkerEvent::TestFrame(vec![255; 320 * 180 * 4], 320, 180))
+            .unwrap();
+        app.process_events();
+        assert_eq!(app.dashboard.test_frame_h, 180);
+        assert!(app.dashboard.last_error.is_none());
+    }
+
+    #[test]
     fn stop_request_waits_for_worker_finalization() {
         let mut app = std::mem::ManuallyDrop::new(PptAutoCaptureApp::new(LoggingSetup {
             log_directory: None,
@@ -804,7 +935,7 @@ mod tests {
             log_file: None,
             warning: None,
         }));
-        let (tx, rx) = crossbeam_channel::unbounded();
+        let (tx, rx) = crate::capture::worker_event_channel();
         app.event_rx = Some(rx);
         tx.send(WorkerEvent::SessionStarted(
             "sessions/unique/custom.pptx".into(),
@@ -834,7 +965,7 @@ mod tests {
             log_file: None,
             warning: None,
         }));
-        let (event_tx, event_rx) = crossbeam_channel::unbounded();
+        let (event_tx, event_rx) = crate::capture::worker_event_channel();
         drop(event_tx);
         let (command_tx, _command_rx) = crossbeam_channel::unbounded();
         app.event_rx = Some(event_rx);

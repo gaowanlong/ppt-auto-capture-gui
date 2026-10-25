@@ -18,10 +18,14 @@ pub struct DashboardPanel {
     pub last_error: Option<String>,
     pub state_message: String,
     pub session_active: bool,
+    pub stopping: bool,
     pub copy_diagnostics_requested: bool,
     pub open_log_directory_requested: bool,
     pub diagnostics_status: Option<String>,
+    pub open_session_requested: bool,
     diagnostics_status_expires_at: Option<Instant>,
+    preview_texture: Option<TextureHandle>,
+    preview_dirty: bool,
 }
 
 pub struct DashboardRenderInput<'a> {
@@ -47,15 +51,35 @@ impl DashboardPanel {
             last_error: None,
             state_message: CaptureState::Idle.label().to_string(),
             session_active: false,
+            stopping: false,
             copy_diagnostics_requested: false,
             open_log_directory_requested: false,
             diagnostics_status: None,
+            open_session_requested: false,
             diagnostics_status_expires_at: None,
+            preview_texture: None,
+            preview_dirty: false,
         }
     }
 
     pub fn show_diagnostics_status(&mut self, status: String) {
         self.set_diagnostics_status_until(status, Instant::now() + DIAGNOSTICS_STATUS_DURATION);
+    }
+
+    pub fn update_preview(&mut self, pixels: Vec<u8>, width: u32, height: u32) -> bool {
+        if width == 0
+            || height == 0
+            || width > 320
+            || height > 240
+            || pixels.len() != width as usize * height as usize * 4
+        {
+            return false;
+        }
+        self.test_frame_rgba = Some(pixels);
+        self.test_frame_w = width;
+        self.test_frame_h = height;
+        self.preview_dirty = true;
+        true
     }
 
     fn set_diagnostics_status_until(&mut self, status: String, expires_at: Instant) {
@@ -91,10 +115,26 @@ impl DashboardPanel {
                     CaptureState::ProtectedOrBlack => Color32::RED,
                     CaptureState::Error => Color32::RED,
                 };
-                ui.colored_label(state_color, self.current_state.label());
+                let label = if self.stopping { match language { Language::Chinese => "正在停止并保存，请稍候…", Language::English => "Stopping and saving…" } } else { self.current_state.label() };
+                ui.colored_label(state_color, label);
             });
 
             ui.separator();
+
+            let hint = match (self.current_state, language) {
+                (CaptureState::WaitingForDesktop, Language::Chinese) => "桌面暂不可用，恢复后会自动继续；如需取消自动恢复，可点击暂停或停止。",
+                (CaptureState::WaitingForDesktop, Language::English) => "Waiting for the desktop. Capture resumes automatically; Pause or Stop cancels automatic recovery.",
+                (CaptureState::Paused, Language::Chinese) => "如因保存失败而暂停，请先关闭占用输出文件的程序或检查磁盘空间，再点击继续或停止重试。",
+                (CaptureState::Paused, Language::English) => "If saving failed, close the program locking the output or check free space, then Resume or Stop to retry.",
+                (CaptureState::Error, Language::Chinese) => "请刷新并重新选择窗口或显示器，先测试截图；再次出现问题时可复制诊断信息。",
+                (CaptureState::Error, Language::English) => "Refresh and select the window/display, then test a screenshot. Copy diagnostics if the problem returns.",
+                _ => "",
+            };
+            if !hint.is_empty() { ui.label(hint); }
+            if self.saved_slides_count > 0 {
+                let label = match language { Language::English => "Open this recording's folder", Language::Chinese => "打开本次输出文件夹" };
+                if ui.button(label).clicked() { self.open_session_requested = true; }
+            }
 
             let info_rows: [(&str, &str); 4] = [
                 (i18n::t_capture_source(language), &self.source_window_title),
@@ -120,8 +160,12 @@ impl DashboardPanel {
 
             ui.separator();
 
-            if let Some(ref err) = self.last_error {
-                ui.colored_label(Color32::RED, format!("⚠ {}", err));
+            if let Some(err) = self.last_error.clone() {
+                ui.horizontal_wrapped(|ui| {
+                    ui.colored_label(Color32::RED, format!("⚠ {}", err));
+                    let label = match language { Language::English => "Dismiss", Language::Chinese => "收起提示" };
+                    if ui.small_button(label).clicked() { self.last_error = None; }
+                });
                 ui.separator();
             }
 
@@ -164,9 +208,9 @@ impl DashboardPanel {
             ui.horizontal(|ui| {
                 if ui
                     .add_enabled(
-                        self.current_state == CaptureState::Idle
+                        !self.session_active && (self.current_state == CaptureState::Idle
                             || self.current_state == CaptureState::Stopped
-                            || self.current_state == CaptureState::Error,
+                            || self.current_state == CaptureState::Error),
                         Button::new(RichText::new(i18n::t_start(language)).size(16.0)),
                     )
                     .clicked()
@@ -176,10 +220,10 @@ impl DashboardPanel {
 
                 if ui
                     .add_enabled(
-                        self.current_state == CaptureState::Running
+                        !self.stopping && (self.current_state == CaptureState::Running
                             || self.current_state == CaptureState::WaitingForStable
                             || self.current_state == CaptureState::Stable
-                            || self.current_state == CaptureState::WaitingForDesktop,
+                            || self.current_state == CaptureState::WaitingForDesktop),
                         Button::new(RichText::new(i18n::t_pause(language)).size(16.0)),
                     )
                     .clicked()
@@ -189,7 +233,7 @@ impl DashboardPanel {
 
                 if ui
                     .add_enabled(
-                        self.current_state.is_paused(),
+                        !self.stopping && self.current_state.is_paused(),
                         Button::new(RichText::new(i18n::t_resume(language)).size(16.0)),
                     )
                     .clicked()
@@ -199,9 +243,7 @@ impl DashboardPanel {
 
                 if ui
                     .add_enabled(
-                        self.current_state.is_active()
-                            || self.current_state.is_paused()
-                            || self.current_state == CaptureState::ProtectedOrBlack,
+                        self.session_active && !self.stopping,
                         Button::new(RichText::new(i18n::t_stop(language)).size(16.0)),
                     )
                     .clicked()
@@ -234,17 +276,18 @@ impl DashboardPanel {
                     let preview_h = (240.0_f32).min(available.y - 20.0);
 
                     let (cw, ch) = (self.test_frame_w as usize, self.test_frame_h as usize);
-                    if cw > 0 && ch > 0 {
-                        let image = egui::ColorImage::from_rgba_unmultiplied([cw, ch], rgba_data);
-                        // Use texture sharing via the painter
-                        let texture = ui.ctx().load_texture(
-                            "test_preview",
-                            image,
-                            egui::TextureOptions::LINEAR,
-                        );
+                    if cw > 0 && ch > 0 && cw.checked_mul(ch).and_then(|n| n.checked_mul(4)) == Some(rgba_data.len()) {
+                        if self.preview_dirty || self.preview_texture.is_none() {
+                            let image = egui::ColorImage::from_rgba_unmultiplied([cw, ch], rgba_data);
+                            if let Some(texture) = self.preview_texture.as_mut() { texture.set(image, TextureOptions::LINEAR); }
+                            else { self.preview_texture = Some(ui.ctx().load_texture("test_preview", image, TextureOptions::LINEAR)); }
+                            self.preview_dirty = false;
+                        }
+                        let texture = self.preview_texture.as_ref().unwrap();
+                        let scale = (preview_w.max(1.0) / cw as f32).min(preview_h.max(1.0) / ch as f32);
                         ui.add(egui::Image::new(egui::load::SizedTexture::new(
                             texture.id(),
-                            egui::Vec2::new(preview_w, preview_h),
+                            egui::Vec2::new(cw as f32 * scale, ch as f32 * scale),
                         )));
                     }
                 }
@@ -268,6 +311,50 @@ impl DashboardPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_texture_is_reused_and_only_updated_for_new_pixels() {
+        fn draw(ctx: &egui::Context, panel: &mut DashboardPanel) -> egui::FullOutput {
+            let history = DiagnosticHistory::new(20);
+            let mut actions = [false; 4];
+            let [start, pause, stop, resume] = &mut actions;
+            ctx.run(Default::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    panel.render(
+                        ui,
+                        Language::English,
+                        DashboardRenderInput {
+                            diagnostic_history: &history,
+                            persistent_log_available: true,
+                            start_requested: start,
+                            pause_requested: pause,
+                            stop_requested: stop,
+                            resume_requested: resume,
+                        },
+                    )
+                });
+            })
+        }
+        let ctx = egui::Context::default();
+        let mut panel = DashboardPanel::new();
+        assert!(panel.update_preview(vec![255; 16], 2, 2));
+        draw(&ctx, &mut panel);
+        let id = panel.preview_texture.as_ref().unwrap().id();
+        let unchanged = draw(&ctx, &mut panel);
+        assert!(!unchanged
+            .textures_delta
+            .set
+            .iter()
+            .any(|(texture, _)| *texture == id));
+        assert!(panel.update_preview(vec![0; 16], 2, 2));
+        let changed = draw(&ctx, &mut panel);
+        assert_eq!(panel.preview_texture.as_ref().unwrap().id(), id);
+        assert!(changed
+            .textures_delta
+            .set
+            .iter()
+            .any(|(texture, _)| *texture == id));
+    }
     use crate::diagnostics::{DiagnosticEntry, DiagnosticLevel};
     use std::time::Instant;
 

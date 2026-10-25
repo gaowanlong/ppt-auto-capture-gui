@@ -65,6 +65,8 @@ When Windows locks, switches to a secure desktop, or disconnects an RDP session,
 
 For release acceptance on Windows, run one capture for at least 24 hours at the normal sample interval, including static pages, local video, pointer movement, repeated lock/unlock, and RDP disconnect/reconnect if used. Inspect the launch log for growing GDI counts or memory, verify each intended slide in the output, and verify Stop still completes. Automated tests include a 20,000-frame video/change sequence and a Windows-native 4,000-allocation GDI cleanup test; these do not substitute for that hardware-specific soak test.
 
+Windows CI now also pressure-tests real window capture, cleanup and reinitialization. The manually dispatched **Windows native stress** workflow produces JSON resource reports and a standalone stress kit with ten-minute and 24-hour launchers. See [Windows stress testing](docs/testing/windows-stress.md) for running the kit without Rust, report thresholds and the distinction between controlled-window stress and real meeting-app acceptance. The UI event mailbox is bounded during state/error storms; screenshot previews work before recording, retain their actual aspect ratio and reuse their GPU texture. Stop interrupts the sample wait and shows a saving status; the Dashboard can open the current recording's folder directly.
+
 ## Building from Source
 
 ### Prerequisites
