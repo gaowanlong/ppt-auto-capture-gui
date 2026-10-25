@@ -53,6 +53,18 @@ Application logs are stored at `~/Library/Logs/PPT Auto Capture`; the app retain
 
 Diagnostics exclude screenshots and slide contents: they do not include screenshot pixels, window or slide contents, existing clipboard data, arbitrary environment variables, or serialized configuration. If persistent logging cannot be initialized, capture remains available and diagnostics continue through the in-app history and standard error output.
 
+### Windows long recordings, videos, and locked sessions
+
+Windows capture releases its screen/window DC, memory DC, and bitmap on every success and failure path. It deselects the bitmap before reading pixels and checks the full scan-line count. A resource-allocation or pixel-read failure reports an error rather than passing incomplete pixels to the slide detector. The application logs GDI object counts and working-set memory once a minute, along with saved-page and pending-save state. Rust panic information is written to the launch log.
+
+Replacing or dropping a capture worker also stops its background thread. Per-frame UI sampling notifications are limited when the UI is slow; saved-slide, error, and state notifications remain reliable.
+
+With duplicate filtering enabled, small pointer changes are ignored. A bounded spatial signature learns repeatedly moving local areas (up to 40% of the picture), allowing a video rectangle to change without repeatedly saving the same page. Changes elsewhere still trigger a new page. Motion exclusions expire after 15 quiet samples so later static content in the same area remains eligible; this can also save a video's settled final frame. Continuous local motion no longer forces the rapid-transition path to save every frame, and animation timeout is measured from the beginning of the pending change. Broad rapid slide changes and intermediate pages held for multiple samples retain their capture path. This is an image heuristic: full-screen video, very briefly displayed same-template pages, and pages differing only by tiny details cannot be reliably classified as slide identities. Turn off duplicate filtering when every small animation step must be recorded.
+
+When Windows locks, switches to a secure desktop, or disconnects an RDP session, capture waits without saving that desktop's images. When the original desktop becomes available, it retries the selected source automatically. It preserves pending saved work and respects a manual pause or stop. A selected window stays a window source after resume; it is not silently replaced with a monitor screenshot. Ordinary desktop screenshot APIs cannot reliably capture the original PowerPoint display while it is locked. If uninterrupted capture during a host lock is mandatory, use a separate presentation/capture session that remains unlocked; changing the screenshot API alone does not remove this Windows restriction.
+
+For release acceptance on Windows, run one capture for at least 24 hours at the normal sample interval, including static pages, local video, pointer movement, repeated lock/unlock, and RDP disconnect/reconnect if used. Inspect the launch log for growing GDI counts or memory, verify each intended slide in the output, and verify Stop still completes. Automated tests include a 20,000-frame video/change sequence and a Windows-native 4,000-allocation GDI cleanup test; these do not substitute for that hardware-specific soak test.
+
 ## Building from Source
 
 ### Prerequisites

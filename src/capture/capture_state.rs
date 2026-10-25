@@ -13,6 +13,8 @@ pub enum CaptureState {
     Saving,
     /// Capture is paused (user or auto-pause).
     Paused,
+    /// Secure/locked/disconnected desktop; automatically retry the original source.
+    WaitingForDesktop,
     /// Stopped by user.
     Stopped,
     /// Underlying content is protected or black; cannot capture.
@@ -30,6 +32,9 @@ impl CaptureState {
             CaptureState::Stable => "Stable — Ready to capture",
             CaptureState::Saving => "Saving screenshot…",
             CaptureState::Paused => "Paused",
+            CaptureState::WaitingForDesktop => {
+                "Desktop unavailable — Waiting to resume automatically"
+            }
             CaptureState::Stopped => "Stopped",
             CaptureState::ProtectedOrBlack => "Protected/Black Content — Cannot capture",
             CaptureState::Error => "Error",
@@ -37,14 +42,22 @@ impl CaptureState {
     }
 
     pub fn is_active(&self) -> bool {
-        matches!(self, CaptureState::Running | CaptureState::WaitingForStable | CaptureState::Stable | CaptureState::Saving)
+        matches!(
+            self,
+            CaptureState::Running
+                | CaptureState::WaitingForStable
+                | CaptureState::Stable
+                | CaptureState::Saving
+        )
     }
 
     pub fn is_paused(&self) -> bool {
-        matches!(self, CaptureState::Paused | CaptureState::ProtectedOrBlack)
+        matches!(
+            self,
+            CaptureState::Paused | CaptureState::ProtectedOrBlack | CaptureState::WaitingForDesktop
+        )
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -84,7 +97,11 @@ mod tests {
             CaptureState::ProtectedOrBlack,
             CaptureState::Error,
         ] {
-            assert!(!state.label().is_empty(), "Label should not be empty for {:?}", state);
+            assert!(
+                !state.label().is_empty(),
+                "Label should not be empty for {:?}",
+                state
+            );
         }
     }
 }

@@ -1,6 +1,6 @@
-use egui::*;
-use crate::i18n::{self, Language};
 use crate::capture::CaptureConfig;
+use crate::i18n::{self, Language};
+use egui::*;
 
 pub struct SettingsPanel {
     pub sample_interval_ms: u64,
@@ -98,8 +98,8 @@ impl SettingsPanel {
                     grid.label(i18n::t_filter_duplicates(language));
                     let resp = grid.add(Checkbox::new(&mut self.filter_duplicates, ""));
                     let resp = resp.on_hover_text(match language {
-                        Language::English => "Skip saving slides that are identical to the previous one. Prevents duplicates in output.",
-                        Language::Chinese => "跳过与上一张完全相同的幻灯片，避免输出中出现重复内容。",
+                        Language::English => "Ignore small pointer changes and learned local video motion when comparing with the last saved slide. Full-screen video cannot be reliably distinguished from slide changes; disable this if small content changes are being missed.",
+                        Language::Chinese => "与上一张比较时忽略微小鼠标变化和已识别的局部视频动态。全屏视频无法可靠区分换页；若细微内容变化被漏掉，可关闭此项。",
                     });
                     if resp.changed() { self.changed = true; }
                     grid.end_row();

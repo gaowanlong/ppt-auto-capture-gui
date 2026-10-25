@@ -40,6 +40,12 @@ fn main() -> Result<(), eframe::Error> {
     }
 
     let logging = diagnostics::initialize_logging();
+    std::panic::set_hook(Box::new(|panic| {
+        log::error!(
+            "Unhandled panic: {panic}\n{}",
+            std::backtrace::Backtrace::force_capture()
+        );
+    }));
     info!(
         "PPT Auto Capture {} starting on {}/{}",
         env!("CARGO_PKG_VERSION"),

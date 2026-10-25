@@ -1,152 +1,239 @@
-use anyhow::Result;
-use windows::Win32::Graphics::Gdi::{
-    GetDC, ReleaseDC, CreateCompatibleDC, DeleteDC, CreateCompatibleBitmap,
-    SelectObject, DeleteObject, BitBlt, GetDIBits, GetDeviceCaps, GET_DEVICE_CAPS_INDEX, BITMAPINFO, BITMAPINFOHEADER,
-    ROP_CODE, DIB_USAGE, HDC,
-};
 use crate::model::{Frame, MonitorInfo, Region};
+use anyhow::{ensure, Context, Result};
+use windows::Win32::Foundation::HWND;
+use windows::Win32::Graphics::Gdi::{
+    BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetDIBits,
+    GetWindowDC, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, HBITMAP,
+    HDC, HGDIOBJ, SRCCOPY,
+};
 
 #[link(name = "user32")]
 extern "system" {
-    fn PrintWindow(hWnd: isize, hDCBlt: isize, nFlags: u32) -> i32;
-    fn GetWindowDC(hWnd: isize) -> isize;
+    fn PrintWindow(hwnd: isize, dc: isize, flags: u32) -> i32;
 }
 
-/// Capture a specific window's content using PrintWindow (ignores overlapping windows).
-/// This is the preferred capture method when a window is selected.
-pub fn capture_window_content(hwnd: u64, width: u32, height: u32) -> Result<Vec<u8>> {
-    anyhow::ensure!(width > 0 && height > 0, "Invalid capture dimensions for PrintWindow");
-    unsafe {
-        let hwnd_i = hwnd as isize;
-        let wdc_val = GetWindowDC(hwnd_i);
-        if wdc_val == 0 {
-            return Err(anyhow::anyhow!("GetWindowDC failed for HWND 0x{:X}", hwnd));
+/// Own every native resource, including on capture/decoding failure.
+struct BitmapCapture {
+    owner: Option<HWND>,
+    source: HDC,
+    memory: HDC,
+    bitmap: HBITMAP,
+    previous: HGDIOBJ,
+}
+
+impl BitmapCapture {
+    fn new(owner: Option<HWND>, width: u32, height: u32) -> Result<Self> {
+        ensure!(
+            width > 0 && height > 0 && width <= i32::MAX as u32 && height <= i32::MAX as u32,
+            "Invalid capture dimensions"
+        );
+        unsafe {
+            let source = if owner.is_some() {
+                GetWindowDC(owner)
+            } else {
+                GetDC(None)
+            };
+            ensure!(!source.is_invalid(), "GetDC/GetWindowDC failed");
+            let mut capture = Self {
+                owner,
+                source,
+                memory: HDC::default(),
+                bitmap: HBITMAP::default(),
+                previous: HGDIOBJ::default(),
+            };
+            capture.memory = CreateCompatibleDC(Some(source));
+            ensure!(!capture.memory.is_invalid(), "CreateCompatibleDC failed");
+            capture.bitmap = CreateCompatibleBitmap(source, width as i32, height as i32);
+            ensure!(
+                !capture.bitmap.is_invalid(),
+                "CreateCompatibleBitmap failed"
+            );
+            capture.previous = SelectObject(capture.memory, capture.bitmap.into());
+            ensure!(
+                !capture.previous.is_invalid() && capture.previous.0 as isize != -1,
+                "SelectObject failed"
+            );
+            Ok(capture)
         }
-        let wdc = HDC(wdc_val as *mut std::ffi::c_void);
-        
-        let mdc = CreateCompatibleDC(Some(wdc));
-        if mdc.is_invalid() {
-            let _ = ReleaseDC(None, wdc);
-            return Err(anyhow::anyhow!("CreateCompatibleDC failed"));
+    }
+
+    fn pixels(&mut self, width: u32, height: u32) -> Result<Vec<u8>> {
+        let bytes = (width as usize)
+            .checked_mul(height as usize)
+            .and_then(|n| n.checked_mul(4))
+            .context("Capture buffer size overflow")?;
+        let mut data = Vec::new();
+        data.try_reserve_exact(bytes)
+            .context("Insufficient memory for screenshot")?;
+        data.resize(bytes, 0);
+        let mut info = BITMAPINFO::default();
+        info.bmiHeader = BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: width as i32,
+            biHeight: -(height as i32),
+            biPlanes: 1,
+            biBitCount: 32,
+            ..Default::default()
+        };
+        unsafe {
+            // GetDIBits requires that the bitmap NOT be selected into any DC.
+            let restored = SelectObject(self.memory, self.previous);
+            ensure!(
+                !restored.is_invalid() && restored.0 as isize != -1,
+                "Failed to deselect capture bitmap"
+            );
+            self.previous = HGDIOBJ::default();
+            let lines = GetDIBits(
+                self.memory,
+                self.bitmap,
+                0,
+                height,
+                Some(data.as_mut_ptr().cast()),
+                &mut info,
+                DIB_RGB_COLORS,
+            );
+            ensure!(
+                lines == height as i32,
+                "GetDIBits returned incomplete pixels: {lines}/{height}"
+            );
         }
-        
-        let bmp = CreateCompatibleBitmap(wdc, width as i32, height as i32);
-        if bmp.is_invalid() {
-            let _ = ReleaseDC(None, wdc);
-            let _ = DeleteDC(mdc);
-            return Err(anyhow::anyhow!("CreateCompatibleBitmap failed"));
-        }
-        SelectObject(mdc, bmp.into());
-        
-        // PrintWindow captures only the target window content
-        // PW_CLIENT_ONLY = 0x1 captures only the window client area (excludes title bar)
-        let pw_ret = PrintWindow(hwnd_i, mdc.0 as isize, 0x1);
-        if pw_ret == 0 {
-            // Try without PW_CLIENT_ONLY as fallback
-            let pw_ret2 = PrintWindow(hwnd_i, mdc.0 as isize, 0);
-            if pw_ret2 == 0 {
-                let _ = ReleaseDC(None, wdc);
-                let _ = DeleteObject(bmp.into());
-                let _ = DeleteDC(mdc);
-                return Err(anyhow::anyhow!("PrintWindow failed for HWND 0x{:X}", hwnd));
-            }
-        }
-        
-        // Read pixel data from the bitmap
-        let mut bi = BITMAPINFO::default();
-        bi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
-        bi.bmiHeader.biWidth = width as i32;
-        bi.bmiHeader.biHeight = -(height as i32);
-        bi.bmiHeader.biPlanes = 1;
-        bi.bmiHeader.biBitCount = 32;
-        bi.bmiHeader.biCompression = 0;
-        
-        let mut data = vec![0u8; (width * height * 4) as usize];
-        GetDIBits(mdc, bmp, 0, height, Some(data.as_mut_ptr() as *mut _), &mut bi, DIB_USAGE(0));
-        
-        let _ = ReleaseDC(None, wdc);
-        let _ = DeleteObject(bmp.into());
-        let _ = DeleteDC(mdc);
         Ok(data)
     }
 }
 
-/// The SRCCOPY raster operation code (0x00CC0020).
-const SRCCOPY: ROP_CODE = ROP_CODE(0x00CC0020u32);
+impl Drop for BitmapCapture {
+    fn drop(&mut self) {
+        unsafe {
+            if !self.memory.is_invalid() {
+                if !self.previous.is_invalid() && self.previous.0 as isize != -1 {
+                    let _ = SelectObject(self.memory, self.previous);
+                }
+                // Delete DC before bitmap even if restoring the old object failed.
+                let _ = DeleteDC(self.memory);
+            }
+            if !self.bitmap.is_invalid() {
+                let _ = DeleteObject(self.bitmap.into());
+            }
+            if !self.source.is_invalid() {
+                let _ = ReleaseDC(self.owner, self.source);
+            }
+        }
+    }
+}
 
+pub fn capture_window_content(hwnd: u64, width: u32, height: u32) -> Result<Vec<u8>> {
+    let owner = HWND(hwnd as usize as *mut std::ffi::c_void);
+    let mut capture = BitmapCapture::new(Some(owner), width, height)?;
+    unsafe {
+        ensure!(
+            PrintWindow(hwnd as isize, capture.memory.0 as isize, 1) != 0
+                || PrintWindow(hwnd as isize, capture.memory.0 as isize, 0) != 0,
+            "PrintWindow failed for HWND 0x{hwnd:X}"
+        );
+    }
+    capture.pixels(width, height)
+}
 
 pub struct GdiCapturer {
-    region: Region, frame_index: u64, window_hwnd: u64,
-    /// Client area dimensions (for PrintWindow-based capture, RDP compatible).
-    window_width: u32, window_height: u32,
+    region: Region,
+    frame_index: u64,
+    window_hwnd: u64,
+    window_width: u32,
+    window_height: u32,
 }
+
 impl GdiCapturer {
-    pub fn new() -> Self { Self { region: Region::new(0,0,0,0), frame_index: 0, window_hwnd: 0, window_width: 0, window_height: 0 } }
-    pub fn initialize(&mut self, mon: &MonitorInfo) -> Result<()> { self.region = mon.region; self.frame_index = 0; Ok(()) }
-    pub fn set_window_hwnd(&mut self, hwnd: u64, client_w: u32, client_h: u32) { self.window_hwnd = hwnd; self.window_width = client_w; self.window_height = client_h; }
-    pub fn region(&self) -> &Region { &self.region }
+    pub fn new() -> Self {
+        Self {
+            region: Region::new(0, 0, 0, 0),
+            frame_index: 0,
+            window_hwnd: 0,
+            window_width: 0,
+            window_height: 0,
+        }
+    }
+    pub fn initialize(&mut self, mon: &MonitorInfo) -> Result<()> {
+        self.region = mon.region;
+        Ok(())
+    }
+    pub fn set_window_hwnd(&mut self, hwnd: u64, width: u32, height: u32) {
+        self.window_hwnd = hwnd;
+        self.window_width = width;
+        self.window_height = height;
+    }
+    pub fn region(&self) -> &Region {
+        &self.region
+    }
+    pub fn is_initialized(&self) -> bool {
+        self.region.is_valid()
+    }
     pub fn capture_frame(&mut self) -> Result<Frame> {
-        // When a window HWND is set, use PrintWindow (works in RDP; BitBlt fails there).
-        if self.window_hwnd != 0 && self.window_width > 0 && self.window_height > 0 {
-            return self.capture_window_with_printwindow();
-        }
-        self.capture_screen_with_bitblt()
-    }
-
-    /// Capture a specific window via PrintWindow (RDP-compatible, ignores overlapping windows).
-    fn capture_window_with_printwindow(&mut self) -> Result<Frame> {
-        let w = self.window_width;
-        let h = self.window_height;
-        let data = capture_window_content(self.window_hwnd, w, h)?;
+        let (width, height, data) = if self.window_hwnd != 0 {
+            ensure!(
+                self.window_width > 0 && self.window_height > 0,
+                "Selected window has no capture dimensions"
+            );
+            (
+                self.window_width,
+                self.window_height,
+                capture_window_content(self.window_hwnd, self.window_width, self.window_height)?,
+            )
+        } else {
+            let (w, h) = (self.region.width, self.region.height);
+            let mut capture = BitmapCapture::new(None, w, h)?;
+            unsafe {
+                BitBlt(
+                    capture.memory,
+                    0,
+                    0,
+                    w as i32,
+                    h as i32,
+                    Some(capture.source),
+                    self.region.x,
+                    self.region.y,
+                    SRCCOPY,
+                )
+                .context("BitBlt failed; desktop may be locked or unavailable")?;
+            }
+            (w, h, capture.pixels(w, h)?)
+        };
         self.frame_index += 1;
-        Ok(Frame::new(data, w, h, w * 4, self.frame_index, now_ms()))
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        Ok(Frame::new(
+            data,
+            width,
+            height,
+            width * 4,
+            self.frame_index,
+            now,
+        ))
     }
-
-    /// Capture the full monitor region via BitBlt from screen DC.
-    /// Note: may fail in RDP or locked desktop sessions.
-    fn capture_screen_with_bitblt(&mut self) -> Result<Frame> {
-        let (w, h) = (self.region.width, self.region.height);
-        if w == 0 || h == 0 {
-            return Err(anyhow::anyhow!("Empty capture region: {}x{}", w, h));
-        }
-        unsafe {
-            let sdc = GetDC(None);
-            if sdc.is_invalid() { return Err(anyhow::anyhow!("GetDC")); }
-
-            // DPI diagnostic: log the screen DC dimensions vs capture region
-            let dpi_x = GetDeviceCaps(Some(sdc), GET_DEVICE_CAPS_INDEX(88));
-            let dpi_y = GetDeviceCaps(Some(sdc), GET_DEVICE_CAPS_INDEX(90));
-            if dpi_x != 96 || dpi_y != 96 {
-                let dc_w = GetDeviceCaps(Some(sdc), GET_DEVICE_CAPS_INDEX(8)) as u32;
-                let dc_h = GetDeviceCaps(Some(sdc), GET_DEVICE_CAPS_INDEX(10)) as u32;
-                log::debug!(
-                    "GDI capture: region={}x{}@{},{} DC={}x{} DPI={}x{}",
-                    w, h, self.region.x, self.region.y, dc_w, dc_h, dpi_x, dpi_y
-                );
-            }
-
-            let mdc = CreateCompatibleDC(Some(sdc));
-            if mdc.is_invalid() { let _ = ReleaseDC(None, sdc); return Err(anyhow::anyhow!("CreateCompatibleDC")); }
-            let bmp = CreateCompatibleBitmap(sdc, w as i32, h as i32);
-            if bmp.is_invalid() { let _ = ReleaseDC(None, sdc); let _ = DeleteDC(mdc); return Err(anyhow::anyhow!("CreateCompatibleBitmap")); }
-            SelectObject(mdc, bmp.into());
-            let blt_result = BitBlt(mdc, 0, 0, w as i32, h as i32, Some(sdc), self.region.x, self.region.y, SRCCOPY);
-            // BitBlt can fail in RDP or locked sessions — return a clear error instead of silent black frame
-            if blt_result.is_err() {
-                let _ = DeleteObject(bmp.into()); let _ = ReleaseDC(None, sdc); let _ = DeleteDC(mdc);
-                return Err(anyhow::anyhow!("BitBlt failed (RDP or locked session). Try selecting a window for PrintWindow capture."));
-            }
-            let mut bi = BITMAPINFO::default();
-            bi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
-            bi.bmiHeader.biWidth = w as i32; bi.bmiHeader.biHeight = -(h as i32);
-            bi.bmiHeader.biPlanes = 1; bi.bmiHeader.biBitCount = 32; bi.bmiHeader.biCompression = 0;
-            let mut data = vec![0u8; (w * h * 4) as usize];
-            GetDIBits(mdc, bmp, 0, h, Some(data.as_mut_ptr() as *mut _), &mut bi, DIB_USAGE(0));
-            let _ = DeleteObject(bmp.into()); let _ = ReleaseDC(None, sdc); let _ = DeleteDC(mdc);
-            self.frame_index += 1;
-            Ok(Frame::new(data, w, h, w*4, self.frame_index, now_ms()))
-        }
-    }
-    pub fn is_initialized(&self) -> bool { self.region.is_valid() }
 }
-fn now_ms() -> u64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows::Win32::System::Threading::{GetCurrentProcess, GetGuiResources, GR_GDIOBJECTS};
+
+    #[test]
+    fn repeated_bitmap_success_and_early_failure_release_gdi_handles() {
+        unsafe {
+            let before = GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS);
+            for _ in 0..2000 {
+                let mut capture = BitmapCapture::new(None, 32, 32).unwrap();
+                capture.pixels(32, 32).unwrap();
+                drop(capture);
+                // Early return while the bitmap is still selected.
+                drop(BitmapCapture::new(None, 32, 32).unwrap());
+            }
+            let after = GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS);
+            assert!(
+                after <= before + 4,
+                "Leaked GDI handles: before={before}, after={after}"
+            );
+        }
+    }
+}

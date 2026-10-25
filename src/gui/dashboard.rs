@@ -86,6 +86,7 @@ impl DashboardPanel {
                     CaptureState::Stable => Color32::from_rgb(0, 200, 0),
                     CaptureState::Saving => Color32::LIGHT_BLUE,
                     CaptureState::Paused => Color32::GOLD,
+                    CaptureState::WaitingForDesktop => Color32::GOLD,
                     CaptureState::Stopped => Color32::GRAY,
                     CaptureState::ProtectedOrBlack => Color32::RED,
                     CaptureState::Error => Color32::RED,
@@ -177,7 +178,8 @@ impl DashboardPanel {
                     .add_enabled(
                         self.current_state == CaptureState::Running
                             || self.current_state == CaptureState::WaitingForStable
-                            || self.current_state == CaptureState::Stable,
+                            || self.current_state == CaptureState::Stable
+                            || self.current_state == CaptureState::WaitingForDesktop,
                         Button::new(RichText::new(i18n::t_pause(language)).size(16.0)),
                     )
                     .clicked()

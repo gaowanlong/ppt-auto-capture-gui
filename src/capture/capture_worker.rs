@@ -9,7 +9,9 @@ use crossbeam_channel::Sender;
 
 use crate::capture::capture_source::CaptureSource;
 use crate::capture::capture_state::CaptureState;
-use crate::detection::{BlackFrameDetector, ChangeDetector, DuplicateDetector, StabilityDetector};
+use crate::detection::{
+    BlackFrameDetector, ChangeDetector, DuplicateDetector, MotionFilter, StabilityDetector,
+};
 use crate::model::{Frame, MonitorInfo};
 use crate::storage::SessionStore;
 use crate::windows::{DxgiCapturer, GdiCapturer};
@@ -94,7 +96,13 @@ impl CaptureWorker {
         let handle = thread::Builder::new()
             .name("capture-worker".into())
             .spawn(move || {
-                WorkerLoop::new(cmd_rx, event_tx).run(running_clone);
+                let errors = event_tx.clone();
+                if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    WorkerLoop::new(cmd_rx, event_tx).run(running_clone);
+                })).is_err() {
+                    error!("Capture worker panicked; saved session remains recoverable");
+                    let _ = errors.send(WorkerEvent::Error("Capture worker stopped unexpectedly; saved pages can be recovered on restart. See application log.".into()));
+                }
             })
             .expect("Failed to spawn capture worker thread");
 
@@ -122,6 +130,12 @@ impl CaptureWorker {
     }
 }
 
+impl Drop for CaptureWorker {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
 struct WorkerLoop {
     cmd_rx: crossbeam_channel::Receiver<WorkerCommand>,
     event_tx: crossbeam_channel::Sender<WorkerEvent>,
@@ -140,6 +154,8 @@ struct WorkerLoop {
     last_slide_hash: Option<String>,
     animation_timer: Option<std::time::Instant>,
     first_frame_saved: bool,
+    motion_filter: MotionFilter,
+    desktop_retry_at: Option<std::time::Instant>,
 }
 
 impl WorkerLoop {
@@ -165,23 +181,61 @@ impl WorkerLoop {
             last_slide_hash: None,
             animation_timer: None,
             first_frame_saved: false,
+            motion_filter: MotionFilter::default(),
+            desktop_retry_at: None,
         }
     }
 
     fn run(&mut self, running: Arc<AtomicBool>) {
         info!("Capture worker started");
+        let mut health_at = std::time::Instant::now();
 
         while running.load(Ordering::SeqCst) {
             self.process_commands();
+            if health_at.elapsed() >= Duration::from_secs(60) {
+                crate::windows::log_capture_resources();
+                info!(
+                    "Capture health: saved_slides={}, pending_save={}, event_backlog={}",
+                    self.slide_count,
+                    self.pending_save.is_some(),
+                    self.event_tx.len()
+                );
+                health_at = std::time::Instant::now();
+            }
 
-            if self.state == CaptureState::Running || self.state == CaptureState::WaitingForStable {
+            let available = crate::windows::input_desktop_available();
+            if self.check_desktop(available)
+                && self
+                    .desktop_retry_at
+                    .is_none_or(|time| std::time::Instant::now() >= time)
+            {
+                match self.restore_capture_source() {
+                    Ok(()) => {
+                        self.prepare_resume();
+                        self.desktop_retry_at = None;
+                        let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
+                    }
+                    Err(error) => {
+                        warn!("Capture source still unavailable: {error:#}");
+                        self.desktop_retry_at =
+                            Some(std::time::Instant::now() + Duration::from_secs(2));
+                    }
+                }
+            }
+
+            if available && self.should_capture() {
                 match self.do_capture_cycle() {
                     Ok(()) => {}
                     Err(e) => {
                         let msg = format!("Capture cycle error: {}", e);
                         error!("{}", msg);
                         let _ = self.event_tx.send(WorkerEvent::Error(msg.clone()));
-                        if msg.contains("DXGI access lost") {
+                        if cfg!(target_os = "windows") {
+                            self.state = CaptureState::WaitingForDesktop;
+                            self.desktop_retry_at =
+                                Some(std::time::Instant::now() + Duration::from_secs(2));
+                            let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
+                        } else if msg.contains("DXGI access lost") {
                             warn!("DXGI lost, pausing capture");
                             self.state = CaptureState::Paused;
                             let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
@@ -210,6 +264,60 @@ impl WorkerLoop {
 
         self.finish_session();
         info!("Capture worker stopped");
+    }
+
+    fn should_capture(&self) -> bool {
+        matches!(
+            self.state,
+            CaptureState::Running | CaptureState::WaitingForStable | CaptureState::ProtectedOrBlack
+        )
+    }
+
+    fn prepare_resume(&mut self) {
+        self.state = CaptureState::Running;
+        self.first_frame_saved = false;
+        self.change_detector.reset();
+        self.stability_detector.reset();
+        self.animation_timer = None;
+    }
+
+    /// Returns true only when an automatically suspended session may resume.
+    fn check_desktop(&mut self, available: bool) -> bool {
+        if !available && self.should_capture() {
+            self.dxgi_capturer.release();
+            self.state = CaptureState::WaitingForDesktop;
+            self.desktop_retry_at = None;
+            let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
+        }
+        available && self.state == CaptureState::WaitingForDesktop
+    }
+
+    fn restore_capture_source(&mut self) -> Result<()> {
+        let source = self
+            .source
+            .as_ref()
+            .context("No capture source selected")?
+            .clone();
+        let mut monitor = self.create_monitor_info_for_source(&source)?;
+        let (width, height) = if source.window_hwnd != 0 {
+            let region = crate::windows::get_client_window_rect(source.window_hwnd)?;
+            anyhow::ensure!(
+                region.is_valid(),
+                "Selected window is minimized or unavailable"
+            );
+            monitor.region = region;
+            (region.width, region.height)
+        } else {
+            (0, 0)
+        };
+        self.dxgi_capturer.release();
+        if !should_use_display_capturer(&source) || self.dxgi_capturer.initialize(&monitor).is_err()
+        {
+            self.gdi_capturer.initialize(&monitor)?;
+            self.gdi_capturer
+                .set_window_hwnd(source.window_hwnd, width, height);
+        }
+        Ok(())
     }
 
     fn process_commands(&mut self) {
@@ -242,6 +350,7 @@ impl WorkerLoop {
                     self.last_slide_hash = None;
                     self.animation_timer = None;
                     self.first_frame_saved = false;
+                    self.motion_filter = MotionFilter::default();
                     self.pending_save = None;
                     self.change_detector.reset();
                     self.stability_detector.reset();
@@ -391,25 +500,14 @@ impl WorkerLoop {
                 }
                 WorkerCommand::Resume => {
                     info!("Resuming capture");
-                    if let Some(ref src) = self.source.clone() {
-                        let monitor = self.create_monitor_info_for_source(src);
-                        if let Ok(mon) = monitor {
-                            if should_use_display_capturer(src) {
-                                let _ = self.dxgi_capturer.initialize(&mon);
-                            } else {
-                                if self.gdi_capturer.initialize(&mon).is_ok() {
-                                    self.gdi_capturer.set_window_hwnd(src.window_hwnd, 0, 0);
-                                }
-                            }
-                            self.state = CaptureState::Running;
-                        } else {
-                            // Monitor no longer available — try GDI fallback
-                            log::warn!("Monitor unavailable on resume, trying GDI");
-                            self.state = CaptureState::Running;
+                    match self.restore_capture_source() {
+                        Ok(()) => self.prepare_resume(),
+                        Err(error) => {
+                            self.state = CaptureState::Paused;
+                            let _ = self.event_tx.send(WorkerEvent::Error(format!(
+                                "Cannot resume selected source: {error:#}"
+                            )));
                         }
-                    } else {
-                        log::warn!("No source set on resume");
-                        self.state = CaptureState::Stopped;
                     }
                     let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
                 }
@@ -466,7 +564,11 @@ impl WorkerLoop {
                                 let mut test_gdi = GdiCapturer::new();
                                 match test_gdi.initialize(&mon) {
                                     Ok(()) => {
-                                        test_gdi.set_window_hwnd(source.window_hwnd, 0, 0);
+                                        test_gdi.set_window_hwnd(
+                                            source.window_hwnd,
+                                            mon.region.width,
+                                            mon.region.height,
+                                        );
                                         match test_gdi.capture_frame() {
                                             Ok(frame) => {
                                                 let thumb = frame.thumbnail(320, 240);
@@ -562,7 +664,11 @@ impl WorkerLoop {
             return Err(anyhow::anyhow!("No capturer initialized"));
         };
 
-        if self.black_frame_detector.is_black(&frame) {
+        self.process_frame(&frame)
+    }
+
+    fn process_frame(&mut self, frame: &Frame) -> Result<()> {
+        if self.black_frame_detector.is_black(frame) {
             warn!("Black/blank frame detected at index {}", frame.frame_index);
             if self.state == CaptureState::Running || self.state == CaptureState::WaitingForStable {
                 self.state = CaptureState::ProtectedOrBlack;
@@ -579,9 +685,9 @@ impl WorkerLoop {
             // Just exited a black/protected transition (e.g. PPT slide change).
             // The current frame is almost certainly the new slide content.
             // Force-save it immediately (save_frame handles duplicates internally).
-            self.change_detector.detect_change(&frame);
-            self.change_detector.update_reference(&frame);
-            if let Err(e) = self.save_frame(&frame) {
+            self.change_detector.detect_change(frame);
+            self.change_detector.update_reference(frame);
+            if let Err(e) = self.save_frame(frame) {
                 error!("Failed to save frame after black recovery: {}", e);
                 let _ = self.event_tx.send(WorkerEvent::Error(format!(
                     "Black-recovery save failed: {}",
@@ -591,11 +697,13 @@ impl WorkerLoop {
             return Ok(());
         }
 
+        let broad_transition = self.motion_filter.observe(frame);
+
         // Save first frame immediately on starting capture
         if !self.first_frame_saved {
-            self.change_detector.detect_change(&frame);
-            self.change_detector.update_reference(&frame);
-            if let Err(e) = self.save_frame(&frame) {
+            self.change_detector.detect_change(frame);
+            self.change_detector.update_reference(frame);
+            if let Err(e) = self.save_frame(frame) {
                 error!("Failed to save first frame: {}", e);
                 let _ = self.event_tx.send(WorkerEvent::Error(format!(
                     "First frame save failed: {}",
@@ -606,13 +714,19 @@ impl WorkerLoop {
             // Still continue with normal detection after the first save
         }
 
-        let (changed, diff_ratio) = self.change_detector.detect_change(&frame);
-        let _ = self.event_tx.send(WorkerEvent::FrameCaptured {
+        let (changed, diff_ratio) = self.change_detector.detect_change(frame);
+        let changed =
+            changed || (self.config.filter_duplicates && !self.motion_filter.is_duplicate(frame));
+        self.send_telemetry(WorkerEvent::FrameCaptured {
             frame_index: frame.frame_index,
             timestamp_ms: frame.timestamp_ms,
         });
 
-        if changed {
+        if changed
+            && (!self.config.filter_duplicates
+                || broad_transition
+                || self.stability_detector.get_pending_frame().is_some())
+        {
             // If we were already stabilizing a previous slide, save it before resetting.
             // This prevents rapid PPT slide transitions from losing intermediate slides.
             // Save the partially-stabilized slide before a new transition resets everything.
@@ -647,17 +761,25 @@ impl WorkerLoop {
                 }
             }
             self.state = CaptureState::WaitingForStable;
-            self.animation_timer = Some(std::time::Instant::now());
+            self.animation_timer
+                .get_or_insert_with(std::time::Instant::now);
             self.stability_detector.reset();
-            let _ = self.event_tx.send(WorkerEvent::ChangeDetected {
+            self.send_telemetry(WorkerEvent::ChangeDetected {
                 frame_index: frame.frame_index,
                 diff_ratio,
             });
             let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
         }
 
+        if changed && self.config.filter_duplicates && self.state != CaptureState::WaitingForStable
+        {
+            self.state = CaptureState::WaitingForStable;
+            self.animation_timer = Some(std::time::Instant::now());
+            self.stability_detector.reset();
+        }
+
         if self.state == CaptureState::WaitingForStable {
-            let is_stable = self.stability_detector.check_stable(&frame);
+            let is_stable = self.stability_detector.check_stable(frame);
             let timed_out = self
                 .animation_timer
                 .map(|t| t.elapsed() >= Duration::from_millis(self.config.animation_timeout_ms))
@@ -665,12 +787,12 @@ impl WorkerLoop {
 
             if is_stable || timed_out {
                 self.state = CaptureState::Stable;
-                let _ = self.event_tx.send(WorkerEvent::FrameStable {
+                self.send_telemetry(WorkerEvent::FrameStable {
                     frame_index: frame.frame_index,
                 });
                 let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
 
-                if let Err(e) = self.save_frame(&frame) {
+                if let Err(e) = self.save_frame(frame) {
                     error!("Failed to save frame: {}", e);
                     let _ = self
                         .event_tx
@@ -679,12 +801,21 @@ impl WorkerLoop {
                 }
 
                 self.state = CaptureState::Running;
+                self.animation_timer = None;
                 let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
             }
         }
 
-        self.change_detector.update_reference(&frame);
+        self.change_detector.update_reference(frame);
         Ok(())
+    }
+
+    fn send_telemetry(&self, event: WorkerEvent) {
+        // Keep a stalled/minimized UI from accumulating sampling notifications all day.
+        // SlideSaved, errors and state changes use the reliable event path instead.
+        if self.event_tx.len() < 128 {
+            let _ = self.event_tx.try_send(event);
+        }
     }
 
     fn report_rapid_transition_save_failure(&self, frame_kind: &str, error: anyhow::Error) {
@@ -739,6 +870,10 @@ impl WorkerLoop {
         let content_hash = self.duplicate_detector.compute_hash(frame);
 
         if self.config.filter_duplicates {
+            if self.motion_filter.is_duplicate(frame) {
+                self.state = CaptureState::Running;
+                return Ok(());
+            }
             if let Some(ref last_hash) = self.last_slide_hash {
                 if *last_hash == content_hash {
                     info!("Duplicate slide detected, skipping");
@@ -782,6 +917,7 @@ impl WorkerLoop {
         self.slide_count = slide_number;
 
         self.last_slide_hash = Some(content_hash);
+        self.motion_filter.mark_saved(frame);
 
         let _ = self.event_tx.send(WorkerEvent::SlideSaved {
             slide_number,
@@ -829,6 +965,198 @@ fn capture_backend_unavailable_message() -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settled_content_inside_a_previous_video_region_is_not_lost() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_tx, rx) = crossbeam_channel::unbounded();
+        let (tx, _events) = crossbeam_channel::unbounded();
+        let mut worker = WorkerLoop::new(rx, tx);
+        worker.session =
+            Some(SessionStore::create(dir.path(), "deck.pptx", "16:9", "fit").unwrap());
+        worker.state = CaptureState::Running;
+        for i in 0..40 {
+            let mut frame = Frame::new(vec![255; 64 * 36 * 4], 64, 36, 256, i, 0);
+            let value = if i < 8 && i % 2 == 0 { 0 } else { 160 };
+            for y in 9..27 {
+                for x in 16..48 {
+                    frame.data[(y * 64 + x) * 4..(y * 64 + x) * 4 + 3].fill(value);
+                }
+            }
+            worker.process_frame(&frame).unwrap();
+        }
+        assert_eq!(worker.slide_count, 2);
+    }
+
+    #[test]
+    fn slow_ui_does_not_accumulate_per_frame_notifications() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_tx, rx) = crossbeam_channel::unbounded();
+        let (tx, events) = crossbeam_channel::unbounded();
+        let mut worker = WorkerLoop::new(rx, tx);
+        worker.session =
+            Some(SessionStore::create(dir.path(), "deck.pptx", "16:9", "fit").unwrap());
+        worker.state = CaptureState::Running;
+        let frame = Frame::new(vec![255; 64 * 36 * 4], 64, 36, 256, 1, 0);
+        for _ in 0..1000 {
+            worker.process_frame(&frame).unwrap();
+        }
+        assert!(
+            events.len() <= 256,
+            "Per-frame UI events grew without bound: {}",
+            events.len()
+        );
+        assert!(events.try_iter().any(|event| matches!(
+            event,
+            WorkerEvent::SlideSaved {
+                slide_number: 1,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn dropping_worker_stops_its_background_thread() {
+        let worker = CaptureWorker::new();
+        let running = worker.running.clone();
+        drop(worker);
+        assert!(!running.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn first_frame_after_unlock_saves_a_new_page_and_skips_an_unchanged_page() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_tx, rx) = crossbeam_channel::unbounded();
+        let (tx, _events) = crossbeam_channel::unbounded();
+        let mut worker = WorkerLoop::new(rx, tx);
+        worker.session =
+            Some(SessionStore::create(dir.path(), "deck.pptx", "16:9", "fit").unwrap());
+        worker.state = CaptureState::Running;
+        let first = Frame::new(vec![255; 64 * 36 * 4], 64, 36, 256, 1, 0);
+        worker.process_frame(&first).unwrap();
+        worker.prepare_resume();
+        worker.process_frame(&first).unwrap();
+        assert_eq!(worker.slide_count, 1);
+        worker.prepare_resume();
+        worker
+            .process_frame(&Frame::new(vec![100; 64 * 36 * 4], 64, 36, 256, 2, 0))
+            .unwrap();
+        assert_eq!(worker.slide_count, 2);
+    }
+
+    #[test]
+    fn same_template_fast_pages_keep_intermediate_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_tx, rx) = crossbeam_channel::unbounded();
+        let (tx, _events) = crossbeam_channel::unbounded();
+        let mut worker = WorkerLoop::new(rx, tx);
+        worker.session =
+            Some(SessionStore::create(dir.path(), "deck.pptx", "16:9", "fit").unwrap());
+        worker.state = CaptureState::Running;
+        for value in [255, 128, 128, 64, 64, 64, 64, 64] {
+            let mut frame = Frame::new(vec![255; 64 * 36 * 4], 64, 36, 256, 1, 0);
+            frame.data[..64 * 6 * 4].fill(value);
+            worker.process_frame(&frame).unwrap();
+        }
+        assert_eq!(worker.slide_count, 3);
+    }
+
+    #[test]
+    fn broad_rapid_slide_changes_keep_intermediate_pages() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_tx, rx) = crossbeam_channel::unbounded();
+        let (tx, _events) = crossbeam_channel::unbounded();
+        let mut worker = WorkerLoop::new(rx, tx);
+        worker.session =
+            Some(SessionStore::create(dir.path(), "deck.pptx", "16:9", "fit").unwrap());
+        worker.state = CaptureState::Running;
+        for value in [255, 128, 64, 64, 64, 64, 64] {
+            worker
+                .process_frame(&Frame::new(vec![value; 64 * 36 * 4], 64, 36, 256, 1, 0))
+                .unwrap();
+        }
+        assert_eq!(worker.slide_count, 3);
+    }
+
+    #[test]
+    fn video_motion_timeout_and_new_slide_do_not_create_repeated_pages() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_tx, rx) = crossbeam_channel::unbounded();
+        let (tx, events) = crossbeam_channel::unbounded();
+        let mut worker = WorkerLoop::new(rx, tx);
+        worker.session =
+            Some(SessionStore::create(dir.path(), "deck.pptx", "16:9", "fit").unwrap());
+        worker.state = CaptureState::Running;
+        for i in 0..20_000 {
+            let background = if i < 10_000 { 255 } else { 100 };
+            let mut frame = Frame::new(vec![background; 64 * 36 * 4], 64, 36, 256, i, i * 200);
+            for y in 9..27 {
+                for x in 16..48 {
+                    let offset = (y * 64 + x) * 4;
+                    frame.data[offset..offset + 3].fill(if i % 2 == 0 { 0 } else { 180 });
+                }
+            }
+            if i % 25 == 0 && worker.state == CaptureState::WaitingForStable {
+                worker.animation_timer = Some(std::time::Instant::now() - Duration::from_secs(11));
+            }
+            worker.process_frame(&frame).unwrap();
+            // Exercise a consuming UI too; do not let the test itself accumulate telemetry.
+            for _ in events.try_iter() {}
+        }
+        assert_eq!(worker.slide_count, 2);
+        assert_eq!(worker.session.as_ref().unwrap().records.len(), 2);
+        worker.finish_session();
+    }
+
+    #[test]
+    fn lock_wait_does_not_override_user_pause_or_pending_save() {
+        let (_tx, rx) = crossbeam_channel::unbounded();
+        let (tx, _events) = crossbeam_channel::unbounded();
+        let mut worker = WorkerLoop::new(rx, tx);
+        worker.state = CaptureState::Running;
+        worker.pending_save = Some(Frame::new(vec![255; 4], 1, 1, 4, 42, 0));
+        assert!(!worker.check_desktop(false));
+        assert_eq!(worker.state, CaptureState::WaitingForDesktop);
+        assert!(worker.check_desktop(true));
+        assert_eq!(worker.pending_save.as_ref().unwrap().frame_index, 42);
+        worker.state = CaptureState::Paused;
+        assert!(!worker.check_desktop(true));
+        assert_eq!(worker.state, CaptureState::Paused);
+        worker.state = CaptureState::Stopped;
+        assert!(!worker.check_desktop(true));
+    }
+
+    #[test]
+    fn black_transition_can_return_to_capture_without_manual_resume() {
+        let (_tx, rx) = crossbeam_channel::unbounded();
+        let (tx, _events) = crossbeam_channel::unbounded();
+        let mut worker = WorkerLoop::new(rx, tx);
+        worker.state = CaptureState::Running;
+        worker
+            .process_frame(&Frame::new(vec![0; 4], 1, 1, 4, 1, 0))
+            .unwrap();
+        assert_eq!(worker.state, CaptureState::ProtectedOrBlack);
+        assert!(worker.should_capture());
+    }
+
+    #[test]
+    fn cursor_motion_does_not_save_another_slide() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_tx, rx) = crossbeam_channel::unbounded();
+        let (tx, _events) = crossbeam_channel::unbounded();
+        let mut worker = WorkerLoop::new(rx, tx);
+        worker.session =
+            Some(SessionStore::create(dir.path(), "deck.pptx", "16:9", "fit").unwrap());
+        let first = Frame::new(vec![255; 200 * 100 * 4], 200, 100, 800, 1, 0);
+        worker.save_frame(&first).unwrap();
+        for i in 0..100 {
+            let mut frame = first.clone();
+            let offset = ((20 * 200 + i) * 4) as usize;
+            frame.data[offset..offset + 4].copy_from_slice(&[0, 0, 0, 255]);
+            worker.save_frame(&frame).unwrap();
+        }
+        assert_eq!(worker.slide_count, 1);
+    }
 
     #[test]
     fn failed_first_frame_retries_same_page_without_success_event_or_gap() {
