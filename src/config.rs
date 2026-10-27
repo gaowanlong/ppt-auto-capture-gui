@@ -27,6 +27,8 @@ pub struct AppConfig {
     pub page_ratio: String,
     /// Image fit mode: "fill" or "fit".
     pub image_fit: String,
+    #[serde(default)]
+    pub auto_crop: bool,
     /// Whether to preserve previous.pptx.
     pub keep_previous: bool,
     /// Last used capture source (serialized for persistence).
@@ -58,6 +60,7 @@ impl Default for AppConfig {
             ),
             page_ratio: "16:9".to_string(),
             image_fit: "fit".to_string(),
+            auto_crop: false,
             keep_previous: true,
             last_window_hwnd: 0,
             last_window_title: String::new(),
@@ -161,6 +164,14 @@ mod tests {
         let deserialized: AppConfig = serde_json::from_str(&json).expect("Deserialization failed");
         assert_eq!(deserialized.sample_interval_ms, cfg.sample_interval_ms);
         assert_eq!(deserialized.change_threshold, cfg.change_threshold);
+    }
+
+    #[test]
+    fn old_config_without_crop_option_defaults_to_preserving_full_images() {
+        let mut value = serde_json::to_value(AppConfig::default()).unwrap();
+        value.as_object_mut().unwrap().remove("auto_crop");
+        let restored: AppConfig = serde_json::from_value(value).unwrap();
+        assert!(!restored.auto_crop);
     }
 
     #[test]

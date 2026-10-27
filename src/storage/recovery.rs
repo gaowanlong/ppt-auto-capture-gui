@@ -64,8 +64,7 @@ pub fn recover_session(output_dir: &Path) -> Result<Vec<PathBuf>> {
     let mut recovered = Vec::new();
     for mut session in sessions(output_dir)? {
         if !session.completed && !session.records.is_empty() {
-            session.publish()?;
-            session.finish()?;
+            session.recover()?;
             recovered.extend(session.output_paths());
         }
     }
@@ -127,7 +126,9 @@ mod tests {
     #[test]
     fn recovery_rebuilds_and_reports_every_deck_in_an_interrupted_long_recording() {
         let root = tempfile::tempdir().unwrap();
-        let mut session = SessionStore::create(root.path(), "deck.pptx", "4:3", "fit").unwrap();
+        let mut session =
+            crate::storage::create_legacy_segmented_session(root.path(), "deck.pptx", "4:3", "fit")
+                .unwrap();
         for page in 1..=51 {
             let record = SlideRecord::new(crate::model::SlideRecordInput {
                 slide_number: page,
@@ -179,7 +180,9 @@ mod tests {
     }
 
     fn captured_session(root: &Path) -> SessionStore {
-        let mut session = SessionStore::create(root, "my-slides.pptx", "4:3", "fill").unwrap();
+        let mut session =
+            crate::storage::create_legacy_segmented_session(root, "my-slides.pptx", "4:3", "fill")
+                .unwrap();
         let record = SlideRecord::new(crate::model::SlideRecordInput {
             slide_number: 1,
             png_filename: "slide_0001.png".into(),

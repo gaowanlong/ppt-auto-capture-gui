@@ -504,7 +504,11 @@ impl WorkerLoop {
                                 &source.output_filename,
                                 &source.page_ratio,
                                 &source.image_fit,
-                            ) {
+                            )
+                            .and_then(|mut session| {
+                                session.set_auto_crop(source.auto_crop)?;
+                                Ok(session)
+                            }) {
                                 Ok(store) => store,
                                 Err(e) => {
                                     let msg =
@@ -961,13 +965,59 @@ mod tests {
     use super::*;
 
     #[test]
+    fn stop_generates_all_decks_and_retries_failed_generation_without_losing_screenshots() {
+        let root = tempfile::tempdir().unwrap();
+        let (commands, rx) = crossbeam_channel::unbounded();
+        let (events, _) = worker_event_channel();
+        let mut worker = WorkerLoop::new(rx, events);
+        worker.config.filter_duplicates = false;
+        let session = SessionStore::create(root.path(), "deck.pptx", "16:9", "fit").unwrap();
+        let folder = session.directory.clone();
+        worker.session = Some(session);
+        for number in 1..=51 {
+            worker
+                .save_frame(&Frame::new(
+                    vec![number as u8, 0, 255, 255],
+                    1,
+                    1,
+                    4,
+                    number,
+                    0,
+                ))
+                .unwrap();
+        }
+        assert!(!folder.join("deck.pptx").exists());
+        let blocked = folder.join("deck-part-002.pptx");
+        std::fs::create_dir(&blocked).unwrap();
+        commands.send(WorkerCommand::Stop).unwrap();
+        worker.process_commands();
+        assert_eq!(worker.state, CaptureState::Paused);
+        assert_eq!(worker.slide_count, 51);
+        assert!(!SessionStore::open(&folder).unwrap().completed);
+        assert!(folder.join("slides/slide_0051.png").is_file());
+        assert!(folder.join("deck.pptx").is_file());
+        std::fs::remove_dir(blocked).unwrap();
+        commands.send(WorkerCommand::Stop).unwrap();
+        worker.process_commands();
+        assert_eq!(worker.state, CaptureState::Stopped);
+        assert!(SessionStore::open(&folder).unwrap().completed);
+        assert!(folder.join("deck-part-002.pptx").is_file());
+    }
+
+    #[test]
     fn recording_rolls_over_at_50_pages_without_gaps_or_empty_extra_decks() {
         let root = tempfile::tempdir().unwrap();
         let (_commands, rx) = crossbeam_channel::unbounded();
         let (events, received) = worker_event_channel();
         let mut worker = WorkerLoop::new(rx, events);
         worker.config.filter_duplicates = false;
-        let session = SessionStore::create(root.path(), "deck.pptx", "16:9", "fit").unwrap();
+        let session = crate::storage::create_legacy_segmented_session(
+            root.path(),
+            "deck.pptx",
+            "16:9",
+            "fit",
+        )
+        .unwrap();
         let folder = session.directory.clone();
         worker.session = Some(session);
         for index in 1..=101 {
@@ -1030,7 +1080,13 @@ mod tests {
         let (events, received) = worker_event_channel();
         let mut worker = WorkerLoop::new(rx, events);
         worker.config.filter_duplicates = false;
-        let session = SessionStore::create(root.path(), "deck.pptx", "16:9", "fit").unwrap();
+        let session = crate::storage::create_legacy_segmented_session(
+            root.path(),
+            "deck.pptx",
+            "16:9",
+            "fit",
+        )
+        .unwrap();
         let folder = session.directory.clone();
         worker.session = Some(session);
         for index in 1..=50 {
@@ -1090,7 +1146,13 @@ mod tests {
         let (events, _) = worker_event_channel();
         let mut worker = WorkerLoop::new(rx, events);
         worker.config.filter_duplicates = false;
-        let session = SessionStore::create(root.path(), "deck.pptx", "16:9", "fit").unwrap();
+        let session = crate::storage::create_legacy_segmented_session(
+            root.path(),
+            "deck.pptx",
+            "16:9",
+            "fit",
+        )
+        .unwrap();
         let folder = session.directory.clone();
         worker.session = Some(session);
         for index in 1..=50 {
@@ -1481,8 +1543,10 @@ mod tests {
         let (_tx, rx) = crossbeam_channel::unbounded();
         let (events, received) = worker_event_channel();
         let mut worker = WorkerLoop::new(rx, events);
-        worker.session =
-            Some(SessionStore::create(dir.path(), "deck.pptx", "16:9", "fit").unwrap());
+        worker.session = Some(
+            crate::storage::create_legacy_segmented_session(dir.path(), "deck.pptx", "16:9", "fit")
+                .unwrap(),
+        );
         let output = worker.session.as_ref().unwrap().output_path();
         std::fs::create_dir(&output).unwrap();
         let frame = Frame::new(vec![0, 0, 255, 255], 1, 1, 4, 17, 0);
@@ -1569,8 +1633,10 @@ mod tests {
         let (_tx, rx) = crossbeam_channel::unbounded();
         let (events, _received) = worker_event_channel();
         let mut worker = WorkerLoop::new(rx, events);
-        worker.session =
-            Some(SessionStore::create(dir.path(), "deck.pptx", "16:9", "fit").unwrap());
+        worker.session = Some(
+            crate::storage::create_legacy_segmented_session(dir.path(), "deck.pptx", "16:9", "fit")
+                .unwrap(),
+        );
         std::fs::create_dir(worker.session.as_ref().unwrap().output_path()).unwrap();
         assert!(worker
             .save_frame(&Frame::new(vec![255; 4], 1, 1, 4, 1, 0))

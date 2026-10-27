@@ -1,6 +1,6 @@
 # PPT Auto Capture GUI
 
-A desktop tool that captures PowerPoint slide show screenshots and produces a real-time `output.pptx`. Capture is supported on Windows and Apple Silicon macOS.
+A desktop tool that captures presentation screenshots and creates PPTX files after recording stops. Capture is supported on Windows and Apple Silicon macOS.
 
 ## Features
 
@@ -8,7 +8,7 @@ A desktop tool that captures PowerPoint slide show screenshots and produces a re
 - **Native capture engines**: DXGI/GDI on Windows and xcap/CoreGraphics on macOS
 - **GUI-driven**: No command-line interaction — launch the `.exe` and configure visually
 - **Window management**: Select a window, move it to the capture display, maximize it — all from the UI
-- **Real-time PPTX**: Each screenshot is immediately appended to `output.pptx`
+- **Deferred PPTX**: Screenshots are saved during capture; PPTX files are generated on Stop, with up to 50 slides each
 - **Crash recovery**: On restart, detects incomplete sessions and offers to rebuild the PPTX
 - **Protected content detection**: Black/blank frames enter a safe state without trying to bypass DRM
 - **Smart capture pipeline**: Change detection → stability detection → dedup → save
@@ -22,6 +22,7 @@ A desktop tool that captures PowerPoint slide show screenshots and produces a re
 5. (Optional) Click "Move to Display" to place the window on the capture monitor
 6. Go to **Dashboard** → click **Start**
 7. Switch to your PowerPoint slideshow — the tool watches for slide changes automatically
+8. Click **Stop** and wait while the PPTX files are generated
 
 ## Install — macOS Apple Silicon
 
@@ -43,9 +44,11 @@ The macOS app starts with the primary display and full-screen capture selected. 
 
 Each recording now has its own `sessions/<timestamp>-<unique-id>/` directory under the selected output folder. It contains the chosen PPTX filename, a `slides/` folder, and `session.json`. The dashboard shows the actual PPTX path. Starting another recording, even with the same filename, does not overwrite earlier recordings.
 
-Long recordings automatically split into PPTX files of at most 50 slides, without stopping capture. The first file retains the chosen name; subsequent files in the same recording folder are named, for example, `output-part-002.pptx`, `output-part-003.pptx`, and so on. A new file is created only when its first slide is saved. The dashboard shows the current file and total saved slides across the recording. Screenshots remain numbered in order in the shared `slides/` folder. Older unfinished sessions remain recoverable in their original single-file format. Split recordings use a newer journal format and must be recovered with this version or a later compatible version, not an older application.
+During recording only PNG screenshots and the session journal are saved. After Stop, the application generates PPTX files in the background, each containing at most 50 slides. The first file retains the chosen name; subsequent files in the same recording folder are named, for example, `output-part-002.pptx`, `output-part-003.pptx`, and so on. No empty extra file is created at the 50-slide boundary. The dashboard displays the target file and total saved screenshots. Screenshots remain numbered in order in the shared `slides/` folder. Older unfinished sessions remain recoverable in their original format. New recordings use a newer journal format and must be recovered with this version or a later compatible version, not an older application.
 
-If saving fails, capture pauses and retains the pending frame in memory. Resolve the storage problem (for example, close a PPTX locked by PowerPoint or free disk space), then choose **Resume** to retry that same page. **Stop** also retries finalization and keeps the session paused if it fails. The saved-page count advances only after PNG, journal, and PPTX publication succeed. Closing or force-quitting the application can lose frames not yet committed to the journal; resolve the error before closing.
+If saving a screenshot fails, capture pauses and retains the pending frame in memory. Resolve the storage problem, then choose **Resume** to retry that same screenshot. The saved-page count advances after PNG and journal writes succeed. If PPTX generation fails after Stop (for example, a file is locked or the disk is full), the session remains incomplete and **Stop** retries generation. Closing or force-quitting can lose frames not yet committed to the journal; resolve an error before closing.
+
+The **Create PPTX** tab imports PNG and JPEG images directly from a selected folder, in natural filename order, into a separate export folder. It also uses the 50-slide limit and leaves the source files unchanged. The optional automatic crop looks for a clearly bounded 16:9 or 4:3 presentation area and embeds only that region; when no confident boundary is found, the full image is used. Cropping changes only the image embedded in PPTX, never the original screenshots. Detection is heuristic, so inspect generated files before relying on the result.
 
 On restart, recovery rebuilds unfinished recordings from their journal and PNGs, preserving the original filename, slide size, and image-fit setting. Keep each session folder together. Missing/corrupt images or journals produce an error instead of a silently incomplete presentation; existing PPTX files remain intact. Legacy `manifest.jsonl` recordings lack layout metadata and therefore retain the old 16:9/fit recovery default. Recovery cannot infer pages already overwritten by older versions.
 

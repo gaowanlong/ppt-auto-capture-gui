@@ -14,6 +14,7 @@ pub struct PptxWriter {
     output_path: PathBuf,
     page_ratio: String,
     image_fit: String,
+    auto_crop: bool,
 }
 
 /// Helper to write a file entry in the ZIP archive.
@@ -29,11 +30,16 @@ fn zip_write<W: Write + std::io::Seek>(
 }
 
 impl PptxWriter {
+    pub fn with_auto_crop(mut self, enabled: bool) -> Self {
+        self.auto_crop = enabled;
+        self
+    }
     pub fn new(output_path: &Path, page_ratio: &str, image_fit: &str) -> Self {
         Self {
             output_path: output_path.to_path_buf(),
             page_ratio: page_ratio.to_string(),
             image_fit: image_fit.to_string(),
+            auto_crop: false,
         }
     }
 
@@ -163,11 +169,24 @@ impl PptxWriter {
         // A missing/corrupt image aborts this candidate, leaving the good deck intact.
         let mut images = Vec::with_capacity(slides.len());
         for (num, path) in slides {
-            let bytes =
+            let mut bytes =
                 std::fs::read(path).with_context(|| format!("Failed to read PNG {:?}", path))?;
             let decoded = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)
                 .with_context(|| format!("Invalid PNG {:?}", path))?;
-            images.push((*num, decoded.width(), decoded.height()));
+            let dimensions = if self.auto_crop {
+                if let Some((x, y, width, height)) = super::crop::detect_presentation(&decoded) {
+                    let cropped = decoded.crop_imm(x, y, width, height);
+                    let mut output = std::io::Cursor::new(Vec::new());
+                    cropped.write_to(&mut output, image::ImageFormat::Png)?;
+                    bytes = output.into_inner();
+                    (width, height)
+                } else {
+                    (decoded.width(), decoded.height())
+                }
+            } else {
+                (decoded.width(), decoded.height())
+            };
+            images.push((*num, dimensions.0, dimensions.1));
             drop(decoded);
             zip_write(
                 &mut zip,
@@ -445,6 +464,60 @@ mod tests {
             monitor_name: "Monitor".into(),
         });
         (dir, writer, record)
+    }
+
+    #[test]
+    fn optional_crop_only_changes_embedded_image_and_preserves_original_png() {
+        let (dir, writer, record) = setup_pptx_test();
+        let path = dir.path().join("slides/slide_0001.png");
+        let mut screenshot = image::RgbImage::from_pixel(400, 300, image::Rgb([35, 35, 35]));
+        for y in 60..240 {
+            for x in 40..360 {
+                screenshot.put_pixel(x, y, image::Rgb([235, 235, 235]));
+            }
+        }
+        screenshot.save(&path).unwrap();
+        let original = std::fs::read(&path).unwrap();
+        writer
+            .with_auto_crop(true)
+            .write_slides(&[record], &dir.path().join("slides"))
+            .unwrap();
+        let mut zip =
+            ZipArchive::new(std::fs::File::open(dir.path().join("output.pptx")).unwrap()).unwrap();
+        let mut bytes = Vec::new();
+        zip.by_name("ppt/media/image1.png")
+            .unwrap()
+            .read_to_end(&mut bytes)
+            .unwrap();
+        let output = image::load_from_memory(&bytes).unwrap();
+        assert!((output.width() as i32 - 320).abs() <= 5);
+        assert!((output.height() as i32 - 180).abs() <= 5);
+        assert_eq!(std::fs::read(path).unwrap(), original);
+    }
+
+    #[test]
+    fn disabled_or_uncertain_crop_embeds_the_unchanged_png() {
+        for enabled in [false, true] {
+            let (dir, writer, record) = setup_pptx_test();
+            let path = dir.path().join("slides/slide_0001.png");
+            image::RgbImage::from_pixel(400, 300, image::Rgb([230, 230, 230]))
+                .save(&path)
+                .unwrap();
+            let original = std::fs::read(&path).unwrap();
+            writer
+                .with_auto_crop(enabled)
+                .write_slides(&[record], &dir.path().join("slides"))
+                .unwrap();
+            let mut zip =
+                ZipArchive::new(std::fs::File::open(dir.path().join("output.pptx")).unwrap())
+                    .unwrap();
+            let mut embedded = Vec::new();
+            zip.by_name("ppt/media/image1.png")
+                .unwrap()
+                .read_to_end(&mut embedded)
+                .unwrap();
+            assert_eq!(embedded, original);
+        }
     }
 
     fn read_zip_text(archive: &mut ZipArchive<std::fs::File>, name: &str) -> String {

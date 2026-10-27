@@ -118,8 +118,8 @@ pub fn t_display(lang: Language) -> &'static str {
 }
 pub fn t_output(lang: Language) -> &'static str {
     match lang {
-        Language::English => "Output:",
-        Language::Chinese => "输出：",
+        Language::English => "PPTX output (after stop):",
+        Language::Chinese => "PPTX 输出（停止后生成）：",
     }
 }
 pub fn t_slides_saved(lang: Language) -> &'static str {
@@ -372,12 +372,6 @@ pub fn t_image_fit(lang: Language) -> &'static str {
         Language::Chinese => "图片适配：",
     }
 }
-pub fn t_keep_previous(lang: Language) -> &'static str {
-    match lang {
-        Language::English => "Keep Previous.pptx",
-        Language::Chinese => "保留 Previous.pptx",
-    }
-}
 pub fn t_open_output(lang: Language) -> &'static str {
     match lang {
         Language::English => "📂 Open Output Directory",
@@ -392,26 +386,30 @@ pub fn t_output_notes(lang: Language) -> &'static str {
 }
 pub fn t_output_notes_1(lang: Language) -> &'static str {
     match lang {
-        Language::English => "• PNG files are saved to output/slides/ directory.",
-        Language::Chinese => "• PNG 文件保存到 output/slides/ 目录。",
+        Language::English => "• Screenshots are saved in the recording's slides folder.",
+        Language::Chinese => "• 截图保存在本次录制的 slides 文件夹中。",
     }
 }
 pub fn t_output_notes_2(lang: Language) -> &'static str {
     match lang {
-        Language::English => "• output.pptx is rebuilt with each new slide.",
-        Language::Chinese => "• output.pptx 随每张新幻灯片重新构建。",
+        Language::English => "• PPTX files are generated after Stop, with at most 50 images each.",
+        Language::Chinese => "• 停止后生成 PPTX，每个文件最多 50 张截图。",
     }
 }
 pub fn t_output_notes_3(lang: Language) -> &'static str {
     match lang {
-        Language::English => "• output.previous.pptx keeps the last version for safety.",
-        Language::Chinese => "• output.previous.pptx 保留上一个版本以确保安全。",
+        Language::English => {
+            "• Each recording uses its own folder and will not overwrite earlier recordings."
+        }
+        Language::Chinese => "• 每次录制使用独立文件夹，不覆盖之前的录制。",
     }
 }
 pub fn t_output_notes_4(lang: Language) -> &'static str {
     match lang {
-        Language::English => "• manifest.jsonl tracks all captured slides for recovery.",
-        Language::Chinese => "• manifest.jsonl 记录所有捕获的幻灯片用于恢复。",
+        Language::English => {
+            "• session.json and original PNG files allow recovery after interruption."
+        }
+        Language::Chinese => "• session.json 和原始 PNG 可用于中断后恢复。",
     }
 }
 

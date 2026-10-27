@@ -1,4 +1,5 @@
 mod pptx_writer;
+mod crop;
 mod slide_xml;
 mod rels_xml;
 mod content_types;

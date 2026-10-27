@@ -1,11 +1,13 @@
 use crate::i18n::{self, Language};
 use egui::*;
 
+#[derive(Clone)]
 pub struct OutputPanel {
     pub output_dir: String,
     pub output_filename: String,
     pub page_ratio: String,
     pub image_fit: String,
+    pub auto_crop: bool,
     pub keep_previous: bool,
     pub open_output_requested: bool,
     pub status_text: String,
@@ -18,6 +20,7 @@ impl OutputPanel {
             output_filename: filename.to_string(),
             page_ratio: "16:9".into(),
             image_fit: "fit".into(),
+            auto_crop: false,
             keep_previous: true,
             open_output_requested: false,
             status_text: String::new(),
@@ -67,8 +70,14 @@ impl OutputPanel {
             });
 
             // --- Keep previous checkbox ---
-            ui.checkbox(&mut self.keep_previous, i18n::t_keep_previous(language));
-
+            ui.checkbox(&mut self.auto_crop, match language {
+                Language::Chinese => "生成 PPTX 时自动裁剪演示区域（无法识别时保留原图）",
+                Language::English => "Automatically crop the presentation when exporting (keep original if uncertain)",
+            });
+            ui.label(match language {
+                Language::Chinese => "录制使用开始时的设置；请在开始录制前选择。",
+                Language::English => "Recording uses the setting selected when capture starts.",
+            });
             ui.separator();
 
             if ui.button(i18n::t_open_output(language)).clicked() {

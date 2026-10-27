@@ -7,6 +7,7 @@ use crate::capture::WorkerEventReceiver;
 use crate::capture::{CaptureSource, CaptureState, CaptureWorker, WorkerCommand, WorkerEvent};
 use crate::gui::dashboard::{DashboardPanel, DashboardRenderInput};
 use crate::gui::display_panel::DisplayPanel;
+use crate::gui::export_panel::ExportPanel;
 use crate::gui::output_panel::OutputPanel;
 use crate::gui::settings_panel::SettingsPanel;
 use crate::gui::source_panel::SourcePanel;
@@ -28,6 +29,7 @@ pub struct PptAutoCaptureApp {
     display_panel: DisplayPanel,
     settings_panel: SettingsPanel,
     output_panel: OutputPanel,
+    export_panel: ExportPanel,
     worker: Option<CaptureWorker>,
     cmd_tx: Option<Sender<WorkerCommand>>,
     event_rx: Option<WorkerEventReceiver>,
@@ -43,11 +45,14 @@ pub struct PptAutoCaptureApp {
     recovery_slides: u32,
     recovery_accepted: bool,
     recovery_declined: bool,
+    recovery_rx: Option<std::sync::mpsc::Receiver<Result<Vec<std::path::PathBuf>, String>>>,
+    recovery_error: Option<String>,
     language: Language,
     diagnostic_history: DiagnosticHistory,
     log_directory: Option<std::path::PathBuf>,
     log_file: Option<std::path::PathBuf>,
     test_capture_pending: bool,
+    close_after_stop: bool,
 }
 
 #[derive(PartialEq)]
@@ -57,6 +62,7 @@ enum Tab {
     Display,
     Settings,
     Output,
+    Export,
 }
 
 impl PptAutoCaptureApp {
@@ -69,6 +75,9 @@ impl PptAutoCaptureApp {
             display_panel: DisplayPanel::new(),
             settings_panel: SettingsPanel::new(),
             output_panel: OutputPanel::new_with_filename(&config.output_filename),
+            export_panel: ExportPanel::new(&OutputPanel::new_with_filename(
+                &config.output_filename,
+            )),
             worker: None,
             cmd_tx: None,
             event_rx: None,
@@ -84,11 +93,14 @@ impl PptAutoCaptureApp {
             recovery_slides: 0,
             recovery_accepted: false,
             recovery_declined: false,
+            recovery_rx: None,
+            recovery_error: None,
             language: config.language,
             diagnostic_history: DiagnosticHistory::new(20),
             log_directory: logging.log_directory,
             log_file: logging.log_file,
             test_capture_pending: false,
+            close_after_stop: false,
         };
         if let Some(warning) = logging.warning {
             warn!("{warning}");
@@ -129,7 +141,9 @@ impl PptAutoCaptureApp {
         app.output_panel.output_dir = config.output_dir.clone();
         app.output_panel.page_ratio = config.page_ratio.clone();
         app.output_panel.image_fit = config.image_fit.clone();
+        app.output_panel.auto_crop = config.auto_crop;
         app.output_panel.keep_previous = config.keep_previous;
+        app.export_panel.settings = app.output_panel.clone();
         app.dashboard.output_path = output_path(&app.output_panel);
         app.refresh_displays();
         app.check_recovery();
@@ -214,6 +228,15 @@ impl PptAutoCaptureApp {
         if self.dashboard.session_active {
             return;
         }
+        // Preserve the selected recovery root even if the application exits unexpectedly.
+        apply_output_to_config(&self.output_panel, &mut self.config);
+        self.output_dir = self.output_panel.output_dir.clone();
+        if let Err(error) = self.config.save() {
+            self.record_error(
+                "config",
+                format!("Unable to save recording settings for recovery: {error:#}"),
+            );
+        }
         let source = if self.source_panel.full_screen_selected {
             "Full Screen"
         } else {
@@ -270,6 +293,25 @@ impl PptAutoCaptureApp {
         // Wait for successful finalization. On error the worker stays alive and retryable.
     }
 
+    fn request_safe_close(&mut self) -> bool {
+        if self.export_panel.is_busy() || self.recovery_rx.is_some() {
+            if self.export_panel.is_busy() {
+                self.active_tab = Tab::Export;
+                self.export_panel.notify_close_blocked(self.language);
+            }
+            return true;
+        }
+        if self.dashboard.session_active {
+            self.close_after_stop = true;
+            self.active_tab = Tab::Dashboard;
+            if !self.dashboard.stopping {
+                self.stop_capture();
+            }
+            return true;
+        }
+        false
+    }
+
     fn ensure_worker(&mut self) {
         if self.cmd_tx.is_none() {
             let worker = CaptureWorker::new();
@@ -314,6 +356,59 @@ impl PptAutoCaptureApp {
         self.drain_events(true);
     }
 
+    fn start_recovery(&mut self) {
+        if self.recovery_rx.is_some() {
+            return;
+        }
+        self.recovery_error = None;
+        let root = std::path::PathBuf::from(&self.output_dir);
+        let (tx, rx) = std::sync::mpsc::channel();
+        match std::thread::Builder::new()
+            .name("pptx-recovery".into())
+            .spawn(move || {
+                let result = std::panic::catch_unwind(|| recover_session(&root))
+                    .map_err(|_| "Recovery stopped unexpectedly".to_string())
+                    .and_then(|result| result.map_err(|error| format!("{error:#}")));
+                let _ = tx.send(result);
+            }) {
+            Ok(_) => self.recovery_rx = Some(rx),
+            Err(error) => {
+                let message = format!("Cannot start recovery: {error}");
+                self.recovery_error = Some(message.clone());
+                self.record_error("recovery", message);
+            }
+        }
+    }
+
+    fn poll_recovery(&mut self) {
+        let Some(receiver) = self.recovery_rx.as_ref() else {
+            return;
+        };
+        match receiver.try_recv() {
+            Ok(Ok(paths)) => {
+                self.recovery_rx = None;
+                self.dashboard.saved_slides_count = self.recovery_slides;
+                self.recovery_accepted = true;
+                if let Some(path) = paths.last() {
+                    self.dashboard.output_path = path.display().to_string();
+                }
+            }
+            Ok(Err(error)) => {
+                self.recovery_rx = None;
+                let message = format!("Recovery failed: {error}");
+                self.recovery_error = Some(message.clone());
+                self.record_error("recovery", message);
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.recovery_rx = None;
+                let message = "Recovery worker disconnected".to_string();
+                self.recovery_error = Some(message.clone());
+                self.record_error("recovery", message);
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        }
+    }
+
     fn drain_events(&mut self, unexpected_disconnect: bool) {
         // Drain at most one bounded batch; a fast producer cannot monopolize a UI frame.
         let Some(receiver) = self.event_rx.as_ref() else {
@@ -324,6 +419,7 @@ impl PptAutoCaptureApp {
         for event in pending {
             match event {
                 WorkerEvent::StartFailed(message) => {
+                    self.close_after_stop = false;
                     self.dashboard.stopping = false;
                     self.dashboard.session_active = false;
                     self.dashboard.current_state = CaptureState::Error;
@@ -336,6 +432,10 @@ impl PptAutoCaptureApp {
                         CaptureState::Paused | CaptureState::Stopped | CaptureState::Error
                     ) {
                         self.dashboard.stopping = false;
+                    }
+                    if matches!(s, CaptureState::Paused | CaptureState::Error) {
+                        // A failed finalization must leave the window open for retry.
+                        self.close_after_stop = false;
                     }
                     self.dashboard.current_state = s;
                     self.dashboard.state_message = s.label().to_string();
@@ -385,6 +485,7 @@ impl PptAutoCaptureApp {
     }
 
     fn handle_worker_disconnected(&mut self) {
+        self.close_after_stop = false;
         self.dashboard.stopping = false;
         self.test_capture_pending = false;
         self.event_rx = None;
@@ -484,6 +585,7 @@ fn apply_output_to_source(panel: &OutputPanel, source: &mut CaptureSource) {
     source.output_filename = panel.output_filename.clone();
     source.page_ratio = panel.page_ratio.clone();
     source.image_fit = panel.image_fit.clone();
+    source.auto_crop = panel.auto_crop;
 }
 
 fn output_path(panel: &OutputPanel) -> String {
@@ -502,12 +604,28 @@ fn apply_output_to_config(panel: &OutputPanel, config: &mut AppConfig) {
     config.output_filename = panel.output_filename.clone();
     config.page_ratio = panel.page_ratio.clone();
     config.image_fit = panel.image_fit.clone();
+    config.auto_crop = panel.auto_crop;
     config.keep_previous = panel.keep_previous;
 }
 
 impl eframe::App for PptAutoCaptureApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.process_events();
+        self.export_panel.poll(self.language);
+        self.poll_recovery();
+
+        if self.close_after_stop
+            && !self.dashboard.session_active
+            && !self.dashboard.stopping
+            && self.dashboard.current_state == CaptureState::Stopped
+        {
+            self.close_after_stop = false;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
+        if ctx.input(|input| input.viewport().close_requested()) && self.request_safe_close() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        }
 
         if self.dashboard.open_session_requested {
             self.dashboard.open_session_requested = false;
@@ -525,27 +643,40 @@ impl eframe::App for PptAutoCaptureApp {
                 .show(ctx, |ui| {
                     ui.heading(i18n::t_session_recovery_title(self.language));
                     ui.label(i18n::t_recovery_msg(self.language, self.recovery_slides));
+                    if self.recovery_rx.is_some() {
+                        ui.label(match self.language {
+                            Language::Chinese => "正在恢复截图并生成 PPTX，请稍候…",
+                            Language::English => "Recovering screenshots and generating PPTX…",
+                        });
+                    }
+                    if let Some(error) = &self.recovery_error {
+                        ui.colored_label(egui::Color32::RED, error);
+                    }
                     ui.horizontal(|ui| {
-                        if ui.button(i18n::t_recover(self.language)).clicked() {
-                            match recover_session(std::path::Path::new(&self.output_dir)) {
-                                Ok(paths) => {
-                                    self.dashboard.saved_slides_count = self.recovery_slides;
-                                    self.recovery_accepted = true;
-                                    if let Some(path) = paths.last() {
-                                        self.dashboard.output_path = path.display().to_string();
-                                    }
-                                }
-                                Err(error) => self.record_error(
-                                    "recovery",
-                                    format!("Recovery failed: {error:#}"),
-                                ),
-                            }
+                        if ui
+                            .add_enabled(
+                                self.recovery_rx.is_none(),
+                                egui::Button::new(i18n::t_recover(self.language)),
+                            )
+                            .clicked()
+                        {
+                            self.start_recovery();
                         }
-                        if ui.button(i18n::t_skip(self.language)).clicked() {
+                        if ui
+                            .add_enabled(
+                                self.recovery_rx.is_none(),
+                                egui::Button::new(i18n::t_skip(self.language)),
+                            )
+                            .clicked()
+                        {
                             self.recovery_declined = true;
                         }
                     });
                 });
+            if self.recovery_rx.is_some() {
+                // Keep the recovery dialog open while the background writer runs.
+                open = true;
+            }
             if !open {
                 self.recovery_declined = true;
             }
@@ -629,6 +760,14 @@ impl eframe::App for PptAutoCaptureApp {
                     Tab::Output,
                     i18n::t_tab_output(self.language),
                 );
+                ui.selectable_value(
+                    &mut self.active_tab,
+                    Tab::Export,
+                    match self.language {
+                        Language::Chinese => "图片转 PPTX",
+                        Language::English => "Create PPTX",
+                    },
+                );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button(i18n::t_language_switch(self.language)).clicked() {
                         self.language = self.language.next();
@@ -706,7 +845,15 @@ impl eframe::App for PptAutoCaptureApp {
                     self.settings_panel.changed = false;
                 }
                 Tab::Output => {
-                    self.output_panel.render(ui, self.language);
+                    if self.dashboard.session_active {
+                        ui.label(match self.language {
+                            Language::Chinese => "录制期间输出设置已锁定，停止后可修改。",
+                            Language::English => "Output settings are locked during recording.",
+                        });
+                    }
+                    ui.add_enabled_ui(!self.dashboard.session_active, |ui| {
+                        self.output_panel.render(ui, self.language)
+                    });
                     // Handle open output directory button
                     if self.output_panel.open_output_requested {
                         self.output_panel.open_output_requested = false;
@@ -731,6 +878,12 @@ impl eframe::App for PptAutoCaptureApp {
                         self.dashboard.output_path = output_path(&self.output_panel);
                     }
                 }
+                Tab::Export => {
+                    self.export_panel.render(ui, self.language);
+                    if let Some(directory) = self.export_panel.take_open_request() {
+                        self.open_directory(&directory);
+                    }
+                }
             }
         });
 
@@ -740,7 +893,9 @@ impl eframe::App for PptAutoCaptureApp {
 
 impl Drop for PptAutoCaptureApp {
     fn drop(&mut self) {
-        apply_output_to_config(&self.output_panel, &mut self.config);
+        if !self.dashboard.session_active {
+            apply_output_to_config(&self.output_panel, &mut self.config);
+        }
         // Save settings panel values
         let scfg = self.settings_panel.get_config();
         self.config.sample_interval_ms = scfg.sample_interval_ms;
@@ -767,6 +922,109 @@ mod tests {
     use super::*;
     use crate::diagnostics::LoggingSetup;
     use crate::model::Region;
+
+    #[test]
+    fn export_settings_do_not_change_the_active_recording_output_or_crop() {
+        let mut app = std::mem::ManuallyDrop::new(PptAutoCaptureApp::new(LoggingSetup {
+            log_directory: None,
+            log_file: None,
+            warning: None,
+        }));
+        app.output_panel.output_dir = "recording-root".into();
+        app.output_panel.auto_crop = false;
+        app.export_panel.settings.output_dir = "export-root".into();
+        app.export_panel.settings.auto_crop = true;
+        let mut source = CaptureSource::new(0, String::new(), 1, String::new());
+        apply_output_to_source(&app.output_panel, &mut source);
+        assert_eq!(source.output_dir, "recording-root");
+        assert!(!source.auto_crop);
+    }
+
+    #[test]
+    fn closing_active_recording_requests_async_stop_and_keeps_window_open_on_failure() {
+        let mut app = std::mem::ManuallyDrop::new(PptAutoCaptureApp::new(LoggingSetup {
+            log_directory: None,
+            log_file: None,
+            warning: None,
+        }));
+        let (commands, received) = crossbeam_channel::unbounded();
+        let (events, rx) = crate::capture::worker_event_channel();
+        app.cmd_tx = Some(commands);
+        app.event_rx = Some(rx);
+        app.dashboard.session_active = true;
+        assert!(app.request_safe_close());
+        assert!(app.close_after_stop);
+        assert!(app.dashboard.stopping);
+        assert!(matches!(received.try_recv(), Ok(WorkerCommand::Stop)));
+        events
+            .send(WorkerEvent::StateChanged(CaptureState::Paused))
+            .unwrap();
+        app.process_events();
+        assert!(!app.close_after_stop);
+        assert!(!app.dashboard.stopping);
+        assert!(app.dashboard.session_active);
+    }
+
+    #[test]
+    fn failed_start_or_worker_disconnect_cancels_deferred_close() {
+        let mut app = std::mem::ManuallyDrop::new(PptAutoCaptureApp::new(LoggingSetup {
+            log_directory: None,
+            log_file: None,
+            warning: None,
+        }));
+        let (events, rx) = crate::capture::worker_event_channel();
+        app.event_rx = Some(rx);
+        app.dashboard.session_active = true;
+        app.close_after_stop = true;
+        events
+            .send(WorkerEvent::StartFailed("failed".into()))
+            .unwrap();
+        app.process_events();
+        assert!(!app.close_after_stop);
+        assert_eq!(app.dashboard.current_state, CaptureState::Error);
+        app.close_after_stop = true;
+        app.dashboard.session_active = true;
+        app.handle_worker_disconnected();
+        assert!(!app.close_after_stop);
+        assert_eq!(app.dashboard.current_state, CaptureState::Error);
+    }
+
+    #[test]
+    fn unfinished_screenshot_session_recovers_in_a_background_worker() {
+        let root = tempfile::tempdir().unwrap();
+        let mut session =
+            crate::storage::SessionStore::create(root.path(), "deck.pptx", "16:9", "fit").unwrap();
+        let frame = crate::model::Frame::new(vec![255; 4], 1, 1, 4, 1, 0);
+        let record = crate::model::SlideRecord::new(crate::model::SlideRecordInput {
+            slide_number: 1,
+            png_filename: "slide_0001.png".into(),
+            png_relative_path: "slides/slide_0001.png".into(),
+            frame_index: 1,
+            width: 1,
+            height: 1,
+            content_hash: "image".into(),
+            source_name: String::new(),
+            monitor_name: String::new(),
+        });
+        session.save(&frame, record).unwrap();
+        assert!(!session.output_path().exists());
+        let mut app = std::mem::ManuallyDrop::new(PptAutoCaptureApp::new(LoggingSetup {
+            log_directory: None,
+            log_file: None,
+            warning: None,
+        }));
+        app.output_dir = root.path().to_string_lossy().into_owned();
+        app.recovery_slides = 1;
+        app.start_recovery();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while app.recovery_rx.is_some() && std::time::Instant::now() < deadline {
+            app.poll_recovery();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(app.recovery_rx.is_none());
+        assert!(app.recovery_accepted);
+        assert!(session.output_path().is_file());
+    }
 
     fn monitor(id: u64, primary: bool) -> MonitorInfo {
         MonitorInfo {
@@ -805,6 +1063,7 @@ mod tests {
         panel.page_ratio = "4:3".into();
         panel.image_fit = "fill".into();
         panel.keep_previous = false;
+        panel.auto_crop = true;
 
         let mut source = CaptureSource::new(1, "Slides".into(), 2, "Display".into());
         apply_output_to_source(&panel, &mut source);
@@ -812,6 +1071,7 @@ mod tests {
         assert_eq!(source.output_filename, "configured.pptx");
         assert_eq!(source.page_ratio, "4:3");
         assert_eq!(source.image_fit, "fill");
+        assert!(source.auto_crop);
         assert_eq!(output_path(&panel), "/tmp/captures/configured.pptx");
 
         let mut config = AppConfig::default();
@@ -821,6 +1081,7 @@ mod tests {
         assert_eq!(config.page_ratio, "4:3");
         assert_eq!(config.image_fit, "fill");
         assert!(!config.keep_previous);
+        assert!(config.auto_crop);
     }
 
     #[test]
