@@ -5,6 +5,8 @@ use anyhow::{ensure, Context, Result};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
+const SLIDES_PER_DECK: usize = 50;
+
 /// Durable source of truth: images first, journal second, published deck last.
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct SessionStore {
@@ -14,6 +16,9 @@ pub struct SessionStore {
     filename: String,
     ratio: String,
     fit: String,
+    // Older v1 journals have no limit and must recover into their original single deck.
+    #[serde(default)]
+    max_slides_per_deck: Option<usize>,
     pub completed: bool,
     pub records: Vec<SlideRecord>,
 }
@@ -42,10 +47,11 @@ impl SessionStore {
         ImageStore::new(directory.clone())?;
         let session = Self {
             directory,
-            version: 1,
+            version: 2,
             filename: filename.into(),
             ratio: ratio.into(),
             fit: fit.into(),
+            max_slides_per_deck: Some(SLIDES_PER_DECK),
             completed: false,
             records: Vec::new(),
         };
@@ -57,7 +63,22 @@ impl SessionStore {
         let mut session: Self =
             serde_json::from_slice(&std::fs::read(directory.join("session.json"))?)
                 .context("Invalid session journal; refusing partial recovery")?;
-        ensure!(session.version == 1, "Unsupported session version");
+        ensure!(
+            matches!(session.version, 1 | 2),
+            "Unsupported session version"
+        );
+        ensure!(
+            session.version != 2 || session.max_slides_per_deck.is_some(),
+            "Segmented session is missing its deck size limit"
+        );
+        ensure!(
+            session.version != 1 || session.max_slides_per_deck.is_none(),
+            "Legacy session has an unexpected deck size limit"
+        );
+        ensure!(
+            session.max_slides_per_deck != Some(0),
+            "Invalid deck size limit"
+        );
         ensure!(
             plain_filename(&session.filename),
             "Invalid session output filename"
@@ -73,7 +94,37 @@ impl SessionStore {
     }
 
     pub fn output_path(&self) -> PathBuf {
-        self.directory.join(&self.filename)
+        self.output_path_at_count(self.records.len())
+    }
+
+    pub fn output_path_at_count(&self, count: usize) -> PathBuf {
+        let part = self
+            .max_slides_per_deck
+            .map_or(0, |limit| count.saturating_sub(1) / limit);
+        self.output_path_for_part(part)
+    }
+
+    pub fn output_paths(&self) -> Vec<PathBuf> {
+        let limit = self
+            .max_slides_per_deck
+            .unwrap_or(self.records.len().max(1));
+        self.records
+            .chunks(limit)
+            .enumerate()
+            .map(|(part, _)| self.output_path_for_part(part))
+            .collect()
+    }
+
+    fn output_path_for_part(&self, part: usize) -> PathBuf {
+        if part == 0 {
+            return self.directory.join(&self.filename);
+        }
+        let stem = Path::new(&self.filename)
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy();
+        self.directory
+            .join(format!("{stem}-part-{:03}.pptx", part + 1))
     }
 
     fn persist(&self) -> Result<()> {
@@ -100,6 +151,7 @@ impl SessionStore {
     pub fn save(&mut self, frame: &Frame, record: SlideRecord) -> Result<()> {
         ensure!(!self.completed, "Session already completed");
         ensure!(record.slide_number > 0, "Invalid slide number");
+        let index = record.slide_number as usize - 1;
         ensure!(
             record.png_filename == format!("slide_{:04}.png", record.slide_number),
             "Invalid slide filename"
@@ -123,19 +175,50 @@ impl SessionStore {
                 return Err(error);
             }
         }
-        self.publish()
+        self.publish_at(index)
     }
 
     pub fn publish(&self) -> Result<()> {
+        let limit = self
+            .max_slides_per_deck
+            .unwrap_or(self.records.len().max(1));
+        for (part, records) in self.records.chunks(limit).enumerate() {
+            self.publish_part(part, records)?;
+        }
+        Ok(())
+    }
+
+    fn publish_current(&self) -> Result<()> {
         if self.records.is_empty() {
             return Ok(());
         }
-        PptxWriter::new(&self.output_path(), &self.ratio, &self.fit)
-            .write_slides(&self.records, &self.directory.join("slides"))
+        self.publish_at(self.records.len() - 1)
+    }
+
+    fn publish_at(&self, index: usize) -> Result<()> {
+        let limit = self.max_slides_per_deck.unwrap_or(self.records.len());
+        let part = index / limit;
+        let start = part * limit;
+        let end = start.saturating_add(limit).min(self.records.len());
+        self.publish_part(part, &self.records[start..end])
+    }
+
+    fn publish_part(&self, part: usize, records: &[SlideRecord]) -> Result<()> {
+        let records: Vec<_> = records
+            .iter()
+            .enumerate()
+            .map(|(index, record)| {
+                let mut local = record.clone();
+                local.slide_number = (index + 1) as u32;
+                local
+            })
+            .collect();
+        PptxWriter::new(&self.output_path_for_part(part), &self.ratio, &self.fit)
+            .write_slides(&records, &self.directory.join("slides"))
     }
 
     pub fn finish(&mut self) -> Result<()> {
-        self.publish()?;
+        self.publish_current()?;
         self.completed = true;
         if let Err(error) = self.persist() {
             self.completed = false;
@@ -148,6 +231,72 @@ impl SessionStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn segmented_sessions_use_a_new_journal_version_and_reject_missing_limit() {
+        let root = tempfile::tempdir().unwrap();
+        let session = SessionStore::create(root.path(), "deck.pptx", "16:9", "fit").unwrap();
+        let journal = session.directory.join("session.json");
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&journal).unwrap()).unwrap();
+        // Older applications reject versions other than 1, preventing accidental
+        // recovery of a split recording as a single incompatible deck.
+        assert_eq!(json["version"], 2);
+        json.as_object_mut().unwrap().remove("max_slides_per_deck");
+        std::fs::write(&journal, serde_json::to_vec(&json).unwrap()).unwrap();
+        assert!(SessionStore::open(&session.directory).is_err());
+    }
+
+    #[test]
+    fn old_journal_without_segmentation_recovers_as_one_original_deck() {
+        let root = tempfile::tempdir().unwrap();
+        let session = SessionStore::create(root.path(), "old.pptx", "16:9", "fit").unwrap();
+        let journal = session.directory.join("session.json");
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&journal).unwrap()).unwrap();
+        json["version"] = 1.into();
+        json.as_object_mut().unwrap().remove("max_slides_per_deck");
+        std::fs::write(&journal, serde_json::to_vec(&json).unwrap()).unwrap();
+        let mut old = SessionStore::open(&session.directory).unwrap();
+        for page in 1..=51 {
+            let mut entry = record();
+            entry.slide_number = page;
+            entry.png_filename = format!("slide_{page:04}.png");
+            entry.png_relative_path = format!("slides/slide_{page:04}.png");
+            entry.content_hash = format!("{page}");
+            old.save(&frame(), entry).unwrap();
+        }
+        assert_eq!(old.output_path(), session.directory.join("old.pptx"));
+        assert!(!session.directory.join("old-part-002.pptx").exists());
+        let mut archive =
+            zip::ZipArchive::new(std::fs::File::open(old.output_path()).unwrap()).unwrap();
+        assert!(archive.by_name("ppt/slides/slide51.xml").is_ok());
+    }
+
+    #[test]
+    fn retry_of_an_earlier_saved_page_republishes_its_own_deck() {
+        let root = tempfile::tempdir().unwrap();
+        let mut session = SessionStore::create(root.path(), "deck.pptx", "16:9", "fit").unwrap();
+        let first_record = record();
+        for page in 1..=51 {
+            let mut entry = first_record.clone();
+            entry.slide_number = page;
+            entry.png_filename = format!("slide_{page:04}.png");
+            entry.png_relative_path = format!("slides/slide_{page:04}.png");
+            if page != 1 {
+                entry.content_hash = format!("{page}");
+            }
+            session.save(&frame(), entry).unwrap();
+        }
+        let first = session.directory.join("deck.pptx");
+        let second = session.directory.join("deck-part-002.pptx");
+        let old_second = std::fs::read(&second).unwrap();
+        std::fs::remove_file(&first).unwrap();
+        session.save(&frame(), first_record).unwrap();
+        assert!(first.is_file());
+        assert_eq!(std::fs::read(second).unwrap(), old_second);
+        assert_eq!(session.records.len(), 51);
+    }
 
     #[test]
     fn repeated_sessions_survive_png_and_journal_faults_without_page_gaps() {

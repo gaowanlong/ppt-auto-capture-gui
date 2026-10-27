@@ -887,11 +887,23 @@ impl WorkerLoop {
             monitor_name,
         });
 
+        let previous_path = self
+            .session
+            .as_ref()
+            .context("Session not initialized")?
+            .output_path_at_count(self.slide_count as usize);
         self.session
             .as_mut()
             .context("Session not initialized")?
             .save(frame, record)?;
         self.slide_count = slide_number;
+
+        let path = self.session.as_ref().unwrap().output_path();
+        if path != previous_path {
+            let _ = self
+                .event_tx
+                .send(WorkerEvent::SessionStarted(path.display().to_string()));
+        }
 
         self.last_slide_hash = Some(content_hash);
         self.motion_filter.mark_saved(frame);
@@ -947,6 +959,170 @@ fn capture_backend_unavailable_message() -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recording_rolls_over_at_50_pages_without_gaps_or_empty_extra_decks() {
+        let root = tempfile::tempdir().unwrap();
+        let (_commands, rx) = crossbeam_channel::unbounded();
+        let (events, received) = worker_event_channel();
+        let mut worker = WorkerLoop::new(rx, events);
+        worker.config.filter_duplicates = false;
+        let session = SessionStore::create(root.path(), "deck.pptx", "16:9", "fit").unwrap();
+        let folder = session.directory.clone();
+        worker.session = Some(session);
+        for index in 1..=101 {
+            let pixel = [index as u8, 0, 255, 255];
+            worker
+                .save_frame(&Frame::new(pixel.to_vec(), 1, 1, 4, index, 0))
+                .unwrap();
+            if index == 50 {
+                assert!(!folder.join("deck-part-002.pptx").exists());
+            }
+            if index == 100 {
+                assert!(!folder.join("deck-part-003.pptx").exists());
+            }
+        }
+        assert_eq!(worker.slide_count, 101);
+        for (name, count) in [
+            ("deck.pptx", 50),
+            ("deck-part-002.pptx", 50),
+            ("deck-part-003.pptx", 1),
+        ] {
+            let file = std::fs::File::open(folder.join(name)).unwrap();
+            let mut archive = zip::ZipArchive::new(file).unwrap();
+            for page in 1..=count {
+                assert!(archive
+                    .by_name(&format!("ppt/slides/slide{page}.xml"))
+                    .is_ok());
+            }
+            assert!(archive
+                .by_name(&format!("ppt/slides/slide{}.xml", count + 1))
+                .is_err());
+            use std::io::Read;
+            let mut image = Vec::new();
+            archive
+                .by_name("ppt/media/image1.png")
+                .unwrap()
+                .read_to_end(&mut image)
+                .unwrap();
+            let expected_blue = match name {
+                "deck.pptx" => 1,
+                "deck-part-002.pptx" => 51,
+                _ => 101,
+            };
+            assert_eq!(
+                image::load_from_memory(&image)
+                    .unwrap()
+                    .to_rgb8()
+                    .get_pixel(0, 0)
+                    .0,
+                [255, 0, expected_blue]
+            );
+        }
+        assert!(received.try_iter().any(|event| matches!(event, WorkerEvent::SessionStarted(path) if path.ends_with("deck-part-003.pptx"))));
+        assert!(worker.finish_session());
+    }
+
+    #[test]
+    fn rollover_save_failure_keeps_prior_deck_and_retries_the_same_frame() {
+        let root = tempfile::tempdir().unwrap();
+        let (_commands, rx) = crossbeam_channel::unbounded();
+        let (events, received) = worker_event_channel();
+        let mut worker = WorkerLoop::new(rx, events);
+        worker.config.filter_duplicates = false;
+        let session = SessionStore::create(root.path(), "deck.pptx", "16:9", "fit").unwrap();
+        let folder = session.directory.clone();
+        worker.session = Some(session);
+        for index in 1..=50 {
+            worker
+                .save_frame(&Frame::new(
+                    vec![index as u8, 0, 255, 255],
+                    1,
+                    1,
+                    4,
+                    index,
+                    0,
+                ))
+                .unwrap();
+        }
+        let prior = std::fs::read(folder.join("deck.pptx")).unwrap();
+        let blocked = folder.join("deck-part-002.pptx");
+        std::fs::create_dir(&blocked).unwrap();
+        let frame = Frame::new(vec![51, 0, 255, 255], 1, 1, 4, 51, 0);
+        assert!(worker.save_frame(&frame).is_err());
+        assert_eq!(worker.slide_count, 50);
+        assert_eq!(worker.pending_save.as_ref().unwrap().frame_index, 51);
+        assert_eq!(std::fs::read(folder.join("deck.pptx")).unwrap(), prior);
+        assert!(!received.try_iter().any(|event| matches!(event, WorkerEvent::SessionStarted(path) if path.ends_with("deck-part-002.pptx"))));
+        std::fs::remove_dir(&blocked).unwrap();
+        worker.save_frame(&frame).unwrap();
+        assert_eq!(worker.slide_count, 51);
+        assert_eq!(worker.session.as_ref().unwrap().records[50].frame_index, 51);
+        assert!(blocked.is_file());
+        assert!(received.try_iter().any(|event| matches!(event, WorkerEvent::SessionStarted(path) if path.ends_with("deck-part-002.pptx"))));
+    }
+
+    #[test]
+    fn duplicate_at_the_split_boundary_does_not_create_an_empty_deck() {
+        let root = tempfile::tempdir().unwrap();
+        let (_commands, rx) = crossbeam_channel::unbounded();
+        let (events, _) = worker_event_channel();
+        let mut worker = WorkerLoop::new(rx, events);
+        worker.config.filter_duplicates = false;
+        let session = SessionStore::create(root.path(), "deck.pptx", "16:9", "fit").unwrap();
+        let folder = session.directory.clone();
+        worker.session = Some(session);
+        let mut last = Frame::new(vec![0; 4], 1, 1, 4, 0, 0);
+        for index in 1..=50 {
+            last = Frame::new(vec![index as u8, 0, 255, 255], 1, 1, 4, index, 0);
+            worker.save_frame(&last).unwrap();
+        }
+        worker.config.filter_duplicates = true;
+        worker.save_frame(&last).unwrap();
+        assert_eq!(worker.slide_count, 50);
+        assert!(!folder.join("deck-part-002.pptx").exists());
+    }
+
+    #[test]
+    fn new_deck_does_not_rebuild_the_previous_50_slides() {
+        let root = tempfile::tempdir().unwrap();
+        let (_commands, rx) = crossbeam_channel::unbounded();
+        let (events, _) = worker_event_channel();
+        let mut worker = WorkerLoop::new(rx, events);
+        worker.config.filter_duplicates = false;
+        let session = SessionStore::create(root.path(), "deck.pptx", "16:9", "fit").unwrap();
+        let folder = session.directory.clone();
+        worker.session = Some(session);
+        for index in 1..=50 {
+            worker
+                .save_frame(&Frame::new(
+                    vec![index as u8, 0, 255, 255],
+                    1,
+                    1,
+                    4,
+                    index,
+                    0,
+                ))
+                .unwrap();
+        }
+        let first = std::fs::read(folder.join("deck.pptx")).unwrap();
+        std::fs::remove_file(folder.join("slides/slide_0001.png")).unwrap();
+        for index in 51..=52 {
+            worker
+                .save_frame(&Frame::new(
+                    vec![index as u8, 0, 255, 255],
+                    1,
+                    1,
+                    4,
+                    index,
+                    0,
+                ))
+                .unwrap();
+        }
+        assert_eq!(std::fs::read(folder.join("deck.pptx")).unwrap(), first);
+        assert_eq!(worker.slide_count, 52);
+        assert!(worker.finish_session());
+    }
 
     #[test]
     fn stop_interrupts_a_long_sample_wait_and_is_processed_once() {

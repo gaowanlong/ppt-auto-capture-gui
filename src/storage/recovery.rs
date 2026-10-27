@@ -64,8 +64,9 @@ pub fn recover_session(output_dir: &Path) -> Result<Vec<PathBuf>> {
     let mut recovered = Vec::new();
     for mut session in sessions(output_dir)? {
         if !session.completed && !session.records.is_empty() {
+            session.publish()?;
             session.finish()?;
-            recovered.push(session.output_path());
+            recovered.extend(session.output_paths());
         }
     }
     let Some(records) = legacy_incomplete_session(output_dir)? else {
@@ -122,6 +123,60 @@ fn sessions(root: &Path) -> Result<Vec<SessionStore>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recovery_rebuilds_and_reports_every_deck_in_an_interrupted_long_recording() {
+        let root = tempfile::tempdir().unwrap();
+        let mut session = SessionStore::create(root.path(), "deck.pptx", "4:3", "fit").unwrap();
+        for page in 1..=51 {
+            let record = SlideRecord::new(crate::model::SlideRecordInput {
+                slide_number: page,
+                png_filename: format!("slide_{page:04}.png"),
+                png_relative_path: format!("slides/slide_{page:04}.png"),
+                frame_index: page as u64,
+                width: 1,
+                height: 1,
+                content_hash: format!("{page}"),
+                source_name: String::new(),
+                monitor_name: String::new(),
+            });
+            session
+                .save(
+                    &crate::model::Frame::new(
+                        vec![page as u8, 0, 255, 255],
+                        1,
+                        1,
+                        4,
+                        page as u64,
+                        0,
+                    ),
+                    record,
+                )
+                .unwrap();
+        }
+        let first = session.directory.join("deck.pptx");
+        let second = session.directory.join("deck-part-002.pptx");
+        std::fs::remove_file(&first).unwrap();
+        std::fs::remove_file(&second).unwrap();
+        assert_eq!(
+            detect_incomplete_session(root.path())
+                .unwrap()
+                .unwrap()
+                .len(),
+            51
+        );
+        assert_eq!(
+            recover_session(root.path()).unwrap(),
+            vec![first.clone(), second.clone()]
+        );
+        let mut one = zip::ZipArchive::new(std::fs::File::open(first).unwrap()).unwrap();
+        assert!(one.by_name("ppt/slides/slide50.xml").is_ok());
+        assert!(one.by_name("ppt/slides/slide51.xml").is_err());
+        let mut two = zip::ZipArchive::new(std::fs::File::open(second).unwrap()).unwrap();
+        assert!(two.by_name("ppt/slides/slide1.xml").is_ok());
+        assert!(two.by_name("ppt/slides/slide2.xml").is_err());
+        assert!(detect_incomplete_session(root.path()).unwrap().is_none());
+    }
 
     fn captured_session(root: &Path) -> SessionStore {
         let mut session = SessionStore::create(root, "my-slides.pptx", "4:3", "fill").unwrap();
