@@ -65,6 +65,17 @@ printf 'Clippy warning count: observed=%s baseline=%s\n' "$observed" "$baseline"
 
 if (( observed > baseline )); then
   printf 'Clippy warning ceiling exceeded: observed=%s baseline=%s\n' "$observed" "$baseline" >&2
+  python3 - "$output_file" <<'PY' >&2
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    for line in stream:
+        record = json.loads(line)
+        message = record.get("message", {})
+        if record.get("reason") == "compiler-message" and message.get("level") == "warning":
+            print(message.get("rendered") or message.get("message", "warning"))
+PY
   exit 1
 fi
 

@@ -24,6 +24,10 @@ if output="$(CLIPPY_OUTPUT_FILE="$FIXTURE" CLIPPY_BASELINE_FILE="$BASELINE" bash
   exit 1
 fi
 [[ "$output" == *"observed=1 baseline=0"* ]]
+if [[ "$output" != *"first warning"* ]]; then
+  printf 'Expected details of the warning when the ceiling is exceeded\n'
+  exit 1
+fi
 
 printf '2\n' > "$BASELINE"
 output="$(CLIPPY_OUTPUT_FILE="$FIXTURE" CLIPPY_BASELINE_FILE="$BASELINE" bash "$CHECKER")"
