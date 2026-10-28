@@ -23,6 +23,7 @@ pub struct DashboardPanel {
     pub open_log_directory_requested: bool,
     pub diagnostics_status: Option<String>,
     pub open_session_requested: bool,
+    pub keep_screenshots_requested: bool,
     diagnostics_status_expires_at: Option<Instant>,
     preview_texture: Option<TextureHandle>,
     preview_dirty: bool,
@@ -56,6 +57,7 @@ impl DashboardPanel {
             open_log_directory_requested: false,
             diagnostics_status: None,
             open_session_requested: false,
+            keep_screenshots_requested: false,
             diagnostics_status_expires_at: None,
             preview_texture: None,
             preview_dirty: false,
@@ -118,6 +120,19 @@ impl DashboardPanel {
                 let label = if self.stopping { match language { Language::Chinese => "正在停止并保存，请稍候…", Language::English => "Stopping and saving…" } } else { self.current_state.label() };
                 ui.colored_label(state_color, label);
             });
+
+            if self.session_active && !self.stopping && matches!(self.current_state, CaptureState::Paused | CaptureState::Error) {
+                if ui.button(match language {
+                    Language::Chinese => "停止并保留截图（稍后生成 PPTX）",
+                    Language::English => "Stop and keep screenshots (generate PPTX later)",
+                }).clicked() {
+                    self.keep_screenshots_requested = true;
+                }
+                ui.label(match language {
+                    Language::Chinese => "截图和恢复记录会保留；待保存截图无法写入时不会结束录制。",
+                    Language::English => "Screenshots remain recoverable; the recording stays open if a pending screenshot cannot be saved.",
+                });
+            }
 
             ui.separator();
 

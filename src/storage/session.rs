@@ -43,6 +43,26 @@ pub(super) fn part_filename(filename: &str, part: usize) -> String {
     format!("{stem}-part-{:03}.pptx", part + 1)
 }
 
+fn png_matches_frame(path: &Path, frame: &Frame) -> bool {
+    let Ok(image) = image::open(path) else {
+        return false;
+    };
+    if image.width() != frame.width || image.height() != frame.height {
+        return false;
+    }
+    image.to_rgb8().enumerate_pixels().all(|(x, y, pixel)| {
+        (y as usize)
+            .checked_mul(frame.stride as usize)
+            .and_then(|row| row.checked_add(x as usize * 4))
+            .and_then(|offset| {
+                offset
+                    .checked_add(3)
+                    .and_then(|end| frame.data.get(offset..end))
+            })
+            .is_some_and(|bgr| bgr == [pixel[2], pixel[1], pixel[0]])
+    })
+}
+
 impl SessionStore {
     pub fn create(root: &Path, filename: &str, ratio: &str, fit: &str) -> Result<Self> {
         ensure!(
@@ -169,9 +189,19 @@ impl SessionStore {
     }
 
     pub fn save(&mut self, frame: &Frame, record: SlideRecord) -> Result<()> {
+        let index = record.slide_number.saturating_sub(1) as usize;
+        self.save_screenshot(frame, record)?;
+        if self.version >= 3 {
+            Ok(())
+        } else {
+            self.publish_at(index)
+        }
+    }
+
+    /// Durably save a screenshot and its journal without attempting PPTX publication.
+    pub fn save_screenshot(&mut self, frame: &Frame, record: SlideRecord) -> Result<()> {
         ensure!(!self.completed, "Session already completed");
         ensure!(record.slide_number > 0, "Invalid slide number");
-        let index = record.slide_number as usize - 1;
         ensure!(
             record.png_filename == format!("slide_{:04}.png", record.slide_number),
             "Invalid slide filename"
@@ -183,6 +213,12 @@ impl SessionStore {
                     && previous.content_hash == record.content_hash,
                 "Conflicting retry; pending slide must be saved first"
             );
+            let image_path = self.directory.join("slides").join(&record.png_filename);
+            if !png_matches_frame(&image_path, frame) {
+                ImageStore::new(self.directory.clone())?.save_png(frame, record.slide_number)?;
+            }
+            // The in-memory record alone is not proof that the journal still exists.
+            self.persist()?;
         } else {
             ensure!(
                 record.slide_number as usize == self.records.len() + 1,
@@ -195,11 +231,7 @@ impl SessionStore {
                 return Err(error);
             }
         }
-        if self.version >= 3 {
-            Ok(())
-        } else {
-            self.publish_at(index)
-        }
+        Ok(())
     }
 
     pub fn publish(&self) -> Result<()> {

@@ -21,6 +21,7 @@ use crate::windows::{DxgiCapturer, GdiCapturer};
 pub enum WorkerCommand {
     Start(CaptureSource),
     Stop,
+    StopAndKeepScreenshots,
     Pause,
     Resume,
     UpdateConfig(CaptureConfig),
@@ -31,6 +32,7 @@ pub enum WorkerCommand {
 pub enum WorkerEvent {
     SessionStarted(String),
     StartFailed(String),
+    ScreenshotsPreserved(String),
     StateChanged(CaptureState),
     FrameCaptured {
         frame_index: u64,
@@ -182,6 +184,7 @@ struct WorkerLoop {
     motion_filter: MotionFilter,
     desktop_retry_at: Option<std::time::Instant>,
     queued_command: Option<WorkerCommand>,
+    skip_finalization_on_exit: bool,
 }
 
 impl WorkerLoop {
@@ -210,6 +213,7 @@ impl WorkerLoop {
             motion_filter: MotionFilter::default(),
             desktop_retry_at: None,
             queued_command: None,
+            skip_finalization_on_exit: false,
         }
     }
 
@@ -219,6 +223,9 @@ impl WorkerLoop {
 
         while running.load(Ordering::SeqCst) {
             self.process_commands();
+            if self.skip_finalization_on_exit {
+                break;
+            }
             if health_at.elapsed() >= Duration::from_secs(60) {
                 crate::windows::log_capture_resources();
                 info!(
@@ -292,7 +299,9 @@ impl WorkerLoop {
             }
         }
 
-        self.finish_session();
+        if !self.skip_finalization_on_exit {
+            self.finish_session();
+        }
         info!("Capture worker stopped");
     }
 
@@ -543,6 +552,31 @@ impl WorkerLoop {
                     };
                     self.dxgi_capturer.release();
                     let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
+                }
+                WorkerCommand::StopAndKeepScreenshots => {
+                    if let Some(frame) = self.pending_save.clone() {
+                        if let Err(error) = self.commit_frame(&frame, true) {
+                            self.state = CaptureState::Paused;
+                            let _ = self.event_tx.send(WorkerEvent::Error(format!(
+                                "Cannot preserve pending screenshot; recording remains paused: {error:#}"
+                            )));
+                            let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
+                            continue;
+                        }
+                        self.pending_save = None;
+                        self.first_frame_saved = true;
+                    }
+                    self.skip_finalization_on_exit = true;
+                    self.state = CaptureState::Stopped;
+                    self.dxgi_capturer.release();
+                    if let Some(session) = &self.session {
+                        let _ = self.event_tx.send(WorkerEvent::ScreenshotsPreserved(
+                            session.directory.display().to_string(),
+                        ));
+                    }
+                    let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
+                    // Leave later commands in the queue; the UI will shut this worker down.
+                    return;
                 }
                 WorkerCommand::Pause => {
                     info!("Pausing capture");
@@ -808,7 +842,7 @@ impl WorkerLoop {
             self.pending_save = Some(frame.clone());
         }
         let pending = self.pending_save.as_ref().unwrap().clone();
-        let result = self.commit_frame(&pending);
+        let result = self.commit_frame(&pending, false);
         if result.is_ok() {
             self.pending_save = None;
             self.first_frame_saved = true;
@@ -834,7 +868,7 @@ impl WorkerLoop {
             }
             if let Err(error) = session.finish() {
                 let _ = self.event_tx.send(WorkerEvent::Error(format!(
-                    "Session finalization failed: {error}"
+                    "Session finalization failed: {error:#}"
                 )));
                 return false;
             }
@@ -842,7 +876,7 @@ impl WorkerLoop {
         true
     }
 
-    fn commit_frame(&mut self, frame: &Frame) -> Result<()> {
+    fn commit_frame(&mut self, frame: &Frame, screenshot_only: bool) -> Result<()> {
         self.state = CaptureState::Saving;
         let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
 
@@ -896,10 +930,12 @@ impl WorkerLoop {
             .as_ref()
             .context("Session not initialized")?
             .output_path_at_count(self.slide_count as usize);
-        self.session
-            .as_mut()
-            .context("Session not initialized")?
-            .save(frame, record)?;
+        let session = self.session.as_mut().context("Session not initialized")?;
+        if screenshot_only {
+            session.save_screenshot(frame, record)?;
+        } else {
+            session.save(frame, record)?;
+        }
         self.slide_count = slide_number;
 
         let path = self.session.as_ref().unwrap().output_path();
@@ -963,6 +999,296 @@ fn capture_backend_unavailable_message() -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_pptx_generation_can_stop_and_preserve_a_recoverable_session() {
+        let root = tempfile::tempdir().unwrap();
+        let (commands, rx) = crossbeam_channel::unbounded();
+        let (events, received) = worker_event_channel();
+        let mut worker = WorkerLoop::new(rx, events);
+        let session = SessionStore::create(root.path(), "deck.pptx", "16:9", "fit").unwrap();
+        let folder = session.directory.clone();
+        std::fs::create_dir(session.output_path()).unwrap();
+        worker.session = Some(session);
+        worker
+            .save_frame(&Frame::new(vec![255; 4], 1, 1, 4, 1, 0))
+            .unwrap();
+        commands.send(WorkerCommand::Stop).unwrap();
+        worker.process_commands();
+        assert_eq!(worker.state, CaptureState::Paused);
+        for _ in received.try_iter() {}
+        commands
+            .send(WorkerCommand::StopAndKeepScreenshots)
+            .unwrap();
+        worker.process_commands();
+        assert_eq!(worker.state, CaptureState::Stopped);
+        assert!(!SessionStore::open(&folder).unwrap().completed);
+        assert_eq!(SessionStore::open(&folder).unwrap().records.len(), 1);
+        assert!(received
+            .try_iter()
+            .any(|event| matches!(event, WorkerEvent::StateChanged(CaptureState::Stopped))));
+        worker.run(Arc::new(AtomicBool::new(false)));
+        assert!(
+            !received
+                .try_iter()
+                .any(|event| matches!(event, WorkerEvent::Error(_))),
+            "worker retried failed PPTX generation while exiting"
+        );
+        std::fs::remove_dir(folder.join("deck.pptx")).unwrap();
+        let recovered = crate::storage::recover_session(root.path()).unwrap();
+        assert_eq!(recovered.len(), 1);
+        assert!(recovered[0].is_file());
+    }
+
+    #[test]
+    fn preserve_stop_exits_the_real_worker_thread_without_retrying_generation() {
+        let root = tempfile::tempdir().unwrap();
+        let (commands, rx) = crossbeam_channel::unbounded();
+        let (events, received) = worker_event_channel();
+        let mut worker = WorkerLoop::new(rx, events);
+        let session = SessionStore::create(root.path(), "deck.pptx", "16:9", "fit").unwrap();
+        std::fs::create_dir(session.output_path()).unwrap();
+        worker.session = Some(session);
+        worker
+            .save_frame(&Frame::new(vec![255; 4], 1, 1, 4, 1, 0))
+            .unwrap();
+        worker.state = CaptureState::Paused;
+        for _ in received.try_iter() {}
+        let running = Arc::new(AtomicBool::new(true));
+        let flag = running.clone();
+        let thread = std::thread::spawn(move || worker.run(flag));
+        commands
+            .send(WorkerCommand::StopAndKeepScreenshots)
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut stopped = false;
+        while !stopped && std::time::Instant::now() < deadline {
+            for event in received.try_iter() {
+                assert!(
+                    !matches!(event, WorkerEvent::Error(_)),
+                    "unexpected generation error"
+                );
+                if matches!(event, WorkerEvent::StateChanged(CaptureState::Stopped)) {
+                    stopped = true;
+                }
+            }
+            if !stopped {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        running.store(false, Ordering::SeqCst);
+        let _ = commands.send(WorkerCommand::Stop);
+        thread.join().unwrap();
+        assert!(stopped);
+        assert!(
+            !received
+                .try_iter()
+                .any(|event| matches!(event, WorkerEvent::Error(_))),
+            "worker retried export on shutdown"
+        );
+    }
+
+    #[test]
+    fn preserve_stop_exits_before_a_queued_normal_stop_can_retry_generation() {
+        let root = tempfile::tempdir().unwrap();
+        let (commands, rx) = crossbeam_channel::unbounded();
+        let (events, received) = worker_event_channel();
+        let mut worker = WorkerLoop::new(rx, events);
+        let session = SessionStore::create(root.path(), "deck.pptx", "16:9", "fit").unwrap();
+        std::fs::create_dir(session.output_path()).unwrap();
+        worker.session = Some(session);
+        worker
+            .save_frame(&Frame::new(vec![255; 4], 1, 1, 4, 1, 0))
+            .unwrap();
+        worker.state = CaptureState::Paused;
+        for _ in received.try_iter() {}
+        commands
+            .send(WorkerCommand::StopAndKeepScreenshots)
+            .unwrap();
+        commands.send(WorkerCommand::Stop).unwrap();
+        let running = Arc::new(AtomicBool::new(true));
+        let flag = running.clone();
+        let (done_tx, done_rx) = crossbeam_channel::bounded(1);
+        let thread = std::thread::spawn(move || {
+            worker.run(flag);
+            let _ = done_tx.send(());
+        });
+        let exited = done_rx.recv_timeout(Duration::from_secs(2)).is_ok();
+        if !exited {
+            running.store(false, Ordering::SeqCst);
+            let _ = commands.send(WorkerCommand::Stop);
+        }
+        thread.join().unwrap();
+        assert!(exited, "preserved worker did not exit immediately");
+        assert!(
+            !received
+                .try_iter()
+                .any(|event| matches!(event, WorkerEvent::Error(_))),
+            "queued Stop retried PPTX generation"
+        );
+    }
+
+    #[test]
+    fn preserve_stop_never_discards_a_pending_screenshot_when_disk_write_fails() {
+        let root = tempfile::tempdir().unwrap();
+        let (commands, rx) = crossbeam_channel::unbounded();
+        let (events, received) = worker_event_channel();
+        let mut worker = WorkerLoop::new(rx, events);
+        let session = SessionStore::create(root.path(), "deck.pptx", "16:9", "fit").unwrap();
+        let folder = session.directory.clone();
+        let blocker = folder.join("slides/slide_0001.tmp.png");
+        std::fs::create_dir(&blocker).unwrap();
+        worker.session = Some(session);
+        assert!(worker
+            .save_frame(&Frame::new(vec![255; 4], 1, 1, 4, 7, 0))
+            .is_err());
+        for _ in received.try_iter() {}
+        commands
+            .send(WorkerCommand::StopAndKeepScreenshots)
+            .unwrap();
+        worker.process_commands();
+        assert_eq!(worker.state, CaptureState::Paused);
+        assert_eq!(worker.pending_save.as_ref().unwrap().frame_index, 7);
+        assert!(!received
+            .try_iter()
+            .any(|event| matches!(event, WorkerEvent::StateChanged(CaptureState::Stopped))));
+        std::fs::remove_dir(blocker).unwrap();
+        commands
+            .send(WorkerCommand::StopAndKeepScreenshots)
+            .unwrap();
+        worker.process_commands();
+        assert_eq!(worker.state, CaptureState::Stopped);
+        assert!(worker.pending_save.is_none());
+        assert_eq!(
+            SessionStore::open(&folder).unwrap().records[0].frame_index,
+            7
+        );
+        assert!(!folder.join("deck.pptx").exists());
+    }
+
+    #[test]
+    fn preserve_stop_can_flush_a_legacy_pending_page_without_publishing_the_locked_deck() {
+        let root = tempfile::tempdir().unwrap();
+        let (commands, rx) = crossbeam_channel::unbounded();
+        let (events, _) = worker_event_channel();
+        let mut worker = WorkerLoop::new(rx, events);
+        let session = crate::storage::create_legacy_segmented_session(
+            root.path(),
+            "deck.pptx",
+            "16:9",
+            "fit",
+        )
+        .unwrap();
+        let folder = session.directory.clone();
+        std::fs::create_dir(session.output_path()).unwrap();
+        worker.session = Some(session);
+        assert!(worker
+            .save_frame(&Frame::new(vec![255; 4], 1, 1, 4, 8, 0))
+            .is_err());
+        assert!(worker.pending_save.is_some());
+        commands
+            .send(WorkerCommand::StopAndKeepScreenshots)
+            .unwrap();
+        worker.process_commands();
+        assert_eq!(worker.state, CaptureState::Stopped);
+        assert!(worker.pending_save.is_none());
+        let reopened = SessionStore::open(&folder).unwrap();
+        assert!(!reopened.completed);
+        assert_eq!(reopened.records.len(), 1);
+        assert_eq!(reopened.records[0].frame_index, 8);
+    }
+
+    #[test]
+    fn preserve_stop_restores_a_missing_pending_png_before_declaring_success() {
+        let root = tempfile::tempdir().unwrap();
+        let (commands, rx) = crossbeam_channel::unbounded();
+        let (events, _) = worker_event_channel();
+        let mut worker = WorkerLoop::new(rx, events);
+        let session = crate::storage::create_legacy_segmented_session(
+            root.path(),
+            "deck.pptx",
+            "16:9",
+            "fit",
+        )
+        .unwrap();
+        let folder = session.directory.clone();
+        std::fs::create_dir(session.output_path()).unwrap();
+        worker.session = Some(session);
+        assert!(worker
+            .save_frame(&Frame::new(vec![0, 0, 255, 255], 1, 1, 4, 8, 0))
+            .is_err());
+        let image = folder.join("slides/slide_0001.png");
+        std::fs::remove_file(&image).unwrap();
+        commands
+            .send(WorkerCommand::StopAndKeepScreenshots)
+            .unwrap();
+        worker.process_commands();
+        assert_eq!(worker.state, CaptureState::Stopped);
+        assert!(image.is_file());
+        assert!(image::open(image).is_ok());
+    }
+
+    #[test]
+    fn preserve_stop_restores_changed_pending_png_even_if_dimensions_match() {
+        let root = tempfile::tempdir().unwrap();
+        let (commands, rx) = crossbeam_channel::unbounded();
+        let (events, _) = worker_event_channel();
+        let mut worker = WorkerLoop::new(rx, events);
+        let session = crate::storage::create_legacy_segmented_session(
+            root.path(),
+            "deck.pptx",
+            "16:9",
+            "fit",
+        )
+        .unwrap();
+        let folder = session.directory.clone();
+        std::fs::create_dir(session.output_path()).unwrap();
+        worker.session = Some(session);
+        assert!(worker
+            .save_frame(&Frame::new(vec![0, 0, 255, 255], 1, 1, 4, 8, 0))
+            .is_err());
+        let image = folder.join("slides/slide_0001.png");
+        image::RgbImage::from_pixel(1, 1, image::Rgb([0, 0, 255]))
+            .save(&image)
+            .unwrap();
+        commands
+            .send(WorkerCommand::StopAndKeepScreenshots)
+            .unwrap();
+        worker.process_commands();
+        assert_eq!(worker.state, CaptureState::Stopped);
+        assert_eq!(
+            image::open(image).unwrap().to_rgb8().get_pixel(0, 0).0,
+            [255, 0, 0]
+        );
+    }
+
+    #[test]
+    fn failed_finalization_reports_the_underlying_filesystem_error() {
+        let root = tempfile::tempdir().unwrap();
+        let (commands, rx) = crossbeam_channel::unbounded();
+        let (events, received) = worker_event_channel();
+        let mut worker = WorkerLoop::new(rx, events);
+        let session = SessionStore::create(root.path(), "deck.pptx", "16:9", "fit").unwrap();
+        std::fs::create_dir(session.output_path()).unwrap();
+        worker.session = Some(session);
+        worker
+            .save_frame(&Frame::new(vec![255; 4], 1, 1, 4, 1, 0))
+            .unwrap();
+        commands.send(WorkerCommand::Stop).unwrap();
+        worker.process_commands();
+        let message = received
+            .try_iter()
+            .find_map(|event| match event {
+                WorkerEvent::Error(message) => Some(message),
+                _ => None,
+            })
+            .expect("finalization error event");
+        assert!(message.contains("Failed to replace"));
+        assert!(
+            message.contains("os error"),
+            "missing underlying filesystem error: {message}"
+        );
+    }
 
     #[test]
     fn stop_generates_all_decks_and_retries_failed_generation_without_losing_screenshots() {

@@ -17,6 +17,23 @@ pub struct PptxWriter {
     auto_crop: bool,
 }
 
+#[cfg(any(target_os = "windows", test))]
+fn retry_windows_replace(
+    mut operation: impl FnMut() -> std::io::Result<()>,
+    mut wait: impl FnMut(std::time::Duration),
+) -> std::io::Result<()> {
+    for delay_ms in [100, 200, 400] {
+        match operation() {
+            Ok(()) => return Ok(()),
+            Err(error) if matches!(error.raw_os_error(), Some(5 | 32 | 33)) => {
+                wait(std::time::Duration::from_millis(delay_ms));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    operation()
+}
+
 /// Helper to write a file entry in the ZIP archive.
 fn zip_write<W: Write + std::io::Seek>(
     zip: &mut ZipWriter<W>,
@@ -262,7 +279,14 @@ impl PptxWriter {
 
         // std::fs::rename uses replace-existing semantics on Windows as well.
         // Never copy over the good deck: a locked destination must remain intact.
-        std::fs::rename(&tmp_path, &self.output_path).with_context(|| {
+        #[cfg(target_os = "windows")]
+        let replace = retry_windows_replace(
+            || std::fs::rename(&tmp_path, &self.output_path),
+            std::thread::sleep,
+        );
+        #[cfg(not(target_os = "windows"))]
+        let replace = std::fs::rename(&tmp_path, &self.output_path);
+        replace.with_context(|| {
             format!(
                 "Failed to replace {:?}; completed deck retained at {:?}",
                 self.output_path, tmp_path
@@ -401,6 +425,29 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "windows")]
+    fn windows_transiently_locked_deck_is_published_after_unlock() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let (dir, writer, record) = setup_pptx_test();
+        let slides = dir.path().join("slides");
+        writer
+            .write_slides(std::slice::from_ref(&record), &slides)
+            .unwrap();
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&writer.output_path)
+            .unwrap();
+        let unlocker = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            drop(lock);
+        });
+        writer.write_slides(&[record], &slides).unwrap();
+        unlocker.join().unwrap();
+        assert_internal_relationship_graph_is_closed(&writer.output_path);
+    }
+
+    #[test]
     fn failed_replace_keeps_completed_temporary_deck() {
         let (dir, writer, record) = setup_pptx_test();
         std::fs::create_dir(&writer.output_path).unwrap();
@@ -424,6 +471,45 @@ mod tests {
             })
             .unwrap();
         assert_internal_relationship_graph_is_closed(&temporary);
+    }
+
+    #[test]
+    fn transient_windows_sharing_errors_retry_but_permanent_errors_do_not() {
+        let mut attempts = 0;
+        let mut delays = Vec::new();
+        retry_windows_replace(
+            || {
+                attempts += 1;
+                if attempts < 3 {
+                    Err(std::io::Error::from_raw_os_error(32))
+                } else {
+                    Ok(())
+                }
+            },
+            |duration| delays.push(duration),
+        )
+        .unwrap();
+        assert_eq!(attempts, 3);
+        assert_eq!(
+            delays,
+            [
+                std::time::Duration::from_millis(100),
+                std::time::Duration::from_millis(200)
+            ]
+        );
+        let mut attempts = 0;
+        let mut waited = false;
+        let error = retry_windows_replace(
+            || {
+                attempts += 1;
+                Err(std::io::Error::from_raw_os_error(2))
+            },
+            |_| waited = true,
+        )
+        .unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(2));
+        assert_eq!(attempts, 1);
+        assert!(!waited);
     }
 
     /// Create a standards-compliant 2x2 RGB PNG in memory.

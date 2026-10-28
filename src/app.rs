@@ -293,6 +293,16 @@ impl PptAutoCaptureApp {
         // Wait for successful finalization. On error the worker stays alive and retryable.
     }
 
+    fn stop_and_keep_screenshots(&mut self) {
+        if let Some(tx) = &self.cmd_tx {
+            if tx.send(WorkerCommand::StopAndKeepScreenshots).is_ok() {
+                self.dashboard.stopping = true;
+            } else {
+                self.handle_worker_disconnected();
+            }
+        }
+    }
+
     fn request_safe_close(&mut self) -> bool {
         if self.export_panel.is_busy() || self.recovery_rx.is_some() {
             if self.export_panel.is_busy() {
@@ -426,6 +436,19 @@ impl PptAutoCaptureApp {
                     self.record_error("capture", message);
                 }
                 WorkerEvent::SessionStarted(path) => self.dashboard.output_path = path,
+                WorkerEvent::ScreenshotsPreserved(path) => {
+                    let message = match self.language {
+                        Language::Chinese => format!("截图和恢复记录已保留在 {path}；PPTX 尚未生成，可重启后恢复或在图片转 PPTX 页面选择其中的 slides 文件夹。"),
+                        Language::English => format!("Screenshots and the recovery journal are saved in {path}; PPTX was not generated. Recover on restart or import the slides folder."),
+                    };
+                    warn!("{message}");
+                    self.dashboard.last_error = Some(message.clone());
+                    self.diagnostic_history.push(DiagnosticEntry::new(
+                        DiagnosticLevel::Warning,
+                        "recovery",
+                        message,
+                    ));
+                }
                 WorkerEvent::StateChanged(s) => {
                     if matches!(
                         s,
@@ -797,6 +820,9 @@ impl eframe::App for PptAutoCaptureApp {
                             resume_requested: &mut self.pending_resume,
                         },
                     );
+                    if std::mem::take(&mut self.dashboard.keep_screenshots_requested) {
+                        self.stop_and_keep_screenshots();
+                    }
                     if self.dashboard.copy_diagnostics_requested {
                         self.dashboard.copy_diagnostics_requested = false;
                         self.copy_diagnostics(ctx);
@@ -987,6 +1013,42 @@ mod tests {
         app.handle_worker_disconnected();
         assert!(!app.close_after_stop);
         assert_eq!(app.dashboard.current_state, CaptureState::Error);
+    }
+
+    #[test]
+    fn preserve_screenshots_stops_the_session_and_allows_window_to_close() {
+        let mut app = std::mem::ManuallyDrop::new(PptAutoCaptureApp::new(LoggingSetup {
+            log_directory: None,
+            log_file: None,
+            warning: None,
+        }));
+        let (commands, received) = crossbeam_channel::unbounded();
+        let (events, rx) = crate::capture::worker_event_channel();
+        app.cmd_tx = Some(commands);
+        app.event_rx = Some(rx);
+        app.dashboard.session_active = true;
+        app.dashboard.current_state = CaptureState::Paused;
+        app.stop_and_keep_screenshots();
+        assert!(app.dashboard.stopping);
+        assert!(matches!(
+            received.try_recv(),
+            Ok(WorkerCommand::StopAndKeepScreenshots)
+        ));
+        events
+            .send(WorkerEvent::ScreenshotsPreserved("saved/session".into()))
+            .unwrap();
+        events
+            .send(WorkerEvent::StateChanged(CaptureState::Stopped))
+            .unwrap();
+        app.process_events();
+        assert!(!app.dashboard.session_active);
+        assert!(!app.request_safe_close());
+        assert!(app
+            .dashboard
+            .last_error
+            .as_deref()
+            .unwrap()
+            .contains("saved/session"));
     }
 
     #[test]

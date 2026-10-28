@@ -48,6 +48,8 @@ During recording only PNG screenshots and the session journal are saved. After S
 
 If saving a screenshot fails, capture pauses and retains the pending frame in memory. Resolve the storage problem, then choose **Resume** to retry that same screenshot. The saved-page count advances after PNG and journal writes succeed. If PPTX generation fails after Stop (for example, a file is locked or the disk is full), the session remains incomplete and **Stop** retries generation. Closing or force-quitting can lose frames not yet committed to the journal; resolve an error before closing.
 
+When PPTX generation remains blocked, **Stop and keep screenshots (generate PPTX later)** ends capture without retrying the PPTX and keeps its PNGs and incomplete journal for recovery on restart. If a pending screenshot cannot be durably written, the recording stays paused instead of discarding it. The diagnostic message includes the underlying system error and any completed temporary PPTX path. On Windows the application briefly retries transient sharing or access errors; a persistently locked file still needs attention.
+
 The **Create PPTX** tab imports PNG and JPEG images directly from a selected folder, in natural filename order, into a separate export folder. It also uses the 50-slide limit and leaves the source files unchanged. The optional automatic crop looks for a clearly bounded 16:9 or 4:3 presentation area and embeds only that region; when no confident boundary is found, the full image is used. Cropping changes only the image embedded in PPTX, never the original screenshots. Detection is heuristic, so inspect generated files before relying on the result.
 
 On restart, recovery rebuilds unfinished recordings from their journal and PNGs, preserving the original filename, slide size, and image-fit setting. Keep each session folder together. Missing/corrupt images or journals produce an error instead of a silently incomplete presentation; existing PPTX files remain intact. Legacy `manifest.jsonl` recordings lack layout metadata and therefore retain the old 16:9/fit recovery default. Recovery cannot infer pages already overwritten by older versions.
@@ -94,7 +96,7 @@ cargo build --release
 cargo build --release --target aarch64-apple-darwin
 bash scripts/package-macos-dmg.sh \
   target/aarch64-apple-darwin/release/ppt-auto-capture-gui \
-  2.3.0 \
+  2.4.0 \
   dist/ppt-auto-capture-gui-macos-apple-silicon.dmg
 ```
 
