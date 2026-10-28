@@ -163,6 +163,29 @@ impl SessionStore {
             .collect()
     }
 
+    pub fn checkpoint_for_recovery(&self) -> Result<()> {
+        ensure!(!self.completed, "Session is already completed");
+        for record in &self.records {
+            let path = self.directory.join("slides").join(&record.png_filename);
+            let metadata = std::fs::metadata(&path)
+                .with_context(|| format!("Missing saved screenshot: {}", path.display()))?;
+            ensure!(
+                metadata.is_file() && metadata.len() > 0,
+                "Invalid saved screenshot: {}",
+                path.display()
+            );
+        }
+        let expected = serde_json::to_vec(self)?;
+        if std::fs::read(self.directory.join("session.json"))
+            .ok()
+            .as_deref()
+            != Some(expected.as_slice())
+        {
+            self.persist()?;
+        }
+        Ok(())
+    }
+
     fn output_path_for_part(&self, part: usize) -> PathBuf {
         self.directory.join(part_filename(&self.filename, part))
     }

@@ -566,6 +566,16 @@ impl WorkerLoop {
                         self.pending_save = None;
                         self.first_frame_saved = true;
                     }
+                    if let Some(session) = &self.session {
+                        if let Err(error) = session.checkpoint_for_recovery() {
+                            self.state = CaptureState::Paused;
+                            let _ = self.event_tx.send(WorkerEvent::Error(format!(
+                                "Cannot preserve session for recovery; recording remains paused: {error:#}"
+                            )));
+                            let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
+                            continue;
+                        }
+                    }
                     self.skip_finalization_on_exit = true;
                     self.state = CaptureState::Stopped;
                     self.dxgi_capturer.release();
@@ -1167,6 +1177,35 @@ mod tests {
             7
         );
         assert!(!folder.join("deck.pptx").exists());
+    }
+
+    #[test]
+    fn preserve_stop_requires_a_recoverable_journal_even_without_a_pending_frame() {
+        let root = tempfile::tempdir().unwrap();
+        let (commands, rx) = crossbeam_channel::unbounded();
+        let (events, _) = worker_event_channel();
+        let mut worker = WorkerLoop::new(rx, events);
+        let session = SessionStore::create(root.path(), "deck.pptx", "16:9", "fit").unwrap();
+        let folder = session.directory.clone();
+        worker.session = Some(session);
+        worker
+            .save_frame(&Frame::new(vec![255; 4], 1, 1, 4, 7, 0))
+            .unwrap();
+        let journal = folder.join("session.json");
+        std::fs::remove_file(&journal).unwrap();
+        std::fs::create_dir(&journal).unwrap();
+        commands
+            .send(WorkerCommand::StopAndKeepScreenshots)
+            .unwrap();
+        worker.process_commands();
+        assert_eq!(worker.state, CaptureState::Paused);
+        std::fs::remove_dir(journal).unwrap();
+        commands
+            .send(WorkerCommand::StopAndKeepScreenshots)
+            .unwrap();
+        worker.process_commands();
+        assert_eq!(worker.state, CaptureState::Stopped);
+        assert_eq!(SessionStore::open(&folder).unwrap().records.len(), 1);
     }
 
     #[test]
