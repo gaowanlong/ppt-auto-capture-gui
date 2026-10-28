@@ -66,7 +66,7 @@ pub fn import_directory(
             .into_rgba8();
         let (width, height) = rgba.dimensions();
         let mut bgra = rgba.into_raw();
-        for pixel in bgra.chunks_exact_mut(4) {
+        for pixel in bgra.as_chunks_mut::<4>().0 {
             let alpha = pixel[3] as u32;
             for channel in &mut pixel[..3] {
                 *channel = ((*channel as u32 * alpha + 255 * (255 - alpha) + 127) / 255) as u8;
