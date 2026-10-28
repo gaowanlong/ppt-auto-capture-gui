@@ -555,7 +555,7 @@ impl WorkerLoop {
                 }
                 WorkerCommand::StopAndKeepScreenshots => {
                     if let Some(frame) = self.pending_save.clone() {
-                        if let Err(error) = self.commit_frame(&frame, true) {
+                        if let Err(error) = self.commit_frame(&frame, true, true) {
                             self.state = CaptureState::Paused;
                             let _ = self.event_tx.send(WorkerEvent::Error(format!(
                                 "Cannot preserve pending screenshot; recording remains paused: {error:#}"
@@ -838,11 +838,12 @@ impl WorkerLoop {
     }
 
     fn save_frame(&mut self, frame: &Frame) -> Result<()> {
+        let retrying = self.pending_save.is_some();
         if self.pending_save.is_none() {
             self.pending_save = Some(frame.clone());
         }
         let pending = self.pending_save.as_ref().unwrap().clone();
-        let result = self.commit_frame(&pending, false);
+        let result = self.commit_frame(&pending, false, retrying);
         if result.is_ok() {
             self.pending_save = None;
             self.first_frame_saved = true;
@@ -876,13 +877,15 @@ impl WorkerLoop {
         true
     }
 
-    fn commit_frame(&mut self, frame: &Frame, screenshot_only: bool) -> Result<()> {
+    fn commit_frame(&mut self, frame: &Frame, screenshot_only: bool, retrying: bool) -> Result<()> {
         self.state = CaptureState::Saving;
         let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
 
         let content_hash = self.duplicate_detector.compute_hash(frame);
 
-        if self.config.filter_duplicates {
+        // A pending frame already passed the filter before its failed write.
+        // Preserve it even if the user changes filtering while the session is paused.
+        if self.config.filter_duplicates && !retrying {
             if self.motion_filter.is_duplicate(frame) {
                 self.state = CaptureState::Running;
                 let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
@@ -1164,6 +1167,56 @@ mod tests {
             7
         );
         assert!(!folder.join("deck.pptx").exists());
+    }
+
+    #[test]
+    fn preserve_stop_saves_pending_frame_even_if_duplicate_filter_is_enabled_after_failure() {
+        let root = tempfile::tempdir().unwrap();
+        let (commands, rx) = crossbeam_channel::unbounded();
+        let (events, _) = worker_event_channel();
+        let mut worker = WorkerLoop::new(rx, events);
+        worker.config.filter_duplicates = false;
+        let session = SessionStore::create(root.path(), "deck.pptx", "16:9", "fit").unwrap();
+        let folder = session.directory.clone();
+        worker.session = Some(session);
+        let frame = Frame::new(vec![255; 4], 1, 1, 4, 1, 0);
+        worker.save_frame(&frame).unwrap();
+        let blocker = folder.join("slides/slide_0002.tmp.png");
+        std::fs::create_dir(&blocker).unwrap();
+        assert!(worker.save_frame(&frame).is_err());
+        worker.config.filter_duplicates = true;
+        std::fs::remove_dir(blocker).unwrap();
+        commands
+            .send(WorkerCommand::StopAndKeepScreenshots)
+            .unwrap();
+        worker.process_commands();
+        assert_eq!(worker.state, CaptureState::Stopped);
+        assert_eq!(SessionStore::open(&folder).unwrap().records.len(), 2);
+        assert!(folder.join("slides/slide_0002.png").is_file());
+    }
+
+    #[test]
+    fn normal_stop_saves_pending_frame_even_if_duplicate_filter_is_enabled_after_failure() {
+        let root = tempfile::tempdir().unwrap();
+        let (commands, rx) = crossbeam_channel::unbounded();
+        let (events, _) = worker_event_channel();
+        let mut worker = WorkerLoop::new(rx, events);
+        worker.config.filter_duplicates = false;
+        let session = SessionStore::create(root.path(), "deck.pptx", "16:9", "fit").unwrap();
+        let folder = session.directory.clone();
+        worker.session = Some(session);
+        let frame = Frame::new(vec![255; 4], 1, 1, 4, 1, 0);
+        worker.save_frame(&frame).unwrap();
+        let blocker = folder.join("slides/slide_0002.tmp.png");
+        std::fs::create_dir(&blocker).unwrap();
+        assert!(worker.save_frame(&frame).is_err());
+        worker.config.filter_duplicates = true;
+        std::fs::remove_dir(blocker).unwrap();
+        commands.send(WorkerCommand::Stop).unwrap();
+        worker.process_commands();
+        assert_eq!(worker.state, CaptureState::Stopped);
+        assert_eq!(SessionStore::open(&folder).unwrap().records.len(), 2);
+        assert!(folder.join("slides/slide_0002.png").is_file());
     }
 
     #[test]
