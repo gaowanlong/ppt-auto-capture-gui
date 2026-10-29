@@ -96,7 +96,7 @@ cargo build --release
 cargo build --release --target aarch64-apple-darwin
 bash scripts/package-macos-dmg.sh \
   target/aarch64-apple-darwin/release/ppt-auto-capture-gui \
-  2.4.0 \
+  2.5.0 \
   dist/ppt-auto-capture-gui-macos-apple-silicon.dmg
 ```
 

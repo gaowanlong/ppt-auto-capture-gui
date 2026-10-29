@@ -197,16 +197,25 @@ pub fn maximize_window(_window_id: u64) -> Result<()> {
 }
 
 fn monitor_snapshot(monitor: &Monitor) -> Result<MonitorSnapshot> {
+    let name = monitor
+        .name()
+        .map_err(|error| capture_error(error.to_string()))?;
+    // xcap obtains friendly_name through NSScreen with an unchecked main-thread marker.
+    // Calling it from a worker thread can corrupt Objective-C state and crash the process.
+    unsafe extern "C" {
+        fn pthread_main_np() -> std::ffi::c_int;
+    }
+    let friendly_name = if unsafe { pthread_main_np() } != 0 {
+        monitor.friendly_name().unwrap_or_else(|_| name.clone())
+    } else {
+        name.clone()
+    };
     Ok(MonitorSnapshot {
         id: monitor
             .id()
             .map_err(|error| capture_error(error.to_string()))?,
-        name: monitor
-            .name()
-            .map_err(|error| capture_error(error.to_string()))?,
-        friendly_name: monitor
-            .friendly_name()
-            .map_err(|error| capture_error(error.to_string()))?,
+        name,
+        friendly_name,
         x: monitor
             .x()
             .map_err(|error| capture_error(error.to_string()))?,
@@ -318,6 +327,25 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn concurrent_display_enumeration_is_safe_on_background_threads() {
+        let threads: Vec<_> = (0..12)
+            .map(|_| {
+                std::thread::spawn(|| {
+                    for _ in 0..20 {
+                        let monitors = enumerate_monitors().unwrap();
+                        assert!(monitors
+                            .iter()
+                            .all(|monitor| monitor.description == monitor.output_name));
+                    }
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+    }
 
     #[test]
     fn capturers_start_uninitialized() {

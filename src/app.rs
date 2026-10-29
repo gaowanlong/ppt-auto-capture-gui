@@ -139,6 +139,7 @@ impl PptAutoCaptureApp {
         #[cfg(target_os = "macos")]
         apply_macos_source_default(&mut app.source_panel);
         app.output_panel.output_dir = config.output_dir.clone();
+        app.output_panel.filename_is_custom = config.filename_is_custom;
         app.output_panel.page_ratio = config.page_ratio.clone();
         app.output_panel.image_fit = config.image_fit.clone();
         app.output_panel.auto_crop = config.auto_crop;
@@ -254,15 +255,25 @@ impl PptAutoCaptureApp {
             self.display_panel.selected_description.clone(),
         );
         apply_output_to_source(&self.output_panel, &mut source);
+        self.output_panel.output_filename = source.output_filename.clone();
+        let session_output = std::path::Path::new(&source.output_dir).join(&source.output_filename);
         if let Some(tx) = self.cmd_tx.as_ref() {
-            let _ = tx.send(WorkerCommand::UpdateConfig(
-                self.settings_panel.get_config(),
-            ));
-            let _ = tx.send(WorkerCommand::Start(source));
+            if tx
+                .send(WorkerCommand::UpdateConfig(
+                    self.settings_panel.get_config(),
+                ))
+                .is_err()
+                || tx.send(WorkerCommand::Start(source)).is_err()
+            {
+                self.handle_worker_disconnected();
+                return;
+            }
+        } else {
+            return;
         }
         self.dashboard.session_active = true;
         self.dashboard.saved_slides_count = 0;
-        self.dashboard.output_path = output_path(&self.output_panel);
+        self.dashboard.output_path = session_output.to_string_lossy().into_owned();
 
         if self.source_panel.full_screen_selected {
             self.dashboard.source_window_title = "📺 Full Screen".to_string();
@@ -283,6 +294,9 @@ impl PptAutoCaptureApp {
         }
     }
     fn stop_capture(&mut self) {
+        if self.dashboard.stopping {
+            return;
+        }
         if let Some(ref tx) = self.cmd_tx {
             if tx.send(WorkerCommand::Stop).is_ok() {
                 self.dashboard.stopping = true;
@@ -294,6 +308,9 @@ impl PptAutoCaptureApp {
     }
 
     fn stop_and_keep_screenshots(&mut self) {
+        if self.dashboard.stopping {
+            return;
+        }
         if let Some(tx) = &self.cmd_tx {
             if tx.send(WorkerCommand::StopAndKeepScreenshots).is_ok() {
                 self.dashboard.stopping = true;
@@ -435,7 +452,12 @@ impl PptAutoCaptureApp {
                     self.dashboard.current_state = CaptureState::Error;
                     self.record_error("capture", message);
                 }
-                WorkerEvent::SessionStarted(path) => self.dashboard.output_path = path,
+                WorkerEvent::SessionStarted(path) => {
+                    self.export_panel.latest_slides = std::path::Path::new(&path)
+                        .parent()
+                        .map(|p| p.join("slides"));
+                    self.dashboard.output_path = path;
+                }
                 WorkerEvent::ScreenshotsPreserved(path) => {
                     let message = match self.language {
                         Language::Chinese => format!("截图和恢复记录已保留在 {path}；PPTX 尚未生成，可重启后恢复或在图片转 PPTX 页面选择其中的 slides 文件夹。"),
@@ -449,14 +471,17 @@ impl PptAutoCaptureApp {
                         message,
                     ));
                 }
+                WorkerEvent::FinalizationFailed => {
+                    self.dashboard.stopping = false;
+                    self.close_after_stop = false;
+                }
                 WorkerEvent::StateChanged(s) => {
-                    if matches!(
-                        s,
-                        CaptureState::Paused | CaptureState::Stopped | CaptureState::Error
-                    ) {
+                    if s == CaptureState::Stopped {
                         self.dashboard.stopping = false;
                     }
-                    if matches!(s, CaptureState::Paused | CaptureState::Error) {
+                    if !self.dashboard.stopping
+                        && matches!(s, CaptureState::Paused | CaptureState::Error)
+                    {
                         // A failed finalization must leave the window open for retry.
                         self.close_after_stop = false;
                     }
@@ -605,7 +630,11 @@ fn apply_macos_source_default(panel: &mut SourcePanel) {
 
 fn apply_output_to_source(panel: &OutputPanel, source: &mut CaptureSource) {
     source.output_dir = panel.output_dir.clone();
-    source.output_filename = panel.output_filename.clone();
+    source.output_filename = if panel.filename_is_custom {
+        panel.output_filename.clone()
+    } else {
+        crate::config::filename_for_new_operation(&panel.output_filename)
+    };
     source.page_ratio = panel.page_ratio.clone();
     source.image_fit = panel.image_fit.clone();
     source.auto_crop = panel.auto_crop;
@@ -625,6 +654,7 @@ fn output_path(panel: &OutputPanel) -> String {
 fn apply_output_to_config(panel: &OutputPanel, config: &mut AppConfig) {
     config.output_dir = panel.output_dir.clone();
     config.output_filename = panel.output_filename.clone();
+    config.filename_is_custom = panel.filename_is_custom;
     config.page_ratio = panel.page_ratio.clone();
     config.image_fit = panel.image_fit.clone();
     config.auto_crop = panel.auto_crop;
@@ -905,6 +935,7 @@ impl eframe::App for PptAutoCaptureApp {
                     }
                 }
                 Tab::Export => {
+                    self.export_panel.recording_root = self.output_panel.output_dir.clone().into();
                     self.export_panel.render(ui, self.language);
                     if let Some(directory) = self.export_panel.take_open_request() {
                         self.open_directory(&directory);
@@ -950,6 +981,63 @@ mod tests {
     use crate::model::Region;
 
     #[test]
+    fn automatic_filename_is_refreshed_for_each_capture_source() {
+        let panel = OutputPanel::new_with_filename("ppt-capture-20000101-000000.pptx");
+        let mut source = CaptureSource::new(0, String::new(), 1, String::new());
+        apply_output_to_source(&panel, &mut source);
+        assert_ne!(source.output_filename, panel.output_filename);
+        assert!(source.output_filename.starts_with("ppt-capture-"));
+    }
+
+    #[test]
+    fn explicitly_edited_timestamp_filename_is_preserved() {
+        let mut panel = OutputPanel::new_with_filename("ppt-capture-20000101-000000.pptx");
+        panel.filename_is_custom = true;
+        let mut source = CaptureSource::new(0, String::new(), 1, String::new());
+        apply_output_to_source(&panel, &mut source);
+        assert_eq!(source.output_filename, "ppt-capture-20000101-000000.pptx");
+    }
+
+    #[test]
+    fn repeated_stop_only_queues_one_finalization() {
+        let mut app = std::mem::ManuallyDrop::new(PptAutoCaptureApp::new(LoggingSetup {
+            log_directory: None,
+            log_file: None,
+            warning: None,
+        }));
+        let (tx, rx) = crossbeam_channel::unbounded();
+        app.cmd_tx = Some(tx);
+        app.dashboard.session_active = true;
+        app.stop_capture();
+        app.stop_capture();
+        assert!(matches!(rx.try_recv(), Ok(WorkerCommand::Stop)));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn earlier_pause_does_not_cancel_pending_stop() {
+        let mut app = std::mem::ManuallyDrop::new(PptAutoCaptureApp::new(LoggingSetup {
+            log_directory: None,
+            log_file: None,
+            warning: None,
+        }));
+        let (commands, rx) = crossbeam_channel::unbounded();
+        let (events, event_rx) = crate::capture::worker_event_channel();
+        app.cmd_tx = Some(commands);
+        app.event_rx = Some(event_rx);
+        app.dashboard.session_active = true;
+        app.stop_capture();
+        events
+            .send(WorkerEvent::StateChanged(CaptureState::Paused))
+            .unwrap();
+        app.drain_events(false);
+        app.stop_capture();
+        assert!(app.dashboard.stopping);
+        assert!(matches!(rx.try_recv(), Ok(WorkerCommand::Stop)));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
     fn export_settings_do_not_change_the_active_recording_output_or_crop() {
         let mut app = std::mem::ManuallyDrop::new(PptAutoCaptureApp::new(LoggingSetup {
             log_directory: None,
@@ -982,6 +1070,7 @@ mod tests {
         assert!(app.close_after_stop);
         assert!(app.dashboard.stopping);
         assert!(matches!(received.try_recv(), Ok(WorkerCommand::Stop)));
+        events.send(WorkerEvent::FinalizationFailed).unwrap();
         events
             .send(WorkerEvent::StateChanged(CaptureState::Paused))
             .unwrap();

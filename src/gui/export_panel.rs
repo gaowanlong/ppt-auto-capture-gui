@@ -16,6 +16,8 @@ pub struct ExportPanel {
     open_requested: bool,
     export: Option<Receiver<ExportMessage>>,
     picker: Option<Receiver<Result<Option<PathBuf>, String>>>,
+    pub recording_root: PathBuf,
+    pub latest_slides: Option<PathBuf>,
 }
 
 impl ExportPanel {
@@ -41,6 +43,8 @@ impl ExportPanel {
             open_requested: false,
             export: None,
             picker: None,
+            recording_root: PathBuf::from(&settings.output_dir),
+            latest_slides: None,
         }
     }
 
@@ -88,7 +92,22 @@ impl ExportPanel {
             } else {
                 "PPTX filename"
             });
-            ui.text_edit_singleline(&mut self.settings.output_filename);
+            if ui
+                .text_edit_singleline(&mut self.settings.output_filename)
+                .changed()
+            {
+                self.settings.filename_is_custom = true;
+            }
+            if ui
+                .button(if zh { "自动命名" } else { "Automatic" })
+                .clicked()
+            {
+                self.settings.filename_is_custom = false;
+                self.settings.output_filename = format!(
+                    "ppt-capture-{}.pptx",
+                    chrono::Local::now().format("%Y%m%d-%H%M%S")
+                );
+            }
         });
         ui.horizontal(|ui| {
             ui.label(if zh { "页面比例" } else { "Slide ratio" });
@@ -148,9 +167,17 @@ impl ExportPanel {
     }
 
     fn start(&mut self, language: Language) {
+        if self.export.is_some() {
+            return;
+        }
         let source = PathBuf::from(self.source_dir.trim());
         let destination = PathBuf::from(self.settings.output_dir.trim());
-        let filename = self.settings.output_filename.clone();
+        let filename = if self.settings.filename_is_custom {
+            self.settings.output_filename.clone()
+        } else {
+            crate::config::filename_for_new_operation(&self.settings.output_filename)
+        };
+        self.settings.output_filename = filename.clone();
         let ratio = self.settings.page_ratio.clone();
         let fit = self.settings.image_fit.clone();
         let auto_crop = self.settings.auto_crop;
@@ -222,7 +249,21 @@ impl ExportPanel {
             }
         }
         if let Some(rx) = &self.export {
-            while let Ok(message) = rx.try_recv() {
+            loop {
+                let message = match rx.try_recv() {
+                    Ok(message) => message,
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        self.export = None;
+                        self.status = if language == Language::Chinese {
+                            "生成任务意外中断，请重试。"
+                        } else {
+                            "PPTX generation stopped unexpectedly; please retry."
+                        }
+                        .into();
+                        break;
+                    }
+                };
                 match message {
                     ExportMessage::Progress(done, total) => {
                         self.status = if language == Language::Chinese {
@@ -267,33 +308,77 @@ impl ExportPanel {
     }
 
     fn choose_folder(&mut self) {
+        let initial = self.initial_folder().map(|path| {
+            if path.is_absolute() {
+                path
+            } else {
+                std::env::current_dir()
+                    .map(|cwd| cwd.join(&path))
+                    .unwrap_or(path)
+            }
+        });
         let (tx, rx) = mpsc::channel();
         let spawned = std::thread::Builder::new()
             .name("folder-picker".into())
             .spawn(move || {
-                let _ = tx.send(pick_folder());
+                let _ = tx.send(pick_folder(initial.as_deref()));
             });
         match spawned {
             Ok(_) => self.picker = Some(rx),
             Err(error) => self.status = format!("Failed to open folder picker: {error}"),
         }
     }
+
+    fn initial_folder(&self) -> Option<PathBuf> {
+        let selected = PathBuf::from(self.source_dir.trim());
+        if !self.source_dir.trim().is_empty() && selected.is_dir() {
+            return Some(selected);
+        }
+        if let Some(path) = &self.latest_slides {
+            if path.starts_with(self.recording_root.join("sessions")) && path.is_dir() {
+                return Some(path.clone());
+            }
+        }
+        let mut sessions: Vec<_> = std::fs::read_dir(self.recording_root.join("sessions"))
+            .ok()?
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.join("slides").is_dir())
+            .collect();
+        sessions.sort_by_cached_key(|path| {
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            let timestamp = name.chars().take(15).collect::<String>();
+            let created = path
+                .metadata()
+                .ok()
+                .and_then(|metadata| metadata.created().or_else(|_| metadata.modified()).ok());
+            (timestamp, created, path.clone())
+        });
+        sessions.pop().map(|path| path.join("slides"))
+    }
 }
 
-fn pick_folder() -> Result<Option<PathBuf>, String> {
+fn pick_folder(initial: Option<&std::path::Path>) -> Result<Option<PathBuf>, String> {
     #[cfg(target_os = "windows")]
-    let result = std::process::Command::new("powershell.exe").args(["-NoProfile", "-STA", "-Command", "Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.FolderBrowserDialog; if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; [Console]::Write($d.SelectedPath) }"]).output();
+    let result = std::process::Command::new("powershell.exe").env("PPT_CAPTURE_INITIAL_FOLDER", initial.unwrap_or_else(|| std::path::Path::new(""))).args(["-NoProfile", "-STA", "-Command", "Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.FolderBrowserDialog; $d.SelectedPath = $env:PPT_CAPTURE_INITIAL_FOLDER; if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; [Console]::Write($d.SelectedPath) }"]).output();
     #[cfg(target_os = "macos")]
     let result = std::process::Command::new("osascript")
         .args([
             "-e",
-            "POSIX path of (choose folder with prompt \"Select an image folder\")",
+            "on run argv\nif (item 1 of argv) is not \"\" then\nreturn POSIX path of (choose folder with prompt \"Select an image folder\" default location (POSIX file (item 1 of argv)))\nelse\nreturn POSIX path of (choose folder with prompt \"Select an image folder\")\nend if\nend run",
+            "--",
         ])
+        .arg(initial.unwrap_or_else(|| std::path::Path::new("")))
         .output();
     #[cfg(target_os = "linux")]
-    let result = std::process::Command::new("zenity")
-        .args(["--file-selection", "--directory"])
-        .output();
+    let result = {
+        let mut command = std::process::Command::new("zenity");
+        command.args(["--file-selection", "--directory"]);
+        if let Some(path) = initial {
+            command.arg(format!("--filename={}/", path.display()));
+        }
+        command.output()
+    };
     let result = result.map_err(|error| {
         format!("Cannot open folder chooser ({error}); enter the folder path manually")
     })?;
@@ -315,6 +400,60 @@ fn pick_folder() -> Result<Option<PathBuf>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disconnected_export_unblocks_the_panel() {
+        let mut panel = ExportPanel::new(&OutputPanel::new_with_filename("slides.pptx"));
+        let (tx, rx) = mpsc::channel();
+        panel.export = Some(rx);
+        drop(tx);
+        panel.poll(Language::English);
+        assert!(!panel.is_busy());
+        assert!(panel.status.contains("unexpectedly"));
+    }
+
+    #[test]
+    fn picker_defaults_to_latest_session_and_respects_explicit_folder() {
+        let root = tempfile::tempdir().unwrap();
+        let old = root.path().join("sessions/20260101-100000-old/slides");
+        let latest = root.path().join("sessions/20260201-100000-new/slides");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::create_dir_all(&latest).unwrap();
+        let mut settings = OutputPanel::new_with_filename("deck.pptx");
+        settings.output_dir = root.path().display().to_string();
+        let mut panel = ExportPanel::new(&settings);
+        assert_eq!(panel.initial_folder(), Some(latest));
+        panel.source_dir = old.display().to_string();
+        assert_eq!(panel.initial_folder(), Some(old));
+    }
+
+    #[test]
+    fn changing_recording_root_does_not_use_a_cached_session_from_old_root() {
+        let old_root = tempfile::tempdir().unwrap();
+        let new_root = tempfile::tempdir().unwrap();
+        let old = old_root.path().join("sessions/20260101-100000-old/slides");
+        let new = new_root.path().join("sessions/20260201-100000-new/slides");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::create_dir_all(&new).unwrap();
+        let mut panel = ExportPanel::new(&OutputPanel::new_with_filename("deck.pptx"));
+        panel.latest_slides = Some(old);
+        panel.recording_root = new_root.path().into();
+        assert_eq!(panel.initial_folder(), Some(new));
+    }
+
+    #[test]
+    fn picker_selects_newest_session_when_multiple_start_in_same_second() {
+        let root = tempfile::tempdir().unwrap();
+        let old = root.path().join("sessions/20260101-100000-zzzz/slides");
+        let new = root.path().join("sessions/20260101-100000-aaaa/slides");
+        std::fs::create_dir_all(&old).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::create_dir_all(&new).unwrap();
+        let mut settings = OutputPanel::new_with_filename("deck.pptx");
+        settings.output_dir = root.path().display().to_string();
+        let panel = ExportPanel::new(&settings);
+        assert_eq!(panel.initial_folder(), Some(new));
+    }
 
     #[test]
     fn directory_export_runs_in_background_and_reports_its_output_folder() {
@@ -340,5 +479,34 @@ mod tests {
             panel.status
         );
         assert!(panel.output_to_open.unwrap().join("slides.pptx").is_file());
+    }
+
+    #[test]
+    fn export_refreshes_automatic_filename_when_started() {
+        let source = tempfile::tempdir().unwrap();
+        let output = tempfile::tempdir().unwrap();
+        image::RgbImage::from_pixel(2, 2, image::Rgb([255, 0, 0]))
+            .save(source.path().join("1.png"))
+            .unwrap();
+        let mut settings = OutputPanel::new_with_filename("ppt-capture-20000101-000000.pptx");
+        settings.output_dir = output.path().display().to_string();
+        let mut panel = ExportPanel::new(&settings);
+        panel.source_dir = source.path().display().to_string();
+        panel.start(Language::English);
+        assert_ne!(
+            panel.settings.output_filename,
+            "ppt-capture-20000101-000000.pptx"
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while panel.is_busy() && std::time::Instant::now() < deadline {
+            panel.poll(Language::English);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(!panel.is_busy());
+        assert!(panel
+            .output_to_open
+            .unwrap()
+            .join(panel.settings.output_filename)
+            .is_file());
     }
 }

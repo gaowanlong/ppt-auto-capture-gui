@@ -5,6 +5,21 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+pub fn filename_for_new_operation(filename: &str) -> String {
+    let automatic = filename
+        .strip_prefix("ppt-capture-")
+        .and_then(|s| s.strip_suffix(".pptx"))
+        .is_some_and(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y%m%d-%H%M%S").is_ok());
+    if automatic {
+        format!(
+            "ppt-capture-{}.pptx",
+            chrono::Local::now().format("%Y%m%d-%H%M%S")
+        )
+    } else {
+        filename.to_owned()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     /// Sample interval in milliseconds.
@@ -23,6 +38,8 @@ pub struct AppConfig {
     pub output_dir: String,
     /// Output PPTX filename.
     pub output_filename: String,
+    #[serde(default)]
+    pub filename_is_custom: bool,
     /// Page aspect ratio (e.g. "16:9", "4:3").
     pub page_ratio: String,
     /// Image fit mode: "fill" or "fit".
@@ -58,6 +75,7 @@ impl Default for AppConfig {
                 "ppt-capture-{}.pptx",
                 chrono::Local::now().format("%Y%m%d-%H%M%S")
             ),
+            filename_is_custom: false,
             page_ratio: "16:9".to_string(),
             image_fit: "fit".to_string(),
             auto_crop: false,

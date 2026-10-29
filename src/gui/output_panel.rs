@@ -5,6 +5,7 @@ use egui::*;
 pub struct OutputPanel {
     pub output_dir: String,
     pub output_filename: String,
+    pub filename_is_custom: bool,
     pub page_ratio: String,
     pub image_fit: String,
     pub auto_crop: bool,
@@ -18,6 +19,7 @@ impl OutputPanel {
         Self {
             output_dir: "output".into(),
             output_filename: filename.to_string(),
+            filename_is_custom: false,
             page_ratio: "16:9".into(),
             image_fit: "fit".into(),
             auto_crop: false,
@@ -38,7 +40,17 @@ impl OutputPanel {
             });
             ui.horizontal(|ui| {
                 ui.label(i18n::t_pptx_filename(language));
-                ui.add(TextEdit::singleline(&mut self.output_filename));
+                if ui.add(TextEdit::singleline(&mut self.output_filename)).changed() {
+                    self.filename_is_custom = true;
+                }
+                if ui.button(match language { Language::Chinese => "自动命名", Language::English => "Automatic" }).clicked() {
+                    self.filename_is_custom = false;
+                    self.output_filename = format!("ppt-capture-{}.pptx", chrono::Local::now().format("%Y%m%d-%H%M%S"));
+                }
+            });
+            ui.label(match language {
+                Language::Chinese => "默认文件名在每次开始录制时自动更新；自定义文件名保持不变。",
+                Language::English => "The default filename updates when recording starts; custom filenames are kept.",
             });
 
             ui.separator();

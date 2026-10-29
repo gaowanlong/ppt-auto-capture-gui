@@ -33,6 +33,7 @@ pub enum WorkerEvent {
     SessionStarted(String),
     StartFailed(String),
     ScreenshotsPreserved(String),
+    FinalizationFailed,
     StateChanged(CaptureState),
     FrameCaptured {
         frame_index: u64,
@@ -551,6 +552,9 @@ impl WorkerLoop {
                         CaptureState::Paused
                     };
                     self.dxgi_capturer.release();
+                    if self.state == CaptureState::Paused {
+                        let _ = self.event_tx.send(WorkerEvent::FinalizationFailed);
+                    }
                     let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
                 }
                 WorkerCommand::StopAndKeepScreenshots => {
@@ -560,6 +564,7 @@ impl WorkerLoop {
                             let _ = self.event_tx.send(WorkerEvent::Error(format!(
                                 "Cannot preserve pending screenshot; recording remains paused: {error:#}"
                             )));
+                            let _ = self.event_tx.send(WorkerEvent::FinalizationFailed);
                             let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
                             continue;
                         }
@@ -572,6 +577,7 @@ impl WorkerLoop {
                             let _ = self.event_tx.send(WorkerEvent::Error(format!(
                                 "Cannot preserve session for recovery; recording remains paused: {error:#}"
                             )));
+                            let _ = self.event_tx.send(WorkerEvent::FinalizationFailed);
                             let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
                             continue;
                         }
