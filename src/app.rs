@@ -50,6 +50,10 @@ pub struct PptAutoCaptureApp {
     pending_session_delete: Option<std::path::PathBuf>,
     session_delete_rx: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
     deleting_session_dir: Option<std::path::PathBuf>,
+    show_session_list: bool,
+    session_folders: Vec<std::path::PathBuf>,
+    session_list_selected: Option<std::path::PathBuf>,
+    session_list_error: Option<String>,
     language: Language,
     diagnostic_history: DiagnosticHistory,
     log_directory: Option<std::path::PathBuf>,
@@ -101,6 +105,10 @@ impl PptAutoCaptureApp {
             pending_session_delete: None,
             session_delete_rx: None,
             deleting_session_dir: None,
+            show_session_list: false,
+            session_folders: Vec::new(),
+            session_list_selected: None,
+            session_list_error: None,
             language: config.language,
             diagnostic_history: DiagnosticHistory::new(20),
             log_directory: logging.log_directory,
@@ -479,6 +487,52 @@ impl PptAutoCaptureApp {
         self.pending_session_delete = Some(directory);
     }
 
+    fn open_session_list(&mut self) {
+        self.show_session_list = true;
+        self.session_list_error = None;
+        self.dashboard.cleanup_status = None;
+        self.refresh_session_list();
+    }
+
+    fn refresh_session_list(&mut self) {
+        let root = if self.output_panel.output_dir.trim().is_empty() {
+            std::path::PathBuf::from(".")
+        } else {
+            std::path::PathBuf::from(self.output_panel.output_dir.trim())
+        };
+        match crate::storage::list_session_folders(&root) {
+            Ok(folders) => {
+                if self
+                    .session_list_selected
+                    .as_ref()
+                    .is_some_and(|selected| !folders.contains(selected))
+                {
+                    self.session_list_selected = None;
+                }
+                self.session_folders = folders;
+                self.session_list_error = None;
+            }
+            Err(error) => {
+                self.session_folders.clear();
+                self.session_list_selected = None;
+                self.session_list_error = Some(format!("{error:#}"));
+            }
+        }
+    }
+
+    fn request_selected_session_delete(&mut self) {
+        if self.dashboard.session_active
+            || self.dashboard.stopping
+            || self.session_delete_rx.is_some()
+            || self.recovery_rx.is_some()
+        {
+            return;
+        }
+        if let Some(selected) = self.session_list_selected.clone() {
+            self.pending_session_delete = Some(selected);
+        }
+    }
+
     fn start_session_delete(&mut self, directory: std::path::PathBuf) {
         if self.session_delete_rx.is_some() {
             return;
@@ -569,6 +623,9 @@ impl PptAutoCaptureApp {
                 };
                 self.record_error("cleanup", message);
             }
+        }
+        if self.show_session_list {
+            self.refresh_session_list();
         }
     }
 
@@ -1082,6 +1139,15 @@ impl eframe::App for PptAutoCaptureApp {
                             let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
                         }
                     }
+                    if ui
+                        .button(match self.language {
+                            Language::Chinese => "管理录制文件夹…",
+                            Language::English => "Manage recording folders…",
+                        })
+                        .clicked()
+                    {
+                        self.open_session_list();
+                    }
                     // Sync output filename to dashboard
                     if self.dashboard.output_path.is_empty() {
                         self.dashboard.output_path = output_path(&self.output_panel);
@@ -1152,6 +1218,105 @@ impl eframe::App for PptAutoCaptureApp {
                 self.start_session_delete(directory);
             } else if cancelled || ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
                 self.pending_session_delete = None;
+            }
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+
+        if self.show_session_list && self.pending_session_delete.is_none() {
+            let mut open = true;
+            egui::Window::new(match self.language {
+                Language::Chinese => "录制文件夹",
+                Language::English => "Recording folders",
+            })
+            .open(&mut open)
+            .default_width(520.0)
+            .collapsible(false)
+            .resizable(true)
+            .show(ctx, |ui| {
+                ui.label(match self.language {
+                    Language::Chinese => {
+                        "选择一个录制文件夹进行删除。未完成的录制也会列出，删除后无法再恢复。"
+                    }
+                    Language::English => {
+                        "Select a recording folder to delete. Unfinished recordings are listed too and cannot be recovered after deletion."
+                    }
+                });
+                if let Some(error) = &self.session_list_error {
+                    ui.colored_label(egui::Color32::RED, error);
+                }
+                if self.session_folders.is_empty() {
+                    ui.label(match self.language {
+                        Language::Chinese => "当前输出目录下没有录制文件夹。",
+                        Language::English => "No recording folders exist under the current output directory.",
+                    });
+                } else {
+                    egui::ScrollArea::vertical()
+                        .max_height(220.0)
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            for folder in &self.session_folders {
+                                let name = folder
+                                    .file_name()
+                                    .map(|name| name.to_string_lossy().into_owned())
+                                    .unwrap_or_default();
+                                ui.selectable_value(
+                                    &mut self.session_list_selected,
+                                    Some(folder.clone()),
+                                    name,
+                                );
+                            }
+                        });
+                }
+                ui.horizontal(|ui| {
+                    if ui
+                        .button(match self.language {
+                            Language::Chinese => "刷新",
+                            Language::English => "Refresh",
+                        })
+                        .clicked()
+                    {
+                        self.refresh_session_list();
+                    }
+                    let can_delete = self.session_list_selected.is_some()
+                        && !self.dashboard.session_active
+                        && !self.dashboard.stopping
+                        && self.session_delete_rx.is_none()
+                        && self.recovery_rx.is_none();
+                    if ui
+                        .add_enabled(
+                            can_delete,
+                            egui::Button::new(match self.language {
+                                Language::Chinese => "删除所选文件夹…",
+                                Language::English => "Delete selected folder…",
+                            }),
+                        )
+                        .clicked()
+                    {
+                        self.request_selected_session_delete();
+                    }
+                });
+                if self.session_delete_rx.is_some() {
+                    ui.label(match self.language {
+                        Language::Chinese => "正在删除录制文件夹，文件被占用时会自动重试…",
+                        Language::English => {
+                            "Deleting the recording folder; retrying while files are busy…"
+                        }
+                    });
+                } else if let Some(status) = &self.dashboard.cleanup_status {
+                    ui.label(status);
+                }
+                ui.separator();
+                ui.label(match self.language {
+                    Language::Chinese => {
+                        "Windows 上若文件夹被 WPS、PowerPoint、杀毒软件或同步工具占用，删除会自动重试并报告占用它的程序。"
+                    }
+                    Language::English => {
+                        "On Windows, if WPS, PowerPoint, antivirus, or a sync tool is using a folder, deletion retries and then reports the program holding it."
+                    }
+                });
+            });
+            if !open {
+                self.show_session_list = false;
             }
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
@@ -1455,6 +1620,30 @@ mod tests {
 
         assert!(app.pending_session_delete.is_none());
         assert!(app.dashboard.last_error.is_some());
+    }
+
+    #[test]
+    fn session_list_selects_listed_folders_for_deletion() {
+        let root = tempfile::tempdir().unwrap();
+        let session =
+            crate::storage::SessionStore::create(root.path(), "deck.pptx", "16:9", "fit").unwrap();
+        let mut app = std::mem::ManuallyDrop::new(PptAutoCaptureApp::new(LoggingSetup {
+            log_directory: None,
+            log_file: None,
+            warning: None,
+        }));
+        app.output_panel.output_dir = root.path().to_string_lossy().into_owned();
+
+        app.open_session_list();
+
+        assert!(app.show_session_list);
+        assert_eq!(app.session_folders, vec![session.directory.clone()]);
+        app.session_list_selected = Some(session.directory.clone());
+        app.request_selected_session_delete();
+        assert_eq!(
+            app.pending_session_delete.as_deref(),
+            Some(session.directory.as_path())
+        );
     }
 
     fn monitor(id: u64, primary: bool) -> MonitorInfo {

@@ -15,8 +15,34 @@ use anyhow::bail;
 
 const RETRY_DELAYS_MS: [u64; 6] = [0, 150, 350, 750, 1200, 2000];
 
+/// List recording session folders under `<output>/sessions`, newest first.
+/// Only direct children that contain a session journal are returned.
+pub fn list_session_folders(output_root: &Path) -> Result<Vec<std::path::PathBuf>> {
+    let sessions = output_root.join("sessions");
+    if !sessions.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut folders = Vec::new();
+    for entry in std::fs::read_dir(&sessions)
+        .with_context(|| format!("Cannot inspect sessions folder {}", sessions.display()))?
+    {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        let path = entry.path();
+        if file_type.is_dir() && path.join("session.json").is_file() {
+            folders.push(path);
+        }
+    }
+    folders.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+    Ok(folders)
+}
+
 /// Delete a single session folder after proving it is a direct child of the
-/// recordings `sessions` directory and contains a session journal.
+/// recordings `sessions` directory and is recognizable as a session.
 pub fn delete_session(session_dir: &Path, sessions_root: &Path) -> Result<()> {
     if !session_dir.exists() {
         return Ok(());
@@ -41,8 +67,15 @@ pub fn delete_session(session_dir: &Path, sessions_root: &Path) -> Result<()> {
         "Refusing to delete a folder outside the sessions directory: {}",
         directory.display()
     );
+    // A failed removal can delete session.json before a locked file stops it.
+    // Accept the generated `<timestamp>-<uuid>` name as proof for retries.
+    let has_journal = directory.join("session.json").is_file();
+    let generated_name = directory
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(looks_like_generated_session_name);
     ensure!(
-        directory.join("session.json").is_file(),
+        has_journal || generated_name,
         "Refusing to delete a folder without a session journal: {}",
         directory.display()
     );
@@ -81,6 +114,18 @@ pub fn delete_session(session_dir: &Path, sessions_root: &Path) -> Result<()> {
             directory.display()
         )
     })
+}
+
+fn looks_like_generated_session_name(name: &str) -> bool {
+    let mut parts = name.splitn(3, '-');
+    let (Some(date), Some(time), Some(id)) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    date.len() == 8
+        && date.bytes().all(|byte| byte.is_ascii_digit())
+        && time.len() == 6
+        && time.bytes().all(|byte| byte.is_ascii_digit())
+        && uuid::Uuid::parse_str(id).is_ok()
 }
 
 #[cfg(target_os = "windows")]
@@ -301,13 +346,53 @@ mod tests {
         assert!(folder.exists());
     }
 
+    #[test]
+    fn lists_only_session_folders_newest_first() {
+        let root = tempfile::tempdir().unwrap();
+        session_folder(root.path(), "20260101-000001-older");
+        session_folder(root.path(), "20260102-000000-newer");
+        std::fs::create_dir_all(root.path().join("sessions/not-a-session")).unwrap();
+        std::fs::write(root.path().join("sessions/stray.txt"), b"x").unwrap();
+
+        let folders = list_session_folders(root.path()).unwrap();
+
+        let names: Vec<_> = folders
+            .iter()
+            .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["20260102-000000-newer", "20260101-000001-older"]);
+    }
+
+    #[test]
+    fn lists_no_sessions_when_the_output_has_none() {
+        let root = tempfile::tempdir().unwrap();
+
+        assert!(list_session_folders(root.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn retries_a_partially_deleted_session_without_its_journal() {
+        let root = tempfile::tempdir().unwrap();
+        let sessions = root.path().join("sessions");
+        let folder = sessions.join(format!("20260101-000000-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(folder.join("slides")).unwrap();
+        std::fs::write(folder.join("slides/slide_0001.png"), b"image").unwrap();
+
+        delete_session(&folder, &sessions).unwrap();
+
+        assert!(!folder.exists());
+    }
+
     #[cfg(target_os = "windows")]
     #[test]
     fn reports_the_program_holding_a_session_file() {
         use std::os::windows::fs::OpenOptionsExt;
 
         let root = tempfile::tempdir().unwrap();
-        let folder = session_folder(root.path(), "20260101-000000-test");
+        let folder = session_folder(
+            root.path(),
+            &format!("20260101-000000-{}", uuid::Uuid::new_v4()),
+        );
         let sessions = root.path().join("sessions");
         let locked = std::fs::OpenOptions::new()
             .read(true)
