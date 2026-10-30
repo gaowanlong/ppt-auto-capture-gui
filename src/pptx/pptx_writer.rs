@@ -559,7 +559,7 @@ mod tests {
         let mut screenshot = image::RgbImage::from_pixel(400, 300, image::Rgb([35, 35, 35]));
         for y in 60..240 {
             for x in 40..360 {
-                screenshot.put_pixel(x, y, image::Rgb([235, 235, 235]));
+                screenshot.put_pixel(x, y, image::Rgb([255, 255, 255]));
             }
         }
         screenshot.save(&path).unwrap();

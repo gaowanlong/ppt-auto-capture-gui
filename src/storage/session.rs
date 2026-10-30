@@ -356,7 +356,7 @@ mod tests {
         for y in 60..240 {
             for x in 40..360 {
                 let offset = (y * 400 + x) * 4;
-                pixels[offset..offset + 4].copy_from_slice(&[235, 235, 235, 255]);
+                pixels[offset..offset + 4].copy_from_slice(&[255, 255, 255, 255]);
             }
         }
         let image = Frame::new(pixels, 400, 300, 1600, 1, 0);
