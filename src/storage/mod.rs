@@ -1,10 +1,12 @@
 mod atomic_file;
+mod cleanup;
 mod image_store;
 mod import;
 mod manifest_store;
 mod recovery;
 mod session;
 
+pub use cleanup::*;
 pub use image_store::*;
 pub use import::*;
 pub use manifest_store::*;

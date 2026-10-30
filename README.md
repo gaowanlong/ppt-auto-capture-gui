@@ -50,6 +50,8 @@ If saving a screenshot fails, capture pauses and retains the pending frame in me
 
 When PPTX generation remains blocked, **Stop and keep screenshots (generate PPTX later)** ends capture without retrying the PPTX and keeps its PNGs and incomplete journal for recovery on restart. If a pending screenshot cannot be durably written, the recording stays paused instead of discarding it. The diagnostic message includes the underlying system error and any completed temporary PPTX path. On Windows the application briefly retries transient sharing or access errors; a persistently locked file still needs attention.
 
+The dashboard also offers **Delete this recording's folder**. It asks for confirmation and then removes only the current session directory (never the shared `sessions` folder or unrelated files). On Windows a single open file handle prevents its whole directory from being deleted, even after the application exits. Deletion therefore retries for several seconds, clears read-only attributes, and, if it still fails, asks the Windows Restart Manager which processes are using files in the folder and reports their names and PIDs. Typical holders are WPS or Office preview handlers, antivirus scans, and cloud-sync clients; close the reported program and choose Delete again. If no process is named, the dashboard's **Copy diagnostics** report records the failure for support.
+
 The **Create PPTX** tab imports PNG and JPEG images directly from a selected folder, in natural filename order, into a separate export folder. It also uses the 50-slide limit and leaves the source files unchanged. The optional automatic crop scans inward from the outer edges of a desktop screenshot, detects the large light presentation canvas, and trims the taskbar, meeting-window chrome, and letterbox bars around it. It keeps colored title and footer bands as well as photos that touch the slide edge, snaps the final boundary at full resolution, and crops to the actual canvas aspect ratio instead of forcing 16:9 or 4:3. A conservative dark-background fallback applies only when a clear rectangle with standard ratio is found; otherwise the full image is used rather than risk black bars or cutting into the slide. Cropping changes only the image embedded in PPTX, never the original screenshots. Detection is heuristic, so inspect generated files before relying on the result.
 
 On restart, recovery rebuilds unfinished recordings from their journal and PNGs, preserving the original filename, slide size, and image-fit setting. Keep each session folder together. Missing/corrupt images or journals produce an error instead of a silently incomplete presentation; existing PPTX files remain intact. Legacy `manifest.jsonl` recordings lack layout metadata and therefore retain the old 16:9/fit recovery default. Recovery cannot infer pages already overwritten by older versions.
@@ -96,7 +98,7 @@ cargo build --release
 cargo build --release --target aarch64-apple-darwin
 bash scripts/package-macos-dmg.sh \
   target/aarch64-apple-darwin/release/ppt-auto-capture-gui \
-  2.6.0 \
+  2.6.1 \
   dist/ppt-auto-capture-gui-macos-apple-silicon.dmg
 ```
 

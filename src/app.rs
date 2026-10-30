@@ -47,6 +47,9 @@ pub struct PptAutoCaptureApp {
     recovery_declined: bool,
     recovery_rx: Option<std::sync::mpsc::Receiver<Result<Vec<std::path::PathBuf>, String>>>,
     recovery_error: Option<String>,
+    pending_session_delete: Option<std::path::PathBuf>,
+    session_delete_rx: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
+    deleting_session_dir: Option<std::path::PathBuf>,
     language: Language,
     diagnostic_history: DiagnosticHistory,
     log_directory: Option<std::path::PathBuf>,
@@ -95,6 +98,9 @@ impl PptAutoCaptureApp {
             recovery_declined: false,
             recovery_rx: None,
             recovery_error: None,
+            pending_session_delete: None,
+            session_delete_rx: None,
+            deleting_session_dir: None,
             language: config.language,
             diagnostic_history: DiagnosticHistory::new(20),
             log_directory: logging.log_directory,
@@ -273,6 +279,8 @@ impl PptAutoCaptureApp {
         }
         self.dashboard.session_active = true;
         self.dashboard.saved_slides_count = 0;
+        self.dashboard.cleanup_status = None;
+        self.pending_session_delete = None;
         self.dashboard.output_path = session_output.to_string_lossy().into_owned();
 
         if self.source_panel.full_screen_selected {
@@ -321,6 +329,16 @@ impl PptAutoCaptureApp {
     }
 
     fn request_safe_close(&mut self) -> bool {
+        if self.session_delete_rx.is_some() {
+            self.dashboard.cleanup_status = Some(
+                match self.language {
+                    Language::Chinese => "正在删除录制文件夹，请稍候…",
+                    Language::English => "Deleting the recording folder, please wait…",
+                }
+                .to_string(),
+            );
+            return true;
+        }
         if self.export_panel.is_busy() || self.recovery_rx.is_some() {
             if self.export_panel.is_busy() {
                 self.active_tab = Tab::Export;
@@ -433,6 +451,124 @@ impl PptAutoCaptureApp {
                 self.record_error("recovery", message);
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        }
+    }
+
+    fn request_session_delete(&mut self) {
+        self.dashboard.delete_session_requested = false;
+        if self.dashboard.session_active
+            || self.dashboard.stopping
+            || self.session_delete_rx.is_some()
+            || self.recovery_rx.is_some()
+        {
+            return;
+        }
+        let Some(directory) = session_directory(&self.dashboard.output_path) else {
+            self.record_error(
+                "cleanup",
+                match self.language {
+                    Language::Chinese => "只能删除本次录制会话自己的文件夹".to_string(),
+                    Language::English => {
+                        "Only this recording session's own folder can be deleted".to_string()
+                    }
+                },
+            );
+            return;
+        };
+        self.dashboard.cleanup_status = None;
+        self.pending_session_delete = Some(directory);
+    }
+
+    fn start_session_delete(&mut self, directory: std::path::PathBuf) {
+        if self.session_delete_rx.is_some() {
+            return;
+        }
+        let Some(sessions_root) = directory.parent().map(|parent| parent.to_path_buf()) else {
+            return;
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        let target = directory.clone();
+        match std::thread::Builder::new()
+            .name("session-cleanup".into())
+            .spawn(move || {
+                let result = std::panic::catch_unwind(|| {
+                    crate::storage::delete_session(&target, &sessions_root)
+                })
+                .map_err(|_| "Deletion stopped unexpectedly".to_string())
+                .and_then(|result| result.map_err(|error| format!("{error:#}")));
+                let _ = tx.send(result);
+            }) {
+            Ok(_) => {
+                self.session_delete_rx = Some(rx);
+                self.deleting_session_dir = Some(directory);
+                self.dashboard.deleting_session = true;
+                self.dashboard.cleanup_status = Some(
+                    match self.language {
+                        Language::Chinese => "正在删除录制文件夹，文件被占用时会自动重试…",
+                        Language::English => {
+                            "Deleting the recording folder; retrying while files are busy…"
+                        }
+                    }
+                    .to_string(),
+                );
+            }
+            Err(error) => {
+                self.dashboard.deleting_session = false;
+                self.record_error(
+                    "cleanup",
+                    format!("Cannot start recording folder deletion: {error}"),
+                );
+            }
+        }
+    }
+
+    fn poll_session_deletion(&mut self) {
+        let Some(receiver) = self.session_delete_rx.as_ref() else {
+            return;
+        };
+        let outcome = match receiver.try_recv() {
+            Ok(outcome) => outcome,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                Err("Deletion worker disconnected".to_string())
+            }
+        };
+        self.session_delete_rx = None;
+        self.dashboard.deleting_session = false;
+        let deleted_directory = self.deleting_session_dir.take();
+        match outcome {
+            Ok(()) => {
+                info!("Deleted recording folder");
+                let still_current = deleted_directory.as_deref()
+                    == session_directory(&self.dashboard.output_path).as_deref();
+                if still_current {
+                    self.dashboard.saved_slides_count = 0;
+                    self.dashboard.output_path = output_path(&self.output_panel);
+                    self.export_panel.latest_slides = None;
+                    self.recovery_available = false;
+                    self.recovery_accepted = false;
+                    self.recovery_declined = false;
+                    self.recovery_error = None;
+                    if !self.dashboard.session_active {
+                        self.check_recovery();
+                    }
+                }
+                self.dashboard.cleanup_status = Some(
+                    match self.language {
+                        Language::Chinese => "已删除本次录制的文件夹。",
+                        Language::English => "The recording folder was deleted.",
+                    }
+                    .to_string(),
+                );
+            }
+            Err(message) => {
+                self.dashboard.cleanup_status = None;
+                let message = match self.language {
+                    Language::Chinese => format!("删除录制文件夹失败：{message}"),
+                    Language::English => message,
+                };
+                self.record_error("cleanup", message);
+            }
         }
     }
 
@@ -651,6 +787,16 @@ fn output_path(panel: &OutputPanel) -> String {
     )
 }
 
+/// Resolve the session folder that owns the dashboard's output file.
+/// Only direct children of a `sessions` directory qualify.
+fn session_directory(output_path: &str) -> Option<std::path::PathBuf> {
+    let directory = std::path::Path::new(output_path).parent()?.to_path_buf();
+    if directory.parent()?.file_name()? != std::ffi::OsStr::new("sessions") {
+        return None;
+    }
+    Some(directory)
+}
+
 fn apply_output_to_config(panel: &OutputPanel, config: &mut AppConfig) {
     config.output_dir = panel.output_dir.clone();
     config.output_filename = panel.output_filename.clone();
@@ -666,6 +812,7 @@ impl eframe::App for PptAutoCaptureApp {
         self.process_events();
         self.export_panel.poll(self.language);
         self.poll_recovery();
+        self.poll_session_deletion();
 
         if self.close_after_stop
             && !self.dashboard.session_active
@@ -686,6 +833,9 @@ impl eframe::App for PptAutoCaptureApp {
             if let Some(directory) = path.parent() {
                 self.open_directory(directory);
             }
+        }
+        if self.dashboard.delete_session_requested {
+            self.request_session_delete();
         }
 
         if self.recovery_available && !self.recovery_accepted && !self.recovery_declined {
@@ -838,12 +988,15 @@ impl eframe::App for PptAutoCaptureApp {
                     if self.dashboard.output_path.is_empty() {
                         self.dashboard.output_path = output_path(&self.output_panel);
                     }
+                    let session_folder_available =
+                        session_directory(&self.dashboard.output_path).is_some();
                     self.dashboard.render(
                         ui,
                         self.language,
                         DashboardRenderInput {
                             diagnostic_history: &self.diagnostic_history,
                             persistent_log_available: self.log_directory.is_some(),
+                            session_folder_available,
                             start_requested: &mut self.pending_start,
                             pause_requested: &mut self.pending_pause,
                             stop_requested: &mut self.pending_stop,
@@ -943,6 +1096,65 @@ impl eframe::App for PptAutoCaptureApp {
                 }
             }
         });
+
+        if let Some(directory) = self.pending_session_delete.clone() {
+            let mut confirmed = false;
+            let mut cancelled = false;
+            egui::Window::new(match self.language {
+                Language::Chinese => "删除录制文件夹",
+                Language::English => "Delete recording folder",
+            })
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label(match self.language {
+                    Language::Chinese => {
+                        "将永久删除本次录制的文件夹，包括其中的截图和 PPTX："
+                    }
+                    Language::English => {
+                        "This permanently deletes this recording's folder, including its screenshots and PPTX files:"
+                    }
+                });
+                ui.label(directory.display().to_string());
+                ui.label(match self.language {
+                    Language::Chinese => {
+                        "若文件正被其他程序（如 WPS、PowerPoint、杀毒软件或同步工具）占用，删除会自动重试，并在失败时指出占用它的程序。"
+                    }
+                    Language::English => {
+                        "If another program (WPS, PowerPoint, antivirus, or a sync tool) is using the files, deletion retries and then names the program holding them."
+                    }
+                });
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if ui
+                        .button(match self.language {
+                            Language::Chinese => "永久删除",
+                            Language::English => "Delete permanently",
+                        })
+                        .clicked()
+                    {
+                        confirmed = true;
+                    }
+                    if ui
+                        .button(match self.language {
+                            Language::Chinese => "取消",
+                            Language::English => "Cancel",
+                        })
+                        .clicked()
+                    {
+                        cancelled = true;
+                    }
+                });
+            });
+            if confirmed {
+                self.pending_session_delete = None;
+                self.start_session_delete(directory);
+            } else if cancelled || ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+                self.pending_session_delete = None;
+            }
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
 
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
     }
@@ -1175,6 +1387,74 @@ mod tests {
         assert!(app.recovery_rx.is_none());
         assert!(app.recovery_accepted);
         assert!(session.output_path().is_file());
+    }
+
+    #[test]
+    fn session_directory_only_accepts_direct_children_of_a_sessions_folder() {
+        assert_eq!(
+            session_directory("/work/output/sessions/20260101-000000-test/deck.pptx"),
+            Some(std::path::PathBuf::from(
+                "/work/output/sessions/20260101-000000-test"
+            ))
+        );
+        assert!(session_directory("/work/output/deck.pptx").is_none());
+        assert!(session_directory("/work/output/sessions/deck.pptx").is_none());
+        assert!(session_directory("/work/output/sessions/a/b/deck.pptx").is_none());
+    }
+
+    #[test]
+    fn current_recording_folder_is_deleted_in_the_background() {
+        let root = tempfile::tempdir().unwrap();
+        let session =
+            crate::storage::SessionStore::create(root.path(), "deck.pptx", "16:9", "fit").unwrap();
+        let directory = session.directory.clone();
+        let mut app = std::mem::ManuallyDrop::new(PptAutoCaptureApp::new(LoggingSetup {
+            log_directory: None,
+            log_file: None,
+            warning: None,
+        }));
+        app.output_dir = root.path().to_string_lossy().into_owned();
+        app.dashboard.output_path = session.output_path().display().to_string();
+        app.dashboard.saved_slides_count = 2;
+        app.export_panel.latest_slides = Some(directory.join("slides"));
+
+        app.request_session_delete();
+        assert_eq!(
+            app.pending_session_delete.as_deref(),
+            Some(directory.as_path())
+        );
+        let pending = app.pending_session_delete.take().unwrap();
+        app.start_session_delete(pending);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while app.session_delete_rx.is_some() && std::time::Instant::now() < deadline {
+            app.poll_session_deletion();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        assert!(app.session_delete_rx.is_none());
+        assert!(!app.dashboard.deleting_session);
+        assert!(!directory.exists());
+        assert_eq!(app.dashboard.saved_slides_count, 0);
+        assert_eq!(app.dashboard.output_path, output_path(&app.output_panel));
+        assert!(app.export_panel.latest_slides.is_none());
+        assert!(app.dashboard.cleanup_status.is_some());
+        assert!(app.dashboard.last_error.is_none());
+    }
+
+    #[test]
+    fn delete_request_outside_a_session_folder_is_rejected() {
+        let mut app = std::mem::ManuallyDrop::new(PptAutoCaptureApp::new(LoggingSetup {
+            log_directory: None,
+            log_file: None,
+            warning: None,
+        }));
+        app.dashboard.output_path = "output/output.pptx".into();
+        app.dashboard.saved_slides_count = 1;
+
+        app.request_session_delete();
+
+        assert!(app.pending_session_delete.is_none());
+        assert!(app.dashboard.last_error.is_some());
     }
 
     fn monitor(id: u64, primary: bool) -> MonitorInfo {

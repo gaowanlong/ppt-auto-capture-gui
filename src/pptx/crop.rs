@@ -1004,7 +1004,6 @@ pub(super) fn detect_presentation(image: &DynamicImage) -> Option<(u32, u32, u32
 #[cfg(test)]
 mod tests {
     use super::*;
-    use image::GenericImageView;
 
     const WHITE: [u8; 3] = [255, 255, 255];
     const BLACK: [u8; 3] = [0, 0, 0];

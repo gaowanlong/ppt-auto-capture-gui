@@ -23,6 +23,9 @@ pub struct DashboardPanel {
     pub open_log_directory_requested: bool,
     pub diagnostics_status: Option<String>,
     pub open_session_requested: bool,
+    pub delete_session_requested: bool,
+    pub deleting_session: bool,
+    pub cleanup_status: Option<String>,
     pub keep_screenshots_requested: bool,
     diagnostics_status_expires_at: Option<Instant>,
     preview_texture: Option<TextureHandle>,
@@ -32,6 +35,7 @@ pub struct DashboardPanel {
 pub struct DashboardRenderInput<'a> {
     pub diagnostic_history: &'a DiagnosticHistory,
     pub persistent_log_available: bool,
+    pub session_folder_available: bool,
     pub start_requested: &'a mut bool,
     pub pause_requested: &'a mut bool,
     pub stop_requested: &'a mut bool,
@@ -57,6 +61,9 @@ impl DashboardPanel {
             open_log_directory_requested: false,
             diagnostics_status: None,
             open_session_requested: false,
+            delete_session_requested: false,
+            deleting_session: false,
+            cleanup_status: None,
             keep_screenshots_requested: false,
             diagnostics_status_expires_at: None,
             preview_texture: None,
@@ -146,9 +153,27 @@ impl DashboardPanel {
                 _ => "",
             };
             if !hint.is_empty() { ui.label(hint); }
-            if self.saved_slides_count > 0 {
-                let label = match language { Language::English => "Open this recording's folder", Language::Chinese => "打开本次输出文件夹" };
-                if ui.button(label).clicked() { self.open_session_requested = true; }
+            if self.saved_slides_count > 0 || input.session_folder_available {
+                ui.horizontal(|ui| {
+                    if self.saved_slides_count > 0 {
+                        let label = match language { Language::English => "Open this recording's folder", Language::Chinese => "打开本次输出文件夹" };
+                        if ui.button(label).clicked() { self.open_session_requested = true; }
+                    }
+                    if input.session_folder_available {
+                        let delete_label = if self.deleting_session {
+                            match language { Language::English => "Deleting recording folder…", Language::Chinese => "正在删除录制文件夹…" }
+                        } else {
+                            match language { Language::English => "Delete this recording's folder…", Language::Chinese => "删除本次输出文件夹…" }
+                        };
+                        let can_delete = !self.session_active && !self.stopping && !self.deleting_session;
+                        if ui.add_enabled(can_delete, egui::Button::new(delete_label)).clicked() {
+                            self.delete_session_requested = true;
+                        }
+                    }
+                });
+            }
+            if let Some(status) = &self.cleanup_status {
+                ui.label(status);
             }
 
             let info_rows: [(&str, &str); 4] = [
@@ -341,6 +366,7 @@ mod tests {
                         DashboardRenderInput {
                             diagnostic_history: &history,
                             persistent_log_available: true,
+                            session_folder_available: true,
                             start_requested: start,
                             pause_requested: pause,
                             stop_requested: stop,
@@ -410,6 +436,7 @@ mod tests {
             let input = DashboardRenderInput {
                 diagnostic_history: &history,
                 persistent_log_available: true,
+                session_folder_available: true,
                 start_requested: &mut start_requested,
                 pause_requested: &mut pause_requested,
                 stop_requested: &mut stop_requested,
