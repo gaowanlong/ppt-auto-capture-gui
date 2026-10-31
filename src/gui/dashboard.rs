@@ -215,7 +215,7 @@ impl DashboardPanel {
 
         Frame::new()
             .fill(fill)
-            .stroke(Stroke::new(1.0, border))
+            .stroke(Stroke::new(1.0_f32, border))
             .corner_radius(CornerRadius::same(12))
             .inner_margin(Margin::symmetric(22, 20))
             .show(ui, |ui| {
@@ -795,7 +795,7 @@ fn draw_stage(ui: &mut Ui, recording: bool, count: u32, language: Language) {
         slide,
         CornerRadius::same(7),
         token::SURFACE,
-        Stroke::new(1.0, token::LINE),
+        Stroke::new(1.0_f32, token::LINE),
         StrokeKind::Inside,
     );
     painter.text(

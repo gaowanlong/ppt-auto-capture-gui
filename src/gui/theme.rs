@@ -64,7 +64,7 @@ pub fn apply(ctx: &egui::Context) {
     let mut visuals = egui::Visuals::light();
     visuals.panel_fill = token::BG;
     visuals.window_fill = token::SURFACE;
-    visuals.window_stroke = Stroke::new(1.0, token::LINE);
+    visuals.window_stroke = Stroke::new(1.0_f32, token::LINE);
     visuals.window_corner_radius = CornerRadius::same(14);
     visuals.menu_corner_radius = CornerRadius::same(10);
     visuals.extreme_bg_color = token::SURFACE_SOFT;
@@ -72,7 +72,7 @@ pub fn apply(ctx: &egui::Context) {
     visuals.code_bg_color = token::SURFACE_SOFT;
     visuals.selection = egui::style::Selection {
         bg_fill: token::PRIMARY_SOFT,
-        stroke: Stroke::new(1.0, token::PRIMARY),
+        stroke: Stroke::new(1.0_f32, token::PRIMARY),
     };
     visuals.hyperlink_color = token::PRIMARY;
     visuals.warn_fg_color = token::WARN;
@@ -97,33 +97,33 @@ pub fn apply(ctx: &egui::Context) {
     visuals.widgets.noninteractive = egui::style::WidgetVisuals {
         bg_fill: token::SURFACE,
         weak_bg_fill: token::SURFACE,
-        bg_stroke: Stroke::new(1.0, token::LINE),
+        bg_stroke: Stroke::new(1.0_f32, token::LINE),
         corner_radius: radius,
-        fg_stroke: Stroke::new(1.0, token::INK),
+        fg_stroke: Stroke::new(1.0_f32, token::INK),
         expansion: 0.0,
     };
     visuals.widgets.inactive = egui::style::WidgetVisuals {
         bg_fill: token::SURFACE,
         weak_bg_fill: token::SURFACE_SOFT,
-        bg_stroke: Stroke::new(1.0, token::LINE),
+        bg_stroke: Stroke::new(1.0_f32, token::LINE),
         corner_radius: radius,
-        fg_stroke: Stroke::new(1.0, token::INK),
+        fg_stroke: Stroke::new(1.0_f32, token::INK),
         expansion: 0.0,
     };
     visuals.widgets.hovered = egui::style::WidgetVisuals {
         bg_fill: token::SURFACE,
         weak_bg_fill: token::SIDEBAR_HOVER,
-        bg_stroke: Stroke::new(1.0, token::LINE_STRONG),
+        bg_stroke: Stroke::new(1.0_f32, token::LINE_STRONG),
         corner_radius: radius,
-        fg_stroke: Stroke::new(1.0, token::INK),
+        fg_stroke: Stroke::new(1.0_f32, token::INK),
         expansion: 0.0,
     };
     visuals.widgets.active = egui::style::WidgetVisuals {
         bg_fill: token::PRIMARY_SOFT,
         weak_bg_fill: token::PRIMARY_SOFT,
-        bg_stroke: Stroke::new(1.0, token::PRIMARY),
+        bg_stroke: Stroke::new(1.0_f32, token::PRIMARY),
         corner_radius: radius,
-        fg_stroke: Stroke::new(1.0, token::PRIMARY),
+        fg_stroke: Stroke::new(1.0_f32, token::PRIMARY),
         expansion: 0.0,
     };
     visuals.widgets.open = visuals.widgets.hovered;
@@ -146,7 +146,7 @@ pub fn apply(ctx: &egui::Context) {
 pub fn card() -> Frame {
     Frame::new()
         .fill(token::SURFACE)
-        .stroke(Stroke::new(1.0, token::LINE))
+        .stroke(Stroke::new(1.0_f32, token::LINE))
         .corner_radius(CornerRadius::same(12))
         .inner_margin(Margin::symmetric(20, 18))
 }
@@ -154,7 +154,7 @@ pub fn card() -> Frame {
 pub fn banner_frame(fill: Color32, stroke: Color32) -> Frame {
     Frame::new()
         .fill(fill)
-        .stroke(Stroke::new(1.0, stroke))
+        .stroke(Stroke::new(1.0_f32, stroke))
         .corner_radius(CornerRadius::same(10))
         .inner_margin(Margin::symmetric(16, 12))
 }
@@ -186,7 +186,7 @@ pub fn divider(ui: &mut Ui) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 1.0), Sense::hover());
     ui.painter().line_segment(
         [rect.left_center(), rect.right_center()],
-        Stroke::new(1.0, token::LINE),
+        Stroke::new(1.0_f32, token::LINE),
     );
     ui.add_space(10.0);
 }
@@ -207,7 +207,7 @@ pub fn primary_button(text: impl Into<String>) -> Button<'static> {
 pub fn secondary_button(text: impl Into<String>) -> Button<'static> {
     Button::new(RichText::new(text.into()).size(13.5).color(token::INK))
         .fill(token::SURFACE_SOFT)
-        .stroke(Stroke::new(1.0, token::LINE))
+        .stroke(Stroke::new(1.0_f32, token::LINE))
         .corner_radius(8)
         .min_size(Vec2::new(0.0, 36.0))
 }
@@ -215,7 +215,7 @@ pub fn secondary_button(text: impl Into<String>) -> Button<'static> {
 pub fn danger_button(text: impl Into<String>) -> Button<'static> {
     Button::new(RichText::new(text.into()).size(13.5).color(token::DANGER))
         .fill(token::DANGER_SOFT)
-        .stroke(Stroke::new(1.0, token::DANGER_LINE))
+        .stroke(Stroke::new(1.0_f32, token::DANGER_LINE))
         .corner_radius(8)
         .min_size(Vec2::new(0.0, 36.0))
 }
@@ -248,7 +248,7 @@ pub fn note_row(ui: &mut Ui, text: &str) {
 pub fn soft_frame() -> Frame {
     Frame::new()
         .fill(token::SURFACE_SOFT)
-        .stroke(Stroke::new(1.0, token::LINE))
+        .stroke(Stroke::new(1.0_f32, token::LINE))
         .corner_radius(CornerRadius::same(8))
         .inner_margin(Margin::symmetric(12, 9))
 }
@@ -346,13 +346,13 @@ fn slider_track(
     );
     let active = response.hovered() || response.dragged() || response.has_focus();
     if response.has_focus() && !response.dragged() {
-        painter.circle_stroke(center, 11.5, Stroke::new(1.0, token::PRIMARY_SOFT));
+        painter.circle_stroke(center, 11.5, Stroke::new(1.0_f32, token::PRIMARY_SOFT));
     }
     painter.circle(
         center,
         if active { 8.5 } else { 7.5 },
         token::SURFACE,
-        Stroke::new(2.0, token::PRIMARY),
+        Stroke::new(2.0_f32, token::PRIMARY),
     );
     response
 }
@@ -404,7 +404,7 @@ pub fn nav_item(ui: &mut Ui, selected: bool, icon: NavIcon, label: &str) -> Resp
 }
 
 fn paint_icon(painter: &egui::Painter, icon: NavIcon, center: egui::Pos2, color: Color32) {
-    let stroke = Stroke::new(1.5, color);
+    let stroke = Stroke::new(1.5_f32, color);
     let p = |dx: f32, dy: f32| center + Vec2::new(dx, dy);
     match icon {
         NavIcon::Overview => {
@@ -456,7 +456,7 @@ pub fn brand(ui: &mut Ui, language: Language) {
             rect,
             CornerRadius::same(4),
             token::SURFACE,
-            Stroke::new(1.5, token::INK),
+            Stroke::new(1.5_f32, token::INK),
             StrokeKind::Inside,
         );
         painter.circle_filled(rect.right_top() + Vec2::new(-7.0, 7.0), 2.6, token::RECORD);
@@ -465,7 +465,7 @@ pub fn brand(ui: &mut Ui, language: Language) {
                 rect.left_bottom() + Vec2::new(6.0, -6.0),
                 rect.right_bottom() + Vec2::new(-6.0, -6.0),
             ],
-            Stroke::new(1.5, token::INK),
+            Stroke::new(1.5_f32, token::INK),
         );
         ui.add_space(2.0);
         ui.vertical(|ui| {
@@ -507,7 +507,7 @@ pub fn language_switch(ui: &mut Ui, active: Language) -> Option<Language> {
             .stroke(if selected {
                 Stroke::NONE
             } else {
-                Stroke::new(1.0, token::LINE)
+                Stroke::new(1.0_f32, token::LINE)
             })
             .corner_radius(6)
             .min_size(Vec2::new(48.0, 26.0));
@@ -538,7 +538,7 @@ pub fn list_item(ui: &mut Ui, selected: bool, title: &str, detail: &str) -> Resp
         radio_center,
         6.0,
         Stroke::new(
-            1.5,
+            1.5_f32,
             if selected {
                 token::PRIMARY
             } else {
