@@ -142,6 +142,20 @@ pub fn t_deleting_recording_folder(lang: Language) -> &'static str {
         Language::Chinese => "正在删除…",
     }
 }
+pub fn t_retry_delete(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Retry delete",
+        Language::Chinese => "重试删除",
+    }
+}
+pub fn t_delete_folder_failed(lang: Language) -> &'static str {
+    match lang {
+        Language::English => {
+            "The recording folder is still in use. Close the program using it, then retry."
+        }
+        Language::Chinese => "录制文件夹仍被占用，请关闭占用它的程序后重试。",
+    }
+}
 pub fn t_manage_recording_folders(lang: Language) -> &'static str {
     match lang {
         Language::English => "Manage recording folders…",
@@ -580,6 +594,8 @@ mod tests {
             assert!(!t_start_recording(*lang).is_empty());
             assert!(!t_minimize_on_start(*lang).is_empty());
             assert!(!t_minimize_on_start_hint(*lang).is_empty());
+            assert!(!t_retry_delete(*lang).is_empty());
+            assert!(!t_delete_folder_failed(*lang).is_empty());
             assert!(!t_tab_export(*lang).is_empty());
         }
     }

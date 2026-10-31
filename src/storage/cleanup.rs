@@ -3,8 +3,10 @@
 //! A session folder lives directly under `<output>/sessions/`. Deleting it can
 //! fail on Windows while another program (a preview handler, an office suite,
 //! an antivirus scanner, or a sync client) still holds one of its files open.
-//! Deletion is retried briefly, and a failure reports which processes the
-//! system identifies as using the folder so the user can close them.
+//! Deletion is retried for about 18 seconds, then reports both the process that
+//! holds a file and any file or folder that still refuses deletion. The extra
+//! detail matters because an Explorer window holds the folder itself, which
+//! the Restart Manager does not report as a file user.
 
 use anyhow::{ensure, Context, Result};
 use std::path::Path;
@@ -13,7 +15,15 @@ use std::time::Duration;
 #[cfg(target_os = "windows")]
 use anyhow::bail;
 
-const RETRY_DELAYS_MS: [u64; 6] = [0, 150, 350, 750, 1200, 2000];
+// Freshly written screenshots and decks are often scanned by antivirus,
+// thumbnail providers, or sync clients for several seconds. Keep retrying long
+// enough for those transient handles to close; the UI runs this on a worker.
+#[cfg(not(test))]
+const RETRY_DELAYS_MS: [u64; 12] = [
+    0, 100, 200, 300, 500, 750, 1000, 1500, 2000, 3000, 4000, 5000,
+];
+#[cfg(test)]
+const RETRY_DELAYS_MS: [u64; 3] = [0, 10, 25];
 
 /// List recording session folders under `<output>/sessions`, newest first.
 /// Only direct children that contain a session journal are returned.
@@ -83,37 +93,141 @@ pub fn delete_session(session_dir: &Path, sessions_root: &Path) -> Result<()> {
     #[cfg(target_os = "windows")]
     clear_read_only(&directory);
 
-    let mut last_error = None;
-    for delay in RETRY_DELAYS_MS {
-        if delay > 0 {
-            std::thread::sleep(Duration::from_millis(delay));
-        }
-        match std::fs::remove_dir_all(&directory) {
-            Ok(()) => return Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(error) => last_error = Some(error),
-        }
-    }
+    let removal_error = match remove_with_retries(&directory) {
+        Ok(()) => return Ok(()),
+        Err(error) => error,
+    };
 
     #[cfg(target_os = "windows")]
     {
+        // Identify what still holds the folder, then try once more: the probe
+        // itself takes a moment, and transient scanners often let go in that
+        // window.
+        let probe = probe_delete_locks(&directory);
         let blockers = locking_processes(&directory);
-        if !blockers.is_empty() {
+        match std::fs::remove_dir_all(&directory) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(_) => {}
+        }
+        if probe.folder_locked || !probe.locked_files.is_empty() || !blockers.is_empty() {
             bail!(
-                "Cannot delete {} because it is in use by {}. Close it and try again.",
+                "Cannot delete {}: {}. Close the program using it and try again.",
                 directory.display(),
-                blockers.join(", ")
+                describe_lock(&directory, &probe, &blockers)
             );
         }
     }
 
-    let error = last_error.expect("at least one removal attempt");
-    Err(error).with_context(|| {
+    Err(anyhow::Error::new(removal_error)).with_context(|| {
         format!(
             "Cannot delete {}; close any program using its files and try again",
             directory.display()
         )
     })
+}
+
+/// Remove the folder, retrying for ~18 seconds while scanners or preview
+/// handlers briefly hold files. A folder that disappears is a success.
+fn remove_with_retries(directory: &Path) -> std::io::Result<()> {
+    let mut last_error = None;
+    for delay in RETRY_DELAYS_MS {
+        if delay > 0 {
+            std::thread::sleep(Duration::from_millis(delay));
+        }
+        match std::fs::remove_dir_all(directory) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.expect("at least one removal attempt"))
+}
+
+#[cfg(target_os = "windows")]
+struct LockProbe {
+    /// The folder itself cannot be opened for deletion (Explorer and some
+    /// bookmark/sync tools hold the directory, which Restart Manager misses).
+    folder_locked: bool,
+    /// Individual files that still refuse delete access.
+    locked_files: Vec<std::path::PathBuf>,
+}
+
+/// Open each file and the folder itself with delete access and every sharing
+/// flag. A sharing/lock violation means another handle forbids deletion.
+#[cfg(target_os = "windows")]
+fn probe_delete_locks(directory: &Path) -> LockProbe {
+    const MAX_REPORTED_FILES: usize = 6;
+    let folder_locked = delete_is_blocked(directory);
+    let mut locked_files = Vec::new();
+    for file in collect_files(directory, 512) {
+        if delete_is_blocked(&file) {
+            locked_files.push(file);
+            if locked_files.len() >= MAX_REPORTED_FILES {
+                break;
+            }
+        }
+    }
+    LockProbe {
+        folder_locked,
+        locked_files,
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn delete_is_blocked(path: &Path) -> bool {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::Storage::FileSystem::{
+        CreateFileW, DELETE, FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE, FILE_SHARE_READ,
+        FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    match unsafe {
+        CreateFileW(
+            PCWSTR(wide.as_ptr()),
+            DELETE.0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            None,
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS,
+            None,
+        )
+    } {
+        Ok(handle) => {
+            let _ = unsafe { CloseHandle(handle) };
+            false
+        }
+        Err(error) => {
+            let code = error.code().0 as u32 & 0xFFFF;
+            code == 32 || code == 33
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn describe_lock(directory: &Path, probe: &LockProbe, blockers: &[String]) -> String {
+    let mut parts = Vec::new();
+    if probe.folder_locked {
+        parts.push(
+            "the folder itself is in use by another program, such as an open Explorer window"
+                .to_string(),
+        );
+    }
+    for file in &probe.locked_files {
+        let shown = file.strip_prefix(directory).unwrap_or(file);
+        parts.push(format!("the file {} is in use", shown.display()));
+    }
+    if !blockers.is_empty() {
+        parts.push(format!("in use by {}", blockers.join(", ")));
+    }
+    parts.join("; ")
 }
 
 fn looks_like_generated_session_name(name: &str) -> bool {
@@ -235,9 +349,12 @@ fn locking_processes(directory: &Path) -> Vec<String> {
 
 #[cfg(target_os = "windows")]
 fn collect_files(directory: &Path, limit: usize) -> Vec<std::path::PathBuf> {
+    // Breadth first: the journal and top-level outputs are the most likely to
+    // be held (and the most useful to name), so gather them before slide files.
     let mut files = Vec::new();
-    let mut pending = vec![directory.to_path_buf()];
-    while let Some(current) = pending.pop() {
+    let mut pending = std::collections::VecDeque::new();
+    pending.push_back(directory.to_path_buf());
+    while let Some(current) = pending.pop_front() {
         let Ok(entries) = std::fs::read_dir(&current) else {
             continue;
         };
@@ -249,7 +366,7 @@ fn collect_files(directory: &Path, limit: usize) -> Vec<std::path::PathBuf> {
                 continue;
             };
             if file_type.is_dir() {
-                pending.push(entry.path());
+                pending.push_back(entry.path());
             } else if file_type.is_file() {
                 files.push(entry.path());
             }
@@ -402,9 +519,11 @@ mod tests {
 
         let error = delete_session(&folder, &sessions).unwrap_err();
 
+        let message = format!("{error:#}");
+        assert!(message.contains("in use"), "unexpected error: {message}");
         assert!(
-            error.to_string().contains("in use by"),
-            "unexpected error: {error:#}"
+            message.contains("slide_0001.png"),
+            "locked file not named: {message}"
         );
         assert!(folder.exists());
         drop(locked);

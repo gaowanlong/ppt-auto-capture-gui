@@ -232,6 +232,40 @@ impl PptAutoCaptureApp {
         }
     }
 
+    /// Show a folder in the system file manager without opening the folder
+    /// itself. An Explorer window opened *inside* a session folder keeps a
+    /// handle on it, which stops the folder from being deleted on Windows.
+    fn reveal_directory(&mut self, directory: &std::path::Path) {
+        #[cfg(target_os = "windows")]
+        let mut command = {
+            let mut select = std::ffi::OsString::from("/select,");
+            select.push(directory.as_os_str());
+            let mut command = std::process::Command::new("explorer");
+            command.arg(select);
+            command
+        };
+        #[cfg(target_os = "macos")]
+        let mut command = {
+            let mut command = std::process::Command::new("open");
+            command.arg("-R").arg(directory);
+            command
+        };
+        #[cfg(target_os = "linux")]
+        let mut command = {
+            let mut command = std::process::Command::new("xdg-open");
+            command.arg(directory.parent().unwrap_or(directory));
+            command
+        };
+
+        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+        if let Err(error) = command.spawn() {
+            self.record_error(
+                "diagnostics",
+                format!("Unable to show the recording folder: {error}"),
+            );
+        }
+    }
+
     fn check_recovery(&mut self) {
         match detect_incomplete_session(std::path::Path::new(&self.output_dir)) {
             Ok(Some(records)) => {
@@ -296,6 +330,7 @@ impl PptAutoCaptureApp {
         self.dashboard.session_active = true;
         self.dashboard.saved_slides_count = 0;
         self.dashboard.cleanup_status = None;
+        self.dashboard.cleanup_failed = false;
         self.pending_session_delete = None;
         self.dashboard.output_path = session_output.to_string_lossy().into_owned();
 
@@ -534,6 +569,7 @@ impl PptAutoCaptureApp {
         self.show_session_list = true;
         self.session_list_error = None;
         self.dashboard.cleanup_status = None;
+        self.dashboard.cleanup_failed = false;
         self.refresh_session_list();
     }
 
@@ -599,6 +635,7 @@ impl PptAutoCaptureApp {
                 self.session_delete_rx = Some(rx);
                 self.deleting_session_dir = Some(directory);
                 self.dashboard.deleting_session = true;
+                self.dashboard.cleanup_failed = false;
                 self.dashboard.cleanup_status = Some(
                     match self.language {
                         Language::Chinese => "正在删除录制文件夹，文件被占用时会自动重试…",
@@ -657,9 +694,12 @@ impl PptAutoCaptureApp {
                     }
                     .to_string(),
                 );
+                self.dashboard.cleanup_failed = false;
             }
             Err(message) => {
-                self.dashboard.cleanup_status = None;
+                self.dashboard.cleanup_failed = true;
+                self.dashboard.cleanup_status =
+                    Some(i18n::t_delete_folder_failed(self.language).to_string());
                 let message = match self.language {
                     Language::Chinese => format!("删除录制文件夹失败：{message}"),
                     Language::English => message,
@@ -938,7 +978,7 @@ impl eframe::App for PptAutoCaptureApp {
             self.dashboard.open_session_requested = false;
             let path = std::path::PathBuf::from(&self.dashboard.output_path);
             if let Some(directory) = path.parent() {
-                self.open_directory(directory);
+                self.reveal_directory(directory);
             }
         }
         if self.dashboard.delete_session_requested {
@@ -1386,15 +1426,20 @@ impl eframe::App for PptAutoCaptureApp {
                         }
                     });
                 } else if let Some(status) = &self.dashboard.cleanup_status {
-                    ui.label(status);
+                    let text = egui::RichText::new(status);
+                    ui.label(if self.dashboard.cleanup_failed {
+                        text.color(token::DANGER)
+                    } else {
+                        text
+                    });
                 }
                 ui.separator();
                 ui.label(match self.language {
                     Language::Chinese => {
-                        "Windows 上若文件夹被 WPS、PowerPoint、杀毒软件或同步工具占用，删除会自动重试并报告占用它的程序。"
+                        "Windows 上若文件夹被 WPS、PowerPoint、杀毒软件、资源管理器窗口或同步工具占用，删除会自动重试并报告被占用的文件和进程。"
                     }
                     Language::English => {
-                        "On Windows, if WPS, PowerPoint, antivirus, or a sync tool is using a folder, deletion retries and then reports the program holding it."
+                        "On Windows, if WPS, PowerPoint, antivirus, an Explorer window, or a sync tool is using a folder, deletion retries and then reports the locked files and processes."
                     }
                 });
             });
@@ -1753,6 +1798,7 @@ mod tests {
         assert_eq!(app.dashboard.output_path, output_path(&app.output_panel));
         assert!(app.export_panel.latest_slides.is_none());
         assert!(app.dashboard.cleanup_status.is_some());
+        assert!(!app.dashboard.cleanup_failed);
         assert!(app.dashboard.last_error.is_none());
     }
 

@@ -27,6 +27,7 @@ pub struct DashboardPanel {
     pub delete_session_requested: bool,
     pub deleting_session: bool,
     pub cleanup_status: Option<String>,
+    pub cleanup_failed: bool,
     pub keep_screenshots_requested: bool,
     /// Persisted through the app configuration; applied when a recording starts.
     pub minimize_on_start: bool,
@@ -67,6 +68,7 @@ impl DashboardPanel {
             delete_session_requested: false,
             deleting_session: false,
             cleanup_status: None,
+            cleanup_failed: false,
             keep_screenshots_requested: false,
             minimize_on_start: false,
             diagnostics_status_expires_at: None,
@@ -510,7 +512,23 @@ impl DashboardPanel {
             }
             if let Some(status) = &self.cleanup_status {
                 ui.add_space(6.0);
-                ui.label(theme::muted(status.clone(), 11.5));
+                if self.cleanup_failed && !self.deleting_session {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(
+                            RichText::new(status.clone())
+                                .size(11.5)
+                                .color(token::DANGER),
+                        );
+                        if ui
+                            .add(theme::quiet_button(i18n::t_retry_delete(language)))
+                            .clicked()
+                        {
+                            self.delete_session_requested = true;
+                        }
+                    });
+                } else {
+                    ui.label(theme::muted(status.clone(), 11.5));
+                }
             }
         });
     }

@@ -1,6 +1,6 @@
 [package]
 name = "ppt-auto-capture-gui"
-version = "2.7.0"
+version = "2.7.1"
 edition = "2021"
 description = "Automatic PowerPoint slide capture tool with GUI"
 authors = ["ppt-capture"]
@@ -44,6 +44,7 @@ windows = { version = "0.60", features = [
     "Win32_System_SystemServices",
     "Win32_UI_WindowsAndMessaging",
     "Win32_Storage_FileSystem",
+    "Win32_Security",
     "Win32_System_RemoteDesktop",
     "Win32_System_ProcessStatus",
     "Win32_System_RestartManager",
