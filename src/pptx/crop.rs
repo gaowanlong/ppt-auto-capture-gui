@@ -1,27 +1,31 @@
 //! Detects the presentation (slide) area inside a desktop screenshot.
 //!
 //! Meeting-app screenshots contain neutral window chrome, toolbars, participant
-//! panels, taskbars, and letterbox bars around a mostly white slide canvas. The
-//! detector walks inward from the image edges:
+//! panels, taskbars, and letterbox bars around a slide canvas. The detector
+//! searches in both directions:
 //!
-//! 1. A strict adaptive white threshold is derived from the image's bright
-//!    percentile; per-column and per-row white fractions are merged into a
-//!    coarse canvas rectangle. White runs separated by a content gap are joined
-//!    only when the slide's boundary lines continue across that gap (a photo or
-//!    video spanning the slide), never when a panel or taskbar interrupts.
+//! 1. From the centre outward: a strict adaptive white threshold is derived
+//!    from the image's bright percentile; per-column and per-row white
+//!    fractions are merged into a coarse canvas rectangle. White runs separated
+//!    by a content gap are joined only when the slide's boundary lines continue
+//!    across that gap (a photo or video spanning the slide), never when a panel
+//!    or taskbar interrupts.
 //! 2. The coarse rectangle is mapped back to full resolution, grown across
 //!    colorful slide bands (title bars, footers, full-bleed photos) that end at
 //!    neutral chrome, and its edges are snapped to the outermost positive
 //!    brightness step. Snapping to a brightness step ignores embedded photo
 //!    edges, whose outside is brighter than the slide canvas.
-//! 3. A conservative edge fallback handles dark, full-bleed decks. It only
+//! 3. From the edges inward: a conservative fallback handles dark, full-bleed
+//!    decks by finding the strongest rectangle bounded by gradients. It only
 //!    returns a rectangle without a chrome-like border, so an ambiguous dark
 //!    slide keeps the full screenshot instead of gaining black bars or losing
 //!    slide content.
 //! 4. Every candidate then passes a safety guard. Each edge is extended
-//!    outward across a band that may hold text or graphics (a dark title band,
-//!    a footer, a side panel), and only rectangles with a standard slide or
-//!    page proportion are accepted. A guard never crops inward.
+//!    outward across bands that may still belong to the slide (text on a dark
+//!    title band, colored strips, photos touching the edge) and must then sit
+//!    on a visible difference between the slide and its surroundings. No fixed
+//!    aspect ratio is required because presentation windows vary. A guard never
+//!    crops inward.
 //!
 //! Whenever a stage is uncertain the function returns `None` and the caller
 //! embeds the original screenshot unchanged. Losing presentation content is
@@ -471,21 +475,6 @@ fn refine_edges(planes: &Planes, rect: Rect, scale: f64, prefer_positive: bool) 
     }
 }
 
-/// Presentation and page proportions accepted by the safety guard. A crop that
-/// does not match one of these is almost certainly cutting into the slide.
-const STANDARD_ASPECTS: [f64; 10] = [
-    16.0 / 9.0,
-    16.0 / 10.0,
-    4.0 / 3.0,
-    3.0 / 2.0,
-    std::f64::consts::SQRT_2,
-    9.0 / 16.0,
-    10.0 / 16.0,
-    3.0 / 4.0,
-    2.0 / 3.0,
-    std::f64::consts::FRAC_1_SQRT_2,
-];
-
 /// Base brightness of a line, using a low percentile so glyphs and graphics
 /// sitting on a uniform band do not hide the band's background.
 fn line_background(
@@ -667,29 +656,199 @@ fn edge_band_has_content(
     false
 }
 
-/// Only accept rectangles whose proportions match a presentation or page
-/// format. This rejects crops that slice through the slide even when they
-/// contain no obvious glyphs, which keeps the original screenshot instead.
-fn has_standard_aspect(rect: Rect) -> bool {
-    let aspect = rect.width() as f64 / rect.height() as f64;
-    STANDARD_ASPECTS
-        .iter()
-        .any(|&standard| (aspect / standard - 1.0).abs() <= 0.05)
+/// Slide content that may sit on the far side of a canvas edge: a saturated
+/// colored band, a photo, or a detailed graphic. The luma floor keeps a
+/// near-black desktop background, whose relative saturation is high despite a
+/// tiny absolute color difference, from being mistaken for a slide band.
+fn line_is_slide_content(luma: f64, saturation: f64, deviation: f64) -> bool {
+    luma >= 24.0 && (saturation >= 40.0 || deviation >= 20.0)
 }
 
-/// Safety net for every candidate crop. Each edge is first extended across a
-/// band that may hold text, then the result must look like a real slide or
-/// page. Any doubt keeps the untouched screenshot (`None`), because losing
-/// presentation content is worse than shipping the full window.
-fn guard_crop(planes: &Planes, rect: Rect) -> Option<Rect> {
-    let horizontal_span = (rect.x0 as usize, rect.x1 as usize);
-    let vertical_span = (rect.y0 as usize, rect.y1 as usize);
-    let guarded = Rect {
-        x0: expand_past_text_band(planes, rect.x0, true, true, vertical_span)?,
-        y0: expand_past_text_band(planes, rect.y0, true, false, horizontal_span)?,
-        x1: expand_past_text_band(planes, rect.x1, false, true, vertical_span)?,
-        y1: expand_past_text_band(planes, rect.y1, false, false, horizontal_span)?,
+/// Extend one edge outward across contiguous slide content that touches it
+/// (the colored background of a slide holding a white content box, a photo, a
+/// video). A short white pad is crossed because the full-resolution estimate
+/// can sit a few pixels inside the real canvas edge; it is only committed when
+/// content follows. Content that reaches the picture border means the slide is
+/// flush with that border. The band is only trusted when neutral chrome or the
+/// border lies beyond it, so an edge running into another content region stays
+/// where it is and the residual check can reject the crop.
+fn expand_past_content_band(
+    planes: &Planes,
+    edge: u32,
+    start: bool,
+    column: bool,
+    perpendicular: (usize, usize),
+) -> u32 {
+    let limit = if column { planes.width } else { planes.height } as i64;
+    if perpendicular.1.saturating_sub(perpendicular.0) < 8 {
+        return edge;
+    }
+    let direction: i64 = if start { -1 } else { 1 };
+    let mut position = edge as i64;
+    let mut padding = 0;
+    while padding < 6 {
+        let line = position + direction;
+        if !(0..limit).contains(&line) {
+            break;
+        }
+        let (luma, saturation, _) = line_stats(
+            planes,
+            column,
+            line as usize,
+            perpendicular.0,
+            perpendicular.1,
+        );
+        if luma >= 235.0 && saturation <= 40.0 {
+            position = line;
+            padding += 1;
+        } else {
+            break;
+        }
+    }
+    let cap = ((limit as f64 * 0.45) as usize).max(2);
+    let mut moved = 0usize;
+    while moved < cap {
+        let line = position + direction;
+        if !(0..limit).contains(&line) {
+            break;
+        }
+        let (luma, saturation, deviation) = line_stats(
+            planes,
+            column,
+            line as usize,
+            perpendicular.0,
+            perpendicular.1,
+        );
+        if line_is_slide_content(luma, saturation, deviation) {
+            position = line;
+            moved += 1;
+        } else {
+            break;
+        }
+    }
+    if moved == 0 || moved >= cap {
+        return edge;
+    }
+    let far = position + direction;
+    if !(0..limit).contains(&far) {
+        // Content reaches the picture border: the slide is flush with it.
+        return if start { 0 } else { limit as u32 };
+    }
+    let (_, far_saturation, far_deviation) = line_stats(
+        planes,
+        column,
+        far as usize,
+        perpendicular.0,
+        perpendicular.1,
+    );
+    if !is_chrome(far_saturation, far_deviation) {
+        return edge;
+    }
+    if start {
+        position as u32
+    } else {
+        (position + 1) as u32
+    }
+}
+
+/// Mean luma and saturation of the lines in `from..to` that exist inside the
+/// picture. `None` means no line of that side is available.
+fn side_means(
+    planes: &Planes,
+    column: bool,
+    from: i64,
+    to: i64,
+    span: (usize, usize),
+    limit: i64,
+) -> Option<(f64, f64)> {
+    let start = from.max(0);
+    let end = to.min(limit);
+    if start >= end {
+        return None;
+    }
+    let mut luma = 0.0;
+    let mut saturation = 0.0;
+    let mut count = 0.0;
+    let mut position = start;
+    while position < end {
+        let (line_luma, line_saturation, _) =
+            line_stats(planes, column, position as usize, span.0, span.1);
+        luma += line_luma;
+        saturation += line_saturation;
+        count += 1.0;
+        position += 1;
+    }
+    Some((luma / count, saturation / count))
+}
+
+/// A slide edge must show a visible difference between the two sides: the
+/// canvas or its bands inside, window chrome or background outside. This is
+/// the edge-difference criterion that replaces fixed aspect ratios, so windows
+/// of any proportion can still be cropped. An edge on the picture border has
+/// nothing outside and is accepted.
+fn edge_has_contrast(
+    planes: &Planes,
+    edge: u32,
+    start: bool,
+    column: bool,
+    span: (usize, usize),
+    limit: usize,
+) -> bool {
+    const DEPTH: i64 = 2;
+    /// Smallest two-side difference accepted as an edge. Neutral window chrome
+    /// around a canvas differs by far more; the tightest real case is a dark
+    /// side band (luma 18) against a neutral panel (luma 28).
+    const MIN_CONTRAST: f64 = 10.0;
+    if span.0 >= span.1 {
+        return false;
+    }
+    let position = edge as i64;
+    let limit = limit as i64;
+    let (inside_from, inside_to, outside_from, outside_to) = if start {
+        (position, position + DEPTH, position - DEPTH, position)
+    } else {
+        (position - DEPTH, position, position, position + DEPTH)
     };
+    let Some((inside_luma, inside_saturation)) =
+        side_means(planes, column, inside_from, inside_to, span, limit)
+    else {
+        return false;
+    };
+    let Some((outside_luma, outside_saturation)) =
+        side_means(planes, column, outside_from, outside_to, span, limit)
+    else {
+        return true;
+    };
+    (inside_luma - outside_luma).abs() + 0.5 * (inside_saturation - outside_saturation).abs()
+        >= MIN_CONTRAST
+}
+
+/// Safety net for every candidate crop. Edges are pushed outward across bands
+/// that may still belong to the slide, then each resulting edge must sit on a
+/// visible difference between the slide and its surroundings. Two passes let
+/// an expansion on one side expose another band on the next. Any doubt keeps
+/// the untouched screenshot (`None`), because losing presentation content is
+/// worse than shipping the full window.
+fn guard_crop(planes: &Planes, rect: Rect) -> Option<Rect> {
+    let mut guarded = rect;
+    for _ in 0..2 {
+        let horizontal_span = (guarded.x0 as usize, guarded.x1 as usize);
+        let vertical_span = (guarded.y0 as usize, guarded.y1 as usize);
+        guarded = Rect {
+            x0: expand_past_text_band(planes, guarded.x0, true, true, vertical_span)?,
+            y0: expand_past_text_band(planes, guarded.y0, true, false, horizontal_span)?,
+            x1: expand_past_text_band(planes, guarded.x1, false, true, vertical_span)?,
+            y1: expand_past_text_band(planes, guarded.y1, false, false, horizontal_span)?,
+        };
+        let horizontal_span = (guarded.x0 as usize, guarded.x1 as usize);
+        let vertical_span = (guarded.y0 as usize, guarded.y1 as usize);
+        guarded = Rect {
+            x0: expand_past_content_band(planes, guarded.x0, true, true, vertical_span),
+            y0: expand_past_content_band(planes, guarded.y0, true, false, horizontal_span),
+            x1: expand_past_content_band(planes, guarded.x1, false, true, vertical_span),
+            y1: expand_past_content_band(planes, guarded.y1, false, false, horizontal_span),
+        };
+    }
     if guarded.width() < 4 || guarded.height() < 4 {
         return None;
     }
@@ -719,7 +878,28 @@ fn guard_crop(planes: &Planes, rect: Rect) -> Option<Rect> {
                 horizontal_span,
                 planes.height,
             );
-    if cuts_content || !has_standard_aspect(guarded) {
+    if cuts_content {
+        return None;
+    }
+    let has_edges = edge_has_contrast(planes, guarded.x0, true, true, vertical_span, planes.width)
+        && edge_has_contrast(
+            planes,
+            guarded.y0,
+            true,
+            false,
+            horizontal_span,
+            planes.height,
+        )
+        && edge_has_contrast(planes, guarded.x1, false, true, vertical_span, planes.width)
+        && edge_has_contrast(
+            planes,
+            guarded.y1,
+            false,
+            false,
+            horizontal_span,
+            planes.height,
+        );
+    if !has_edges {
         return None;
     }
     Some(guarded)
@@ -960,10 +1140,6 @@ fn detect_white_canvas(image: &DynamicImage, full: &Planes) -> Option<Rect> {
     {
         return None;
     }
-    let aspect = refined.width() as f64 / refined.height() as f64;
-    if !(0.55..=3.2).contains(&aspect) {
-        return None;
-    }
     let mut sampled = Vec::new();
     let mut white_samples = 0usize;
     let mut y = refined.y0 as usize;
@@ -1040,8 +1216,10 @@ impl RgbWork {
 }
 
 /// Conservative fallback for dark full-bleed decks. Finds the strongest
-/// standard-ratio rectangle bounded by edge transitions, then rejects results
-/// that still contain chrome-like bands.
+/// rectangle bounded by edge transitions on all four sides, then rejects
+/// results that still contain chrome-like bands. Any window proportion is
+/// accepted; the two-side brightness difference, not an aspect ratio, decides
+/// whether a transition is a slide boundary.
 #[allow(clippy::needless_range_loop)]
 fn detect_edge_fallback(image: &DynamicImage, full: &Planes) -> Option<Rect> {
     let work = RgbWork::new(image, 480);
@@ -1113,12 +1291,6 @@ fn detect_edge_fallback(image: &DynamicImage, full: &Planes) -> Option<Rect> {
         }
         sum / count.max(1) as f64
     };
-    let ratio_error = |aspect: f64| -> f64 {
-        [16.0 / 9.0, 4.0 / 3.0, 16.0 / 10.0]
-            .iter()
-            .map(|standard| (aspect / standard - 1.0).abs())
-            .fold(f64::INFINITY, f64::min)
-    };
     let mut best: Option<(f64, Rect)> = None;
     for (index, &x0) in xs.iter().enumerate() {
         for &x1 in &xs[index + 1..] {
@@ -1134,10 +1306,6 @@ fn detect_edge_fallback(image: &DynamicImage, full: &Planes) -> Option<Rect> {
                     }
                     let area = (slide_width * slide_height) as f64;
                     if area < (width * height) as f64 * 0.06 {
-                        continue;
-                    }
-                    let aspect = slide_width as f64 / slide_height as f64;
-                    if !(1.0..=2.8).contains(&aspect) {
                         continue;
                     }
                     let strength = [
@@ -1178,9 +1346,6 @@ fn detect_edge_fallback(image: &DynamicImage, full: &Planes) -> Option<Rect> {
                         continue;
                     }
                     if (inside - outside / outside_bands as f64).abs() < 28.0 {
-                        continue;
-                    }
-                    if ratio_error(aspect) > 0.06 {
                         continue;
                     }
                     let score = area * (strength / 30.0);
@@ -1513,11 +1678,89 @@ mod tests {
     }
 
     #[test]
-    fn leaves_a_non_standard_canvas_uncropped() {
+    fn crops_a_non_standard_canvas() {
         let (width, height) = (800, 600);
         let mut image = canvas(width, height, DARK_CHROME);
         fill(&mut image, 250, 150, 550, 450, WHITE);
-        assert!(detect(&image).is_none());
+        assert_crop(detect(&image), (250, 150, 550, 450), 2);
+    }
+
+    #[test]
+    fn crops_a_wide_white_slide_at_its_real_proportion() {
+        let (width, height) = (1400, 700);
+        let mut image = canvas(width, height, DARK_CHROME);
+        let slide = (100, 120, 1300, 570);
+        fill(
+            &mut image,
+            slide.0 as i64,
+            slide.1 as i64,
+            slide.2 as i64,
+            slide.3 as i64,
+            WHITE,
+        );
+        assert_crop(detect(&image), slide, 2);
+    }
+
+    #[test]
+    fn keeps_a_dark_title_band_on_a_wide_slide() {
+        let (width, height) = (1400, 700);
+        let mut image = canvas(width, height, DARK_CHROME);
+        let slide = (100, 120, 1300, 570);
+        fill(
+            &mut image,
+            slide.0 as i64,
+            slide.1 as i64,
+            slide.2 as i64,
+            slide.3 as i64,
+            WHITE,
+        );
+        let band_bottom = slide.1 + (slide.3 - slide.1) * 18 / 100;
+        fill(
+            &mut image,
+            slide.0 as i64,
+            slide.1 as i64,
+            slide.2 as i64,
+            band_bottom as i64,
+            [18, 18, 18],
+        );
+        for index in 0..7 {
+            let x = slide.0 + 80 + index * 160;
+            fill(
+                &mut image,
+                x as i64,
+                slide.1 as i64 + 35,
+                (x + 100) as i64,
+                slide.1 as i64 + 62,
+                WHITE,
+            );
+        }
+        assert_crop(detect(&image), slide, 2);
+    }
+
+    #[test]
+    fn crops_a_wide_dark_slide_without_a_standard_ratio() {
+        let (width, height) = (1400, 700);
+        let mut image = canvas(width, height, [240, 240, 240]);
+        let slide = (100, 150, 1300, 550);
+        fill(
+            &mut image,
+            slide.0 as i64,
+            slide.1 as i64,
+            slide.2 as i64,
+            slide.3 as i64,
+            [24, 28, 40],
+        );
+        for bar in 0..7 {
+            fill(
+                &mut image,
+                (slide.0 + 70 + bar * 150) as i64,
+                (slide.3 - 130) as i64,
+                (slide.0 + 130 + bar * 150) as i64,
+                (slide.3 - 80) as i64,
+                [0, 140, 210],
+            );
+        }
+        assert_crop(detect(&image), slide, 3);
     }
 
     #[test]
@@ -1620,7 +1863,7 @@ mod tests {
     }
 
     #[test]
-    fn does_not_crop_a_white_content_box_out_of_a_colored_slide() {
+    fn keeps_the_whole_slide_around_a_white_content_box() {
         let (mut image, slide) = dark_meeting_screenshot();
         fill(
             &mut image,
@@ -1642,7 +1885,7 @@ mod tests {
             (box_y + box_height) as i64,
             WHITE,
         );
-        assert!(detect(&image).is_none());
+        assert_crop(detect(&image), slide, 2);
     }
 
     #[test]
