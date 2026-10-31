@@ -16,16 +16,18 @@
 //!    brightness step. Snapping to a brightness step ignores embedded photo
 //!    edges, whose outside is brighter than the slide canvas.
 //! 3. From the edges inward: a conservative fallback handles dark, full-bleed
-//!    decks by finding the strongest rectangle bounded by gradients. It only
-//!    returns a rectangle without a chrome-like border, so an ambiguous dark
-//!    slide keeps the full screenshot instead of gaining black bars or losing
-//!    slide content.
+//!    decks by finding the strongest rectangle bounded by gradients. Letterbox
+//!    bars are trimmed from that rectangle before it is checked for a remaining
+//!    chrome-like border, so an ambiguous dark slide keeps the full screenshot
+//!    instead of gaining black bars or losing slide content.
 //! 4. Every candidate then passes a safety guard. Each edge is extended
-//!    outward across bands that may still belong to the slide (text on a dark
-//!    title band, colored strips, photos touching the edge) and must then sit
-//!    on a visible difference between the slide and its surroundings. No fixed
-//!    aspect ratio is required because presentation windows vary. A guard never
-//!    crops inward.
+//!    outward across bands that may still belong to the slide (distributed text
+//!    on a dark title band, colored strips, photos touching the edge), then
+//!    dark letterbox bars and sparse meeting controls are trimmed away from
+//!    the edges. A trim stops at any band with distributed text, so slide
+//!    titles, footers, and side labels are never cut. Finally each edge must
+//!    sit on a visible difference between the slide and its surroundings. No
+//!    fixed aspect ratio is required because presentation windows vary.
 //!
 //! Whenever a stage is uncertain the function returns `None` and the caller
 //! embeds the original screenshot unchanged. Losing presentation content is
@@ -540,14 +542,64 @@ fn line_has_detail(
         previous = Some(current);
         along += step;
     }
-    hits >= 4 && hits * 200 >= pairs
+    hits >= 4 && hits * 400 >= pairs
+}
+
+/// Fraction of a line spanned by glyph-like detail, ignoring isolated stray
+/// pixels. Slide text and graphics spread their detail across most of the
+/// line, while a floating meeting control or a corner status label touches only
+/// a small part. This separates a real slide band from window controls that sit
+/// on a letterbox bar. Lines without enough detail report zero.
+fn line_detail_extent(
+    planes: &Planes,
+    column: bool,
+    position: usize,
+    start: usize,
+    end: usize,
+) -> f64 {
+    let limit = if column { planes.width } else { planes.height };
+    if start >= end || position >= limit {
+        return 0.0;
+    }
+    let span = end - start;
+    let step = (span / 1024).max(1);
+    let mut hits = Vec::new();
+    let mut pairs = 0usize;
+    let mut previous: Option<(u8, u8)> = None;
+    let mut along = start;
+    while along < end {
+        let (x, y) = if column {
+            (position, along)
+        } else {
+            (along, position)
+        };
+        let current = (planes.luma_at(x, y), planes.saturation_at(x, y));
+        if let Some((luma, saturation)) = previous {
+            let change = (current.0 as i32 - luma as i32).unsigned_abs()
+                + (current.1 as i32 - saturation as i32).unsigned_abs() / 2;
+            if change >= 32 {
+                hits.push(along);
+            }
+            pairs += 1;
+        }
+        previous = Some(current);
+        along += step;
+    }
+    if hits.len() < 4 || hits.len() * 400 < pairs {
+        return 0.0;
+    }
+    let low = hits[hits.len() * 5 / 100];
+    let high = hits[(hits.len() * 95 / 100).min(hits.len() - 1)];
+    (high.saturating_sub(low)) as f64 / span as f64
 }
 
 /// Extend one edge outward across a band with a stable background that
-/// contains glyph-like detail. A dark title band on a dark slide therefore
-/// survives even though its flat background looks like chrome, while a plain
-/// letterbox bar is left outside the crop. The band must end at a brightness
-/// change; a band running to the image edge without one is not trusted.
+/// contains distributed glyph-like detail. A dark title band on a dark slide
+/// therefore survives even though its flat background looks like chrome, while
+/// a plain letterbox bar is left outside the crop and a bar carrying only a
+/// sparse meeting control or corner label is ignored. The band must end at a
+/// brightness change; a band running to the image edge without one is not
+/// trusted.
 fn expand_past_text_band(
     planes: &Planes,
     edge: u32,
@@ -555,6 +607,15 @@ fn expand_past_text_band(
     column: bool,
     perpendicular: (usize, usize),
 ) -> Option<u32> {
+    /// Detail must cover at least this share of the band's length before the
+    /// band is accepted as slide content. Slide titles, footers, and side
+    /// labels spread across the band; floating meeting controls do not. A pure
+    /// black bar is assumed to be a letterbox, so only broad detail inside it
+    /// counts as slide content, while a dark gray or colored band only needs a
+    /// small amount of detail to be protected as a slide band.
+    const MIN_DETAIL_EXTENT: f64 = 0.03;
+    const MIN_BLACK_DETAIL_EXTENT: f64 = 0.55;
+    const BLACK_BACKGROUND: u8 = 12;
     let limit = if column { planes.width } else { planes.height } as i64;
     if perpendicular.1.saturating_sub(perpendicular.0) < 8 {
         return Some(edge);
@@ -573,9 +634,21 @@ fn expand_past_text_band(
     ) else {
         return Some(edge);
     };
+    let (_, band_saturation, _) = line_stats(
+        planes,
+        column,
+        first as usize,
+        perpendicular.0,
+        perpendicular.1,
+    );
+    let detail_limit = if background <= BLACK_BACKGROUND {
+        MIN_BLACK_DETAIL_EXTENT
+    } else {
+        MIN_DETAIL_EXTENT
+    };
     let cap = ((limit as f64 * 0.35) as usize).max(2);
     let mut outer = edge as i64;
-    let mut detail = false;
+    let mut extent: f64 = 0.0;
     let mut length = 0usize;
     let mut position = first;
     while (0..limit).contains(&position) && length < cap {
@@ -591,26 +664,41 @@ fn expand_past_text_band(
         if (value as i32 - background as i32).abs() > 8 {
             break;
         }
-        if line_has_detail(
+        let (_, saturation, _) = line_stats(
             planes,
             column,
             position as usize,
             perpendicular.0,
             perpendicular.1,
-        ) {
-            detail = true;
+        );
+        // A band keeps its color while a slide surface meets neutral window
+        // chrome of similar brightness (a dark deck next to dark chrome).
+        if (saturation - band_saturation).abs() > 25.0 {
+            break;
         }
+        extent = extent.max(line_detail_extent(
+            planes,
+            column,
+            position as usize,
+            perpendicular.0,
+            perpendicular.1,
+        ));
         outer = position;
         length += 1;
         position += direction;
     }
     if length >= cap {
-        // The band reaches deep into the picture. With detail inside it the
-        // edge may cut content that cannot be attributed to a bounded band,
-        // so the crop is abandoned instead of guessed.
-        return if detail { None } else { Some(edge) };
+        // The band reaches deep into the picture. With distributed detail
+        // inside it the edge may cut content that cannot be attributed to a
+        // bounded band, so the crop is abandoned instead of guessed. Sparse
+        // detail (a control strip) does not make the band slide content.
+        return if extent >= detail_limit {
+            None
+        } else {
+            Some(edge)
+        };
     }
-    if detail && length > 0 {
+    if extent >= detail_limit && length > 0 {
         Some(if start {
             outer as u32
         } else {
@@ -751,6 +839,160 @@ fn expand_past_content_band(
     }
 }
 
+/// Remove a dark, neutral bar that touches one crop edge: a letterbox bar or a
+/// floating meeting control strip. Such a bar has a stable near-black
+/// background and either no detail or sparse detail; slide bands with text
+/// spread across them abort the trim so a dark title, footer, or side label is
+/// never cut. Only bounded bars are trimmed, and every layer is handled on its
+/// own because the outer loop re-runs the trim after one band is removed.
+fn trim_letterbox_band(
+    planes: &Planes,
+    edge: u32,
+    start: bool,
+    column: bool,
+    perpendicular: (usize, usize),
+) -> u32 {
+    /// Largest share of the picture a bar may occupy. A wider dark area is
+    /// treated as slide background and left alone.
+    const MAX_BAR_SHARE: f64 = 0.30;
+    /// A bar carrying sparse detail (a toolbar, a corner label) must be thin;
+    /// a thicker band with sparse detail may be a slide band and is kept.
+    const MAX_DETAIL_BAR_SHARE: f64 = 0.12;
+    /// Bars are dark and neutral. Colored or bright bands belong to the slide.
+    const MAX_ANCHOR_BACKGROUND: u8 = 48;
+    /// A pure-black bar can carry a wide control strip, so only detail that
+    /// spreads across most of the line marks it as slide content. Darker slide
+    /// bands (title, footer) sit above pure black and use the tighter limit.
+    const BLACK_BACKGROUND: u8 = 12;
+    const MIN_DETAIL_EXTENT: f64 = 0.25;
+    const MIN_BLACK_DETAIL_EXTENT: f64 = 0.55;
+    const MAX_ANCHOR_SATURATION: f64 = 30.0;
+    /// Background change that marks the end of the bar. Black bars sit well
+    /// below any real slide surface, so a modest shift is a clear boundary.
+    const MAX_BACKGROUND_SHIFT: i32 = 10;
+
+    let limit = if column { planes.width } else { planes.height };
+    let span = perpendicular.1.saturating_sub(perpendicular.0);
+    if span < 8 || edge == 0 || edge as usize >= limit {
+        return edge;
+    }
+    let first = if start { edge as i64 } else { edge as i64 - 1 };
+    if !(0..limit as i64).contains(&first) {
+        return edge;
+    }
+    let Some(anchor) = line_background(
+        planes,
+        column,
+        first as usize,
+        perpendicular.0,
+        perpendicular.1,
+    ) else {
+        return edge;
+    };
+    if anchor > MAX_ANCHOR_BACKGROUND {
+        return edge;
+    }
+    let detail_limit = if anchor <= BLACK_BACKGROUND {
+        MIN_BLACK_DETAIL_EXTENT
+    } else {
+        MIN_DETAIL_EXTENT
+    };
+    let (_, anchor_saturation, _) = line_stats(
+        planes,
+        column,
+        first as usize,
+        perpendicular.0,
+        perpendicular.1,
+    );
+    if anchor_saturation >= MAX_ANCHOR_SATURATION {
+        return edge;
+    }
+    let cap = ((limit as f64 * MAX_BAR_SHARE) as usize).max(2);
+    let direction: i64 = if start { 1 } else { -1 };
+    let mut position = first;
+    let mut thickness = 0usize;
+    let mut sparse_detail = false;
+    while thickness < cap && (0..limit as i64).contains(&position) {
+        let Some(background) = line_background(
+            planes,
+            column,
+            position as usize,
+            perpendicular.0,
+            perpendicular.1,
+        ) else {
+            break;
+        };
+        let (_, saturation, _) = line_stats(
+            planes,
+            column,
+            position as usize,
+            perpendicular.0,
+            perpendicular.1,
+        );
+        if saturation >= MAX_ANCHOR_SATURATION
+            || (background as i32 - anchor as i32).abs() > MAX_BACKGROUND_SHIFT
+        {
+            break;
+        }
+        let extent = line_detail_extent(
+            planes,
+            column,
+            position as usize,
+            perpendicular.0,
+            perpendicular.1,
+        );
+        if extent >= detail_limit {
+            return edge;
+        }
+        sparse_detail |= extent > 0.0;
+        position += direction;
+        thickness += 1;
+    }
+    if thickness == 0 || thickness >= cap {
+        return edge;
+    }
+    if !(0..limit as i64).contains(&position) {
+        return edge;
+    }
+    if sparse_detail && anchor > BLACK_BACKGROUND {
+        // A dark gray or colored band carrying text is a slide band, not a
+        // letterbox. Only pure black bars are trusted to hold UI controls.
+        return edge;
+    }
+    if sparse_detail && (thickness as f64) > (limit as f64 * MAX_DETAIL_BAR_SHARE) {
+        return edge;
+    }
+    if start {
+        position as u32
+    } else {
+        (position + 1) as u32
+    }
+}
+
+/// Trim dark letterbox or control bars from every side of a candidate crop.
+/// Repeated passes let one bar expose another beneath it.
+fn trim_letterbox_edges(planes: &Planes, rect: Rect) -> Rect {
+    let mut result = rect;
+    for _ in 0..3 {
+        let horizontal_span = (result.x0 as usize, result.x1 as usize);
+        let vertical_span = (result.y0 as usize, result.y1 as usize);
+        let next = Rect {
+            x0: trim_letterbox_band(planes, result.x0, true, true, vertical_span),
+            y0: trim_letterbox_band(planes, result.y0, true, false, horizontal_span),
+            x1: trim_letterbox_band(planes, result.x1, false, true, vertical_span),
+            y1: trim_letterbox_band(planes, result.y1, false, false, horizontal_span),
+        };
+        if next == result {
+            break;
+        }
+        result = next;
+        if result.width() < 4 || result.height() < 4 {
+            break;
+        }
+    }
+    result
+}
+
 /// Mean luma and saturation of the lines in `from..to` that exist inside the
 /// picture. `None` means no line of that side is available.
 fn side_means(
@@ -824,11 +1066,12 @@ fn edge_has_contrast(
 }
 
 /// Safety net for every candidate crop. Edges are pushed outward across bands
-/// that may still belong to the slide, then each resulting edge must sit on a
-/// visible difference between the slide and its surroundings. Two passes let
-/// an expansion on one side expose another band on the next. Any doubt keeps
-/// the untouched screenshot (`None`), because losing presentation content is
-/// worse than shipping the full window.
+/// that may still belong to the slide, dark letterbox and control bars are
+/// trimmed inward, and each resulting edge must sit on a visible difference
+/// between the slide and its surroundings. Two expansion passes let an
+/// expansion on one side expose another band on the next. Any doubt keeps the
+/// untouched screenshot (`None`), because losing presentation content is worse
+/// than shipping the full window.
 fn guard_crop(planes: &Planes, rect: Rect) -> Option<Rect> {
     let mut guarded = rect;
     for _ in 0..2 {
@@ -849,6 +1092,7 @@ fn guard_crop(planes: &Planes, rect: Rect) -> Option<Rect> {
             y1: expand_past_content_band(planes, guarded.y1, false, false, horizontal_span),
         };
     }
+    guarded = trim_letterbox_edges(planes, guarded);
     if guarded.width() < 4 || guarded.height() < 4 {
         return None;
     }
@@ -1374,6 +1618,7 @@ fn detect_edge_fallback(image: &DynamicImage, full: &Planes) -> Option<Rect> {
         y1: (best.y1 as f64 * scale_y) as u32,
     };
     let refined = refine_edges(full, rough, (scale_x + scale_y) / 2.0, false);
+    let refined = trim_letterbox_edges(full, refined);
     if has_chrome_border(full, refined) {
         None
     } else {
@@ -1885,6 +2130,140 @@ mod tests {
             (box_y + box_height) as i64,
             WHITE,
         );
+        assert_crop(detect(&image), slide, 2);
+    }
+
+    /// Meeting window sharing a slide inside a black viewport: window toolbar,
+    /// black letterbox above and below the slide, an optional corner status
+    /// label, and an optional floating control bar over the bottom letterbox.
+    fn we_link_screenshot(
+        with_top_label: bool,
+        toolbar_width: u32,
+        slide_color: [u8; 3],
+    ) -> (image::RgbImage, (u32, u32, u32, u32)) {
+        let (width, height) = (1512, 982);
+        let mut image = canvas(width, height, [28, 28, 30]);
+        fill(&mut image, 0, 0, width as i64, 64, [42, 42, 46]);
+        for index in 0..8 {
+            fill(
+                &mut image,
+                24 + index * 14,
+                24,
+                34 + index * 14,
+                40,
+                [210, 210, 210],
+            );
+        }
+        fill(&mut image, 120, 64, 1392, 960, BLACK);
+        let slide = (120, 154, 1392, 869);
+        fill(
+            &mut image,
+            slide.0 as i64,
+            slide.1 as i64,
+            slide.2 as i64,
+            slide.3 as i64,
+            slide_color,
+        );
+        if slide_color != WHITE {
+            fill(&mut image, 180, 220, 900, 250, [240, 240, 240]);
+            fill(&mut image, 180, 300, 1300, 320, [200, 200, 200]);
+            for bar in 0..5 {
+                fill(
+                    &mut image,
+                    200 + bar * 200,
+                    650,
+                    280 + bar * 200,
+                    800,
+                    [0, 140, 210],
+                );
+            }
+        }
+        if with_top_label {
+            for index in 0..7 {
+                fill(
+                    &mut image,
+                    140 + index * 18,
+                    78,
+                    152 + index * 18,
+                    96,
+                    [220, 220, 220],
+                );
+            }
+        }
+        if toolbar_width > 0 {
+            let left = 756 - toolbar_width as i64 / 2;
+            fill(
+                &mut image,
+                left,
+                895,
+                left + toolbar_width as i64,
+                940,
+                [58, 58, 64],
+            );
+            let icons = (toolbar_width / 18).max(1);
+            for index in 0..icons {
+                let x = left + 8 + index as i64 * 16;
+                if x + 8 < left + toolbar_width as i64 {
+                    fill(&mut image, x, 910, x + 8, 926, WHITE);
+                }
+            }
+        }
+        (image, slide)
+    }
+
+    #[test]
+    fn crops_a_letterboxed_slide_without_meeting_controls() {
+        let (image, slide) = we_link_screenshot(false, 0, WHITE);
+        assert_crop(detect(&image), slide, 2);
+    }
+
+    #[test]
+    fn crops_a_letterboxed_slide_with_a_top_status_label() {
+        let (image, slide) = we_link_screenshot(true, 0, WHITE);
+        assert_crop(detect(&image), slide, 2);
+    }
+
+    #[test]
+    fn crops_a_letterboxed_slide_with_a_bottom_control_bar() {
+        let (image, slide) = we_link_screenshot(false, 180, WHITE);
+        assert_crop(detect(&image), slide, 2);
+    }
+
+    #[test]
+    fn crops_a_letterboxed_slide_with_a_wide_control_bar() {
+        let (image, slide) = we_link_screenshot(true, 420, WHITE);
+        assert_crop(detect(&image), slide, 2);
+    }
+
+    #[test]
+    fn crops_a_letterboxed_dark_slide_with_meeting_controls() {
+        let (image, slide) = we_link_screenshot(true, 300, [30, 34, 48]);
+        assert_crop(detect(&image), slide, 2);
+    }
+
+    #[test]
+    fn keeps_a_dark_title_band_beside_a_letterbox_bar() {
+        let (mut image, slide) = we_link_screenshot(false, 180, WHITE);
+        let band_bottom = slide.1 + (slide.3 - slide.1) * 18 / 100;
+        fill(
+            &mut image,
+            slide.0 as i64,
+            slide.1 as i64,
+            slide.2 as i64,
+            band_bottom as i64,
+            [18, 18, 18],
+        );
+        for index in 0..3 {
+            let x = slide.0 + 80 + index * 90;
+            fill(
+                &mut image,
+                x as i64,
+                slide.1 as i64 + 35,
+                (x + 60) as i64,
+                slide.1 as i64 + 62,
+                WHITE,
+            );
+        }
         assert_crop(detect(&image), slide, 2);
     }
 
