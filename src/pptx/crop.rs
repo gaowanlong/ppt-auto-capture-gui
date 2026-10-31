@@ -28,6 +28,12 @@
 //!    titles, footers, and side labels are never cut. Finally each edge must
 //!    sit on a visible difference between the slide and its surroundings. No
 //!    fixed aspect ratio is required because presentation windows vary.
+//! 5. When several screenshots of one session are available, they are compared
+//!    as well: a thin dark neutral border band whose cells stay identical
+//!    across frames is treated as a taskbar or meeting control strip and
+//!    trimmed, while any changing slide content stops the trim. The reference
+//!    is ignored when the frames are identical (the same slide captured
+//!    repeatedly) or differ in size.
 //!
 //! Whenever a stage is uncertain the function returns `None` and the caller
 //! embeds the original screenshot unchanged. Losing presentation content is
@@ -127,6 +133,206 @@ impl Planes {
             }
         }
         0
+    }
+}
+
+/// Summary of several screenshots from one session: cells that stay identical
+/// across frames belong to static window chrome (taskbar, meeting toolbar,
+/// floating controls), while slide content changes from slide to slide. The
+/// reference is only extra evidence for trimming thin, dark, neutral border
+/// bands; it never chooses the slide rectangle on its own. Frames that differ
+/// too little (repeated captures of one slide) or have different sizes yield
+/// no reference at all.
+pub(super) struct FrameReference {
+    width: usize,
+    height: usize,
+    cells_x: usize,
+    cells_y: usize,
+    stable: Vec<bool>,
+    full_width: u32,
+    full_height: u32,
+}
+
+impl FrameReference {
+    const MAX_SIDE: u32 = 480;
+    const CELL: usize = 4;
+    const MIN_FRAMES: usize = 2;
+    /// At least this share of the picture must change between frames, so a
+    /// session of identical screenshots cannot turn the whole slide static.
+    const MIN_DYNAMIC_SHARE: f64 = 0.02;
+    const MAX_DYNAMIC_SHARE: f64 = 0.98;
+    const STABLE_LUMA_SPREAD: i32 = 8;
+    const STABLE_SATURATION_SPREAD: i32 = 12;
+
+    pub(super) fn from_images(images: &[DynamicImage]) -> Option<Self> {
+        let (full_width, full_height) = images.first()?.dimensions();
+        Self::from_scaled_images(images, full_width, full_height)
+    }
+
+    /// Build a reference from downscaled frame copies. `full_width` and
+    /// `full_height` are the dimensions of the original screenshots and are
+    /// used to map crop coordinates back to the reference grid.
+    pub(super) fn from_scaled_images(
+        images: &[DynamicImage],
+        full_width: u32,
+        full_height: u32,
+    ) -> Option<Self> {
+        if images.len() < Self::MIN_FRAMES {
+            return None;
+        }
+        if full_width < 100 || full_height < 100 {
+            return None;
+        }
+        let (sample_width, sample_height) = images[0].dimensions();
+        if sample_width < 16 || sample_height < 16 {
+            return None;
+        }
+        if images
+            .iter()
+            .any(|image| image.dimensions() != (sample_width, sample_height))
+        {
+            return None;
+        }
+        let planes: Vec<Planes> = images
+            .iter()
+            .map(|image| Planes::new(image, Self::MAX_SIDE))
+            .collect();
+        let width = planes[0].width;
+        let height = planes[0].height;
+        if planes
+            .iter()
+            .any(|plane| plane.width != width || plane.height != height)
+        {
+            return None;
+        }
+        let cells_x = width.div_ceil(Self::CELL);
+        let cells_y = height.div_ceil(Self::CELL);
+        let mut stable = vec![false; cells_x * cells_y];
+        let mut dynamic_cells = 0usize;
+        for cell_y in 0..cells_y {
+            for cell_x in 0..cells_x {
+                let start_x = cell_x * Self::CELL;
+                let start_y = cell_y * Self::CELL;
+                let end_x = (start_x + Self::CELL).min(width);
+                let end_y = (start_y + Self::CELL).min(height);
+                let mut is_stable = true;
+                'cell: for y in start_y..end_y {
+                    for x in start_x..end_x {
+                        let index = y * width + x;
+                        let mut min_luma = u8::MAX;
+                        let mut max_luma = 0;
+                        let mut min_saturation = u8::MAX;
+                        let mut max_saturation = 0;
+                        for plane in &planes {
+                            let luma = plane.luma[index];
+                            let saturation = plane.saturation[index];
+                            min_luma = min_luma.min(luma);
+                            max_luma = max_luma.max(luma);
+                            min_saturation = min_saturation.min(saturation);
+                            max_saturation = max_saturation.max(saturation);
+                        }
+                        if i32::from(max_luma - min_luma) > Self::STABLE_LUMA_SPREAD
+                            || i32::from(max_saturation - min_saturation)
+                                > Self::STABLE_SATURATION_SPREAD
+                        {
+                            is_stable = false;
+                            break 'cell;
+                        }
+                    }
+                }
+                stable[cell_y * cells_x + cell_x] = is_stable;
+                if !is_stable {
+                    dynamic_cells += 1;
+                }
+            }
+        }
+        let dynamic_share = dynamic_cells as f64 / (cells_x * cells_y) as f64;
+        if !(Self::MIN_DYNAMIC_SHARE..=Self::MAX_DYNAMIC_SHARE).contains(&dynamic_share) {
+            return None;
+        }
+        Some(Self {
+            width,
+            height,
+            cells_x,
+            cells_y,
+            stable,
+            full_width,
+            full_height,
+        })
+    }
+
+    /// Share of the cells along one full-resolution line that stay identical
+    /// across the sampled frames.
+    fn line_stable_share(&self, column: bool, position: u32, start: u32, end: u32) -> f64 {
+        let (axis_full, perpendicular_full, axis_ref, perpendicular_ref) = if column {
+            (self.full_width, self.full_height, self.width, self.height)
+        } else {
+            (self.full_height, self.full_width, self.height, self.width)
+        };
+        if start >= end || axis_full == 0 || perpendicular_full == 0 {
+            return 0.0;
+        }
+        let fixed = ((position as f64 / axis_full as f64) * axis_ref as f64) as usize;
+        let fixed = fixed.min(axis_ref.saturating_sub(1));
+        let from = ((start as f64 / perpendicular_full as f64) * perpendicular_ref as f64) as usize;
+        let to = (((end as f64 / perpendicular_full as f64) * perpendicular_ref as f64).ceil()
+            as usize)
+            .min(perpendicular_ref)
+            .max(from + 1);
+        let fixed_cell = fixed / Self::CELL;
+        let step = ((to - from) / 256).max(1);
+        let mut stable_count = 0usize;
+        let mut total = 0usize;
+        let mut along = from;
+        while along < to {
+            let cell = along / Self::CELL;
+            let (cell_x, cell_y) = if column {
+                (fixed_cell, cell)
+            } else {
+                (cell, fixed_cell)
+            };
+            if cell_x < self.cells_x && cell_y < self.cells_y {
+                total += 1;
+                if self.stable[cell_y * self.cells_x + cell_x] {
+                    stable_count += 1;
+                }
+            }
+            along += step;
+        }
+        if total == 0 {
+            0.0
+        } else {
+            stable_count as f64 / total as f64
+        }
+    }
+
+    /// Share of cells inside a rectangle that change between frames.
+    fn dynamic_share_inside(&self, rect: Rect) -> f64 {
+        if rect.width() == 0 || rect.height() == 0 {
+            return 0.0;
+        }
+        let scale_x = self.width as f64 / self.full_width as f64;
+        let scale_y = self.height as f64 / self.full_height as f64;
+        let from_x = ((rect.x0 as f64 * scale_x) as usize / Self::CELL).min(self.cells_x);
+        let from_y = ((rect.y0 as f64 * scale_y) as usize / Self::CELL).min(self.cells_y);
+        let to_x =
+            (((rect.x1 as f64 * scale_x).ceil() as usize) / Self::CELL + 1).min(self.cells_x);
+        let to_y =
+            (((rect.y1 as f64 * scale_y).ceil() as usize) / Self::CELL + 1).min(self.cells_y);
+        if from_x >= to_x || from_y >= to_y {
+            return 0.0;
+        }
+        let mut dynamic = 0usize;
+        let mut total = 0usize;
+        for cell_y in from_y..to_y {
+            for cell_x in from_x..to_x {
+                total += 1;
+                if !self.stable[cell_y * self.cells_x + cell_x] {
+                    dynamic += 1;
+                }
+            }
+        }
+        dynamic as f64 / total.max(1) as f64
     }
 }
 
@@ -993,6 +1199,140 @@ fn trim_letterbox_edges(planes: &Planes, rect: Rect) -> Rect {
     result
 }
 
+/// Remove a thin border band that stays identical across every sampled
+/// screenshot: a taskbar, a meeting toolbar, or a floating control strip.
+/// Static chrome is dark, neutral, and carries UI detail; slide content
+/// changes between slides, and a line that changes anywhere stops the trim. A
+/// band wider than the cap is left alone because it is more likely a quiet
+/// slide background than a control strip.
+fn trim_static_band(
+    planes: &Planes,
+    reference: &FrameReference,
+    edge: u32,
+    start: bool,
+    column: bool,
+    perpendicular: (usize, usize),
+) -> u32 {
+    /// Static control bars and taskbars are thin. Anything wider is treated as
+    /// slide content even when it happens to be identical across frames.
+    const MAX_STATIC_SHARE: f64 = 0.12;
+    /// Chrome is dark and neutral; bright or colored bands belong to the slide.
+    const MAX_BACKGROUND: u8 = 60;
+    const MAX_SATURATION: f64 = 24.0;
+    /// Controls and taskbars are pixel-identical across captures; text that
+    /// changes between slides lowers this share and protects the band.
+    const MIN_STABLE_SHARE: f64 = 0.95;
+
+    let limit = if column { planes.width } else { planes.height };
+    if perpendicular.1.saturating_sub(perpendicular.0) < 8 || edge == 0 || edge as usize >= limit {
+        return edge;
+    }
+    let first = if start { edge as i64 } else { edge as i64 - 1 };
+    if !(0..limit as i64).contains(&first) {
+        return edge;
+    }
+    let Some(anchor) = line_background(
+        planes,
+        column,
+        first as usize,
+        perpendicular.0,
+        perpendicular.1,
+    ) else {
+        return edge;
+    };
+    if anchor > MAX_BACKGROUND {
+        return edge;
+    }
+    let (_, anchor_saturation, _) = line_stats(
+        planes,
+        column,
+        first as usize,
+        perpendicular.0,
+        perpendicular.1,
+    );
+    if anchor_saturation >= MAX_SATURATION {
+        return edge;
+    }
+    let cap = ((limit as f64 * MAX_STATIC_SHARE) as usize).max(2);
+    let direction: i64 = if start { 1 } else { -1 };
+    let mut position = first;
+    let mut thickness = 0usize;
+    let mut detail_seen = false;
+    while thickness < cap && (0..limit as i64).contains(&position) {
+        let line = position as usize;
+        let Some(background) =
+            line_background(planes, column, line, perpendicular.0, perpendicular.1)
+        else {
+            break;
+        };
+        let (_, saturation, _) = line_stats(planes, column, line, perpendicular.0, perpendicular.1);
+        if background > MAX_BACKGROUND || saturation >= MAX_SATURATION {
+            break;
+        }
+        if reference.line_stable_share(
+            column,
+            position as u32,
+            perpendicular.0 as u32,
+            perpendicular.1 as u32,
+        ) < MIN_STABLE_SHARE
+        {
+            break;
+        }
+        detail_seen |= line_has_detail(planes, column, line, perpendicular.0, perpendicular.1);
+        position += direction;
+        thickness += 1;
+    }
+    if thickness == 0 || thickness >= cap {
+        return edge;
+    }
+    if !(0..limit as i64).contains(&position) {
+        return edge;
+    }
+    if !detail_seen && anchor > 12 {
+        // A flat dark band without any UI detail is more likely a quiet slide
+        // margin than a taskbar or control strip. Pure black letterbox bars
+        // are handled by the single-frame trimmer instead.
+        return edge;
+    }
+    if start {
+        position as u32
+    } else {
+        (position + 1) as u32
+    }
+}
+
+/// Trim static chrome from every side of a candidate crop. The result must
+/// still contain changing slide content; otherwise the once-static band was
+/// the slide itself (for example the same title slide captured repeatedly)
+/// and the original rectangle is kept.
+fn trim_static_edges(planes: &Planes, rect: Rect, reference: Option<&FrameReference>) -> Rect {
+    let Some(reference) = reference else {
+        return rect;
+    };
+    let mut result = rect;
+    for _ in 0..2 {
+        let horizontal_span = (result.x0 as usize, result.x1 as usize);
+        let vertical_span = (result.y0 as usize, result.y1 as usize);
+        let next = Rect {
+            x0: trim_static_band(planes, reference, result.x0, true, true, vertical_span),
+            y0: trim_static_band(planes, reference, result.y0, true, false, horizontal_span),
+            x1: trim_static_band(planes, reference, result.x1, false, true, vertical_span),
+            y1: trim_static_band(planes, reference, result.y1, false, false, horizontal_span),
+        };
+        if next == result {
+            break;
+        }
+        result = next;
+        if result.width() < 4 || result.height() < 4 {
+            return rect;
+        }
+    }
+    if reference.dynamic_share_inside(result) < 0.002 {
+        return rect;
+    }
+    result
+}
+
 /// Mean luma and saturation of the lines in `from..to` that exist inside the
 /// picture. `None` means no line of that side is available.
 fn side_means(
@@ -1072,7 +1412,7 @@ fn edge_has_contrast(
 /// expansion on one side expose another band on the next. Any doubt keeps the
 /// untouched screenshot (`None`), because losing presentation content is worse
 /// than shipping the full window.
-fn guard_crop(planes: &Planes, rect: Rect) -> Option<Rect> {
+fn guard_crop(planes: &Planes, rect: Rect, reference: Option<&FrameReference>) -> Option<Rect> {
     let mut guarded = rect;
     for _ in 0..2 {
         let horizontal_span = (guarded.x0 as usize, guarded.x1 as usize);
@@ -1092,6 +1432,8 @@ fn guard_crop(planes: &Planes, rect: Rect) -> Option<Rect> {
             y1: expand_past_content_band(planes, guarded.y1, false, false, horizontal_span),
         };
     }
+    guarded = trim_letterbox_edges(planes, guarded);
+    guarded = trim_static_edges(planes, guarded, reference);
     guarded = trim_letterbox_edges(planes, guarded);
     if guarded.width() < 4 || guarded.height() < 4 {
         return None;
@@ -1465,7 +1807,11 @@ impl RgbWork {
 /// accepted; the two-side brightness difference, not an aspect ratio, decides
 /// whether a transition is a slide boundary.
 #[allow(clippy::needless_range_loop)]
-fn detect_edge_fallback(image: &DynamicImage, full: &Planes) -> Option<Rect> {
+fn detect_edge_fallback(
+    image: &DynamicImage,
+    full: &Planes,
+    reference: Option<&FrameReference>,
+) -> Option<Rect> {
     let work = RgbWork::new(image, 480);
     let (width, height) = (work.width, work.height);
     if width < 16 || height < 16 {
@@ -1619,6 +1965,8 @@ fn detect_edge_fallback(image: &DynamicImage, full: &Planes) -> Option<Rect> {
     };
     let refined = refine_edges(full, rough, (scale_x + scale_y) / 2.0, false);
     let refined = trim_letterbox_edges(full, refined);
+    let refined = trim_static_edges(full, refined, reference);
+    let refined = trim_letterbox_edges(full, refined);
     if has_chrome_border(full, refined) {
         None
     } else {
@@ -1627,6 +1975,17 @@ fn detect_edge_fallback(image: &DynamicImage, full: &Planes) -> Option<Rect> {
 }
 
 pub(super) fn detect_presentation(image: &DynamicImage) -> Option<(u32, u32, u32, u32)> {
+    detect_presentation_with_reference(image, None)
+}
+
+/// Detect the presentation area with optional evidence from the session's
+/// other screenshots. Static dark border bands that are identical across
+/// frames are treated as taskbars or meeting controls and trimmed, while
+/// changing slide content protects everything else.
+pub(super) fn detect_presentation_with_reference(
+    image: &DynamicImage,
+    reference: Option<&FrameReference>,
+) -> Option<(u32, u32, u32, u32)> {
     if image.width() < 100 || image.height() < 100 {
         return None;
     }
@@ -1635,7 +1994,7 @@ pub(super) fn detect_presentation(image: &DynamicImage) -> Option<(u32, u32, u32
     let bright =
         probe.luma.iter().filter(|&&value| value >= 235).count() as f64 / probe.luma.len() as f64;
     let rect = if bright < 0.02 {
-        detect_edge_fallback(image, &full)
+        detect_edge_fallback(image, &full, reference)
     } else if let Some(rect) = detect_white_canvas(image, &full) {
         Some(rect)
     } else {
@@ -1661,12 +2020,12 @@ pub(super) fn detect_presentation(image: &DynamicImage) -> Option<(u32, u32, u32
         // dominated by strict white (which would indicate a bright slide whose
         // centre merely contains a dark photo).
         if centre < 110.0 && strict_white < 0.30 {
-            detect_edge_fallback(image, &full)
+            detect_edge_fallback(image, &full, reference)
         } else {
             None
         }
     };
-    let rect = guard_crop(&full, rect?)?;
+    let rect = guard_crop(&full, rect?, reference)?;
     Some((rect.x0, rect.y0, rect.width(), rect.height()))
 }
 
@@ -2239,6 +2598,136 @@ mod tests {
     fn crops_a_letterboxed_dark_slide_with_meeting_controls() {
         let (image, slide) = we_link_screenshot(true, 300, [30, 34, 48]);
         assert_crop(detect(&image), slide, 2);
+    }
+
+    fn frame_reference_of(frames: &[image::RgbImage]) -> FrameReference {
+        let images: Vec<DynamicImage> = frames
+            .iter()
+            .map(|frame| DynamicImage::ImageRgb8(frame.clone()))
+            .collect();
+        FrameReference::from_images(&images).expect("frame reference")
+    }
+
+    fn vary_slide_content(image: &mut image::RgbImage, slide: (u32, u32, u32, u32), frame: usize) {
+        let colors = [[0, 120, 215], [220, 60, 60], [30, 160, 90], [240, 180, 40]];
+        for block in 0..4u32 {
+            let column = (block as usize + frame) % 4;
+            let x0 = slide.0 + 120 + column as u32 * 260;
+            let y0 = slide.1 + 250 + block * 90;
+            fill(
+                image,
+                x0 as i64,
+                y0 as i64,
+                (x0 + 200) as i64,
+                (y0 + 100) as i64,
+                colors[block as usize],
+            );
+        }
+    }
+
+    fn add_static_control_strip(image: &mut image::RgbImage, x0: u32, y0: u32, x1: u32, y1: u32) {
+        fill(
+            image,
+            x0 as i64,
+            y0 as i64,
+            x1 as i64,
+            y1 as i64,
+            [58, 58, 64],
+        );
+        let icon_y = y0 + (y1 - y0) / 3;
+        let mut x = x0 + 8;
+        while x + 10 < x1 {
+            fill(
+                image,
+                x as i64,
+                icon_y as i64,
+                (x + 10) as i64,
+                (icon_y + (y1 - y0) / 3) as i64,
+                WHITE,
+            );
+            x += 22;
+        }
+    }
+
+    #[test]
+    fn trims_a_control_strip_that_is_static_across_frames() {
+        let mut frames = Vec::new();
+        for frame in 0..3 {
+            let (mut image, slide) = we_link_screenshot(false, 0, [30, 34, 48]);
+            vary_slide_content(&mut image, slide, frame);
+            add_static_control_strip(&mut image, 200, slide.3, 1310, slide.3 + 46);
+            frames.push(image);
+        }
+        let reference = frame_reference_of(&frames);
+        let detected = detect_presentation_with_reference(
+            &DynamicImage::ImageRgb8(frames[0].clone()),
+            Some(&reference),
+        );
+        assert_crop(detected, (120, 154, 1392, 869), 2);
+    }
+
+    #[test]
+    fn keeps_a_colored_footer_band_that_is_static_across_frames() {
+        let mut frames = Vec::new();
+        for frame in 0..3 {
+            let (mut image, slide) = we_link_screenshot(false, 0, WHITE);
+            vary_slide_content(&mut image, slide, frame);
+            let footer_top = slide.3 - 70;
+            fill(
+                &mut image,
+                slide.0 as i64,
+                footer_top as i64,
+                slide.2 as i64,
+                slide.3 as i64,
+                [20, 40, 90],
+            );
+            for index in 0..5 {
+                let x = slide.0 + 100 + index * 120;
+                fill(
+                    &mut image,
+                    x as i64,
+                    footer_top as i64 + 24,
+                    (x + 70) as i64,
+                    footer_top as i64 + 46,
+                    [230, 230, 230],
+                );
+            }
+            frames.push(image);
+        }
+        let reference = frame_reference_of(&frames);
+        let detected = detect_presentation_with_reference(
+            &DynamicImage::ImageRgb8(frames[0].clone()),
+            Some(&reference),
+        );
+        assert_crop(detected, (120, 154, 1392, 869), 2);
+    }
+
+    #[test]
+    fn identical_frames_produce_no_reference() {
+        let (image, _) = we_link_screenshot(false, 0, WHITE);
+        let frames = vec![image.clone(), image];
+        let images: Vec<DynamicImage> = frames
+            .iter()
+            .map(|frame| DynamicImage::ImageRgb8(frame.clone()))
+            .collect();
+        assert!(FrameReference::from_images(&images).is_none());
+    }
+
+    #[test]
+    fn mismatched_frame_sizes_produce_no_reference() {
+        let (first, _) = we_link_screenshot(false, 0, WHITE);
+        let second = image::imageops::resize(
+            &first,
+            first.width() - 20,
+            first.height() - 10,
+            FilterType::Triangle,
+        );
+        let frames = vec![first, second];
+        let images: Vec<DynamicImage> = frames
+            .iter()
+            .map(|frame| DynamicImage::ImageRgb8(frame.clone()))
+            .collect();
+        assert!(FrameReference::from_images(&images).is_none());
     }
 
     #[test]

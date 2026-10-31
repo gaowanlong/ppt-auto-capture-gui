@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use image::GenericImageView;
 use log::info;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -32,6 +33,44 @@ fn retry_windows_replace(
         }
     }
     operation()
+}
+
+/// Sample up to eight screenshots from the session and downscale them for the
+/// multi-frame crop reference. Any read/decode failure simply drops the extra
+/// evidence; dimensions must match or no reference is produced.
+fn build_frame_reference(slides: &[(u32, PathBuf)]) -> Option<super::crop::FrameReference> {
+    const MAX_SAMPLES: usize = 8;
+    const SAMPLE_SIDE: u32 = 640;
+    if slides.len() < 2 {
+        return None;
+    }
+    let sample_count = slides.len().min(MAX_SAMPLES);
+    let mut images = Vec::with_capacity(sample_count);
+    let mut full_dimensions = None;
+    for slot in 0..sample_count {
+        let index = slot * (slides.len() - 1) / (sample_count - 1).max(1);
+        let path = &slides[index].1;
+        let Ok(bytes) = std::fs::read(path) else {
+            continue;
+        };
+        let Ok(image) = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png) else {
+            continue;
+        };
+        let dimensions = image.dimensions();
+        match full_dimensions {
+            Some(expected) if expected != dimensions => return None,
+            Some(_) => {}
+            None => full_dimensions = Some(dimensions),
+        }
+        let scaled = if dimensions.0 > SAMPLE_SIDE || dimensions.1 > SAMPLE_SIDE {
+            image.thumbnail(SAMPLE_SIDE, SAMPLE_SIDE)
+        } else {
+            image
+        };
+        images.push(scaled);
+    }
+    let (full_width, full_height) = full_dimensions?;
+    super::crop::FrameReference::from_scaled_images(&images, full_width, full_height)
 }
 
 /// Helper to write a file entry in the ZIP archive.
@@ -182,6 +221,16 @@ impl PptxWriter {
             THEME_XML.as_bytes(),
         )?;
 
+        // Static window chrome (taskbar, meeting controls) is identical across
+        // a session's screenshots while slides change. Sample a few frames first
+        // so the crop can tell such bands apart. Only the downscaled copies are
+        // kept, never all full-size screenshots.
+        let frame_reference = if self.auto_crop {
+            build_frame_reference(slides)
+        } else {
+            None
+        };
+
         // Validate and embed one page at a time; never hold the entire deck's PNGs in memory.
         // A missing/corrupt image aborts this candidate, leaving the good deck intact.
         let mut images = Vec::with_capacity(slides.len());
@@ -191,7 +240,10 @@ impl PptxWriter {
             let decoded = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)
                 .with_context(|| format!("Invalid PNG {:?}", path))?;
             let dimensions = if self.auto_crop {
-                if let Some((x, y, width, height)) = super::crop::detect_presentation(&decoded) {
+                if let Some((x, y, width, height)) = super::crop::detect_presentation_with_reference(
+                    &decoded,
+                    frame_reference.as_ref(),
+                ) {
                     let cropped = decoded.crop_imm(x, y, width, height);
                     let mut output = std::io::Cursor::new(Vec::new());
                     cropped.write_to(&mut output, image::ImageFormat::Png)?;
@@ -579,6 +631,99 @@ mod tests {
         assert!((output.width() as i32 - 320).abs() <= 5);
         assert!((output.height() as i32 - 180).abs() <= 5);
         assert_eq!(std::fs::read(path).unwrap(), original);
+    }
+
+    fn write_we_link_frame(path: &std::path::Path, frame: u32) {
+        let mut image = image::RgbImage::from_pixel(1512, 982, image::Rgb([28, 28, 30]));
+        let fill =
+            |image: &mut image::RgbImage, x0: u32, y0: u32, x1: u32, y1: u32, color: [u8; 3]| {
+                for y in y0..y1 {
+                    for x in x0..x1 {
+                        image.put_pixel(x, y, image::Rgb(color));
+                    }
+                }
+            };
+        fill(&mut image, 0, 0, 1512, 64, [42, 42, 46]);
+        fill(&mut image, 120, 64, 1392, 960, [0, 0, 0]);
+        fill(&mut image, 120, 154, 1392, 869, [30, 34, 48]);
+        fill(&mut image, 180, 220, 900, 250, [240, 240, 240]);
+        fill(&mut image, 180, 300, 1300, 320, [200, 200, 200]);
+        for bar in 0..5u32 {
+            fill(
+                &mut image,
+                200 + bar * 200,
+                650,
+                280 + bar * 200,
+                800,
+                [0, 140, 210],
+            );
+        }
+        let colors = [[0, 120, 215], [220, 60, 60], [30, 160, 90], [240, 180, 40]];
+        for block in 0..4u32 {
+            let column = (block + frame) % 4;
+            let x0 = 240 + column * 260;
+            let y0 = 404 + block * 90;
+            fill(
+                &mut image,
+                x0,
+                y0,
+                x0 + 200,
+                y0 + 100,
+                colors[block as usize],
+            );
+        }
+        fill(&mut image, 200, 869, 1310, 915, [58, 58, 64]);
+        let mut x = 208;
+        while x + 10 < 1310 {
+            fill(&mut image, x, 884, x + 10, 900, [255, 255, 255]);
+            x += 22;
+        }
+        image.save(path).unwrap();
+    }
+
+    #[test]
+    fn multi_frame_crop_trims_a_static_control_strip() {
+        let dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let slides_dir = dir.path().join("slides");
+        std::fs::create_dir_all(&slides_dir).unwrap();
+        let first_path = slides_dir.join("slide_0001.png");
+        let second_path = slides_dir.join("slide_0002.png");
+        write_we_link_frame(&first_path, 0);
+        write_we_link_frame(&second_path, 1);
+        let record = |number: u32| {
+            SlideRecord::new(SlideRecordInput {
+                slide_number: number,
+                png_filename: format!("slide_{number:04}.png"),
+                png_relative_path: format!("slides/slide_{number:04}.png"),
+                frame_index: u64::from(number),
+                width: 1512,
+                height: 982,
+                content_hash: format!("hash{number}"),
+                source_name: "Test".into(),
+                monitor_name: "Monitor".into(),
+            })
+        };
+        let writer = PptxWriter::new(&dir.path().join("output.pptx"), "16:9", "fit");
+        writer
+            .with_auto_crop(true)
+            .write_slides(&[record(1), record(2)], &slides_dir)
+            .unwrap();
+        let mut zip =
+            ZipArchive::new(std::fs::File::open(dir.path().join("output.pptx")).unwrap()).unwrap();
+        for name in ["ppt/media/image1.png", "ppt/media/image2.png"] {
+            let mut bytes = Vec::new();
+            zip.by_name(name).unwrap().read_to_end(&mut bytes).unwrap();
+            let output = image::load_from_memory(&bytes).unwrap();
+            let actual = format!("{}x{}", output.width(), output.height());
+            assert!(
+                (output.width() as i32 - 1272).abs() <= 4,
+                "{name} width {actual}"
+            );
+            assert!(
+                (output.height() as i32 - 715).abs() <= 4,
+                "{name} height {actual}"
+            );
+        }
     }
 
     #[test]
