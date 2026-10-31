@@ -164,6 +164,7 @@ impl FrameReference {
     const STABLE_LUMA_SPREAD: i32 = 8;
     const STABLE_SATURATION_SPREAD: i32 = 12;
 
+    #[cfg(test)]
     pub(super) fn from_images(images: &[DynamicImage]) -> Option<Self> {
         let (full_width, full_height) = images.first()?.dimensions();
         Self::from_scaled_images(images, full_width, full_height)
@@ -1974,10 +1975,6 @@ fn detect_edge_fallback(
     }
 }
 
-pub(super) fn detect_presentation(image: &DynamicImage) -> Option<(u32, u32, u32, u32)> {
-    detect_presentation_with_reference(image, None)
-}
-
 /// Detect the presentation area with optional evidence from the session's
 /// other screenshots. Static dark border bands that are identical across
 /// frames are treated as taskbars or meeting controls and trimmed, while
@@ -2053,7 +2050,7 @@ mod tests {
     }
 
     fn detect(image: &image::RgbImage) -> Option<(u32, u32, u32, u32)> {
-        detect_presentation(&DynamicImage::ImageRgb8(image.clone()))
+        detect_presentation_with_reference(&DynamicImage::ImageRgb8(image.clone()), None)
     }
 
     fn assert_crop(
@@ -2705,7 +2702,7 @@ mod tests {
     #[test]
     fn identical_frames_produce_no_reference() {
         let (image, _) = we_link_screenshot(false, 0, WHITE);
-        let frames = vec![image.clone(), image];
+        let frames = [image.clone(), image];
         let images: Vec<DynamicImage> = frames
             .iter()
             .map(|frame| DynamicImage::ImageRgb8(frame.clone()))
@@ -2722,7 +2719,7 @@ mod tests {
             first.height() - 10,
             FilterType::Triangle,
         );
-        let frames = vec![first, second];
+        let frames = [first, second];
         let images: Vec<DynamicImage> = frames
             .iter()
             .map(|frame| DynamicImage::ImageRgb8(frame.clone()))
