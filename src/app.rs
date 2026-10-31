@@ -11,6 +11,7 @@ use crate::gui::export_panel::ExportPanel;
 use crate::gui::output_panel::OutputPanel;
 use crate::gui::settings_panel::SettingsPanel;
 use crate::gui::source_panel::SourcePanel;
+use crate::gui::theme::{self, token, NavIcon};
 use crate::i18n::{self, Language};
 
 use crate::config::AppConfig;
@@ -60,6 +61,9 @@ pub struct PptAutoCaptureApp {
     log_file: Option<std::path::PathBuf>,
     test_capture_pending: bool,
     close_after_stop: bool,
+    minimize_requested: bool,
+    minimized_by_start: bool,
+    restore_window_requested: bool,
 }
 
 #[derive(PartialEq)]
@@ -115,6 +119,9 @@ impl PptAutoCaptureApp {
             log_file: logging.log_file,
             test_capture_pending: false,
             close_after_stop: false,
+            minimize_requested: false,
+            minimized_by_start: false,
+            restore_window_requested: false,
         };
         if let Some(warning) = logging.warning {
             warn!("{warning}");
@@ -159,6 +166,7 @@ impl PptAutoCaptureApp {
         app.output_panel.auto_crop = config.auto_crop;
         app.output_panel.keep_previous = config.keep_previous;
         app.export_panel.settings = app.output_panel.clone();
+        app.dashboard.minimize_on_start = config.minimize_on_start;
         app.dashboard.output_path = output_path(&app.output_panel);
         app.refresh_displays();
         app.check_recovery();
@@ -297,6 +305,41 @@ impl PptAutoCaptureApp {
             self.dashboard.source_window_title = self.source_panel.selected_title.clone();
         }
         self.dashboard.monitor_description = self.display_panel.selected_description.clone();
+        self.queue_minimize_on_start();
+    }
+
+    /// Arm the minimize command once the worker has accepted a recording start.
+    fn queue_minimize_on_start(&mut self) {
+        if self.dashboard.session_active && !self.dashboard.stopping {
+            self.minimize_requested = self.dashboard.minimize_on_start;
+        }
+    }
+
+    /// Consume a pending minimize request; returns true when the window should
+    /// be sent to the taskbar.
+    fn consume_minimize_request(&mut self) -> bool {
+        if std::mem::take(&mut self.minimize_requested) && self.dashboard.session_active {
+            self.minimized_by_start = true;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Remember that a hidden window must come back after a failure or stop.
+    fn request_window_restore(&mut self) {
+        if self.minimized_by_start {
+            self.restore_window_requested = true;
+        }
+    }
+
+    fn consume_restore_request(&mut self) -> bool {
+        if std::mem::take(&mut self.restore_window_requested) {
+            self.minimized_by_start = false;
+            true
+        } else {
+            false
+        }
     }
 
     fn pause_capture(&mut self) {
@@ -643,6 +686,7 @@ impl PptAutoCaptureApp {
                     self.dashboard.stopping = false;
                     self.dashboard.session_active = false;
                     self.dashboard.current_state = CaptureState::Error;
+                    self.request_window_restore();
                     self.record_error("capture", message);
                 }
                 WorkerEvent::SessionStarted(path) => {
@@ -683,6 +727,7 @@ impl PptAutoCaptureApp {
                     info!("Capture state changed: {s:?}");
                     if s == CaptureState::Stopped {
                         self.dashboard.session_active = false;
+                        self.request_window_restore();
                         if let Some(mut worker) = self.worker.take() {
                             worker.stop();
                         }
@@ -737,6 +782,7 @@ impl PptAutoCaptureApp {
         self.dashboard.current_state = CaptureState::Error;
         self.dashboard.state_message = CaptureState::Error.label().to_string();
         self.dashboard.session_active = false;
+        self.request_window_restore();
         self.record_error("worker", "Capture worker disconnected".into());
     }
 
@@ -865,6 +911,10 @@ fn apply_output_to_config(panel: &OutputPanel, config: &mut AppConfig) {
 }
 
 impl eframe::App for PptAutoCaptureApp {
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        token::BG.to_normalized_gamma_f32()
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.process_events();
         self.export_panel.poll(self.language);
@@ -956,6 +1006,14 @@ impl eframe::App for PptAutoCaptureApp {
                 self.start_capture();
             }
         }
+        if self.consume_minimize_request() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+        }
+        if self.consume_restore_request() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
         if self.pending_pause {
             self.pending_pause = false;
             self.pause_capture();
@@ -993,175 +1051,200 @@ impl eframe::App for PptAutoCaptureApp {
             self.refresh_displays();
         }
 
-        egui::TopBottomPanel::top("bar").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.selectable_value(
-                    &mut self.active_tab,
-                    Tab::Dashboard,
-                    i18n::t_tab_dashboard(self.language),
-                );
-                ui.selectable_value(
-                    &mut self.active_tab,
-                    Tab::Source,
-                    i18n::t_tab_source(self.language),
-                );
-                ui.selectable_value(
-                    &mut self.active_tab,
-                    Tab::Display,
-                    i18n::t_tab_display(self.language),
-                );
-                ui.selectable_value(
-                    &mut self.active_tab,
-                    Tab::Settings,
-                    i18n::t_tab_settings(self.language),
-                );
-                ui.selectable_value(
-                    &mut self.active_tab,
-                    Tab::Output,
-                    i18n::t_tab_output(self.language),
-                );
-                ui.selectable_value(
-                    &mut self.active_tab,
-                    Tab::Export,
-                    match self.language {
-                        Language::Chinese => "图片转 PPTX",
-                        Language::English => "Create PPTX",
-                    },
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button(i18n::t_language_switch(self.language)).clicked() {
-                        self.language = self.language.next();
+        egui::SidePanel::left("sidebar")
+            .exact_width(212.0)
+            .resizable(false)
+            .frame(
+                egui::Frame::new()
+                    .fill(token::SIDEBAR)
+                    .inner_margin(egui::Margin::symmetric(12, 18)),
+            )
+            .show(ctx, |ui| {
+                theme::brand(ui, self.language);
+                ui.add_space(24.0);
+                ui.spacing_mut().item_spacing.y = 3.0;
+                let items = [
+                    (
+                        Tab::Dashboard,
+                        NavIcon::Overview,
+                        i18n::t_tab_dashboard(self.language),
+                    ),
+                    (
+                        Tab::Source,
+                        NavIcon::Window,
+                        i18n::t_tab_source(self.language),
+                    ),
+                    (
+                        Tab::Display,
+                        NavIcon::Display,
+                        i18n::t_tab_display(self.language),
+                    ),
+                    (
+                        Tab::Settings,
+                        NavIcon::Settings,
+                        i18n::t_tab_settings(self.language),
+                    ),
+                    (
+                        Tab::Output,
+                        NavIcon::Output,
+                        i18n::t_tab_output(self.language),
+                    ),
+                    (
+                        Tab::Export,
+                        NavIcon::Create,
+                        i18n::t_tab_export(self.language),
+                    ),
+                ];
+                for (tab, icon, label) in items {
+                    if theme::nav_item(ui, self.active_tab == tab, icon, label).clicked() {
+                        self.active_tab = tab;
+                    }
+                }
+
+                ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+                    ui.label(theme::muted(
+                        format!("v{}", env!("CARGO_PKG_VERSION")),
+                        10.5,
+                    ));
+                    ui.add_space(10.0);
+                    if let Some(language) = theme::language_switch(ui, self.language) {
+                        self.language = language;
                         let _ = self.config.save();
                     }
-                    ui.label(format!("  {}", self.language.label()));
                 });
             });
-        });
 
-        egui::CentralPanel::default().show(ctx, |ui| {
-            match self.active_tab {
-                Tab::Dashboard => {
-                    // Sync output info to dashboard
-                    if self.dashboard.output_path.is_empty() {
-                        self.dashboard.output_path = output_path(&self.output_panel);
-                    }
-                    let session_folder_available =
-                        session_directory(&self.dashboard.output_path).is_some();
-                    self.dashboard.render(
-                        ui,
-                        self.language,
-                        DashboardRenderInput {
-                            diagnostic_history: &self.diagnostic_history,
-                            persistent_log_available: self.log_directory.is_some(),
-                            session_folder_available,
-                            start_requested: &mut self.pending_start,
-                            pause_requested: &mut self.pending_pause,
-                            stop_requested: &mut self.pending_stop,
-                            resume_requested: &mut self.pending_resume,
-                        },
-                    );
-                    if std::mem::take(&mut self.dashboard.keep_screenshots_requested) {
-                        self.stop_and_keep_screenshots();
-                    }
-                    if self.dashboard.copy_diagnostics_requested {
-                        self.dashboard.copy_diagnostics_requested = false;
-                        self.copy_diagnostics(ctx);
-                        self.dashboard.show_diagnostics_status(
-                            i18n::t_diagnostics_copied(self.language).to_string(),
-                        );
-                    }
-                    if self.dashboard.open_log_directory_requested {
-                        self.dashboard.open_log_directory_requested = false;
-                        self.open_log_directory();
-                    }
-                }
-                Tab::Source => {
-                    self.source_panel.render(
-                        ui,
-                        self.language,
-                        self.display_panel.selected_hmonitor != 0,
-                    );
-                    if self.source_panel.test_requested {
-                        self.source_panel.test_requested = false;
-                        self.send_test_capture();
-                    }
-                    if self.windows.is_empty() {
-                        self.refresh_windows();
-                    }
-                }
-                Tab::Display => {
-                    self.display_panel.render(ui, self.language);
-                    if self.display_panel.test_capture_requested {
-                        self.display_panel.test_capture_requested = false;
-                        self.send_test_capture();
-                    }
-                    if self.monitors.is_empty() {
-                        self.refresh_displays();
-                    }
-                }
-                Tab::Settings => {
-                    self.settings_panel.render(ui, self.language);
-                    // Immediately push settings changes to the worker
-                    if self.settings_panel.changed {
-                        if let Some(ref tx) = self.cmd_tx {
-                            let cfg = self.settings_panel.get_config();
-                            let _ = tx.send(WorkerCommand::UpdateConfig(cfg));
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::new()
+                    .fill(token::BG)
+                    .inner_margin(egui::Margin::symmetric(28, 24)),
+            )
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        let width = ui.available_width().min(900.0);
+                        ui.set_width(width);
+                        match self.active_tab {
+                            Tab::Dashboard => {
+                                // Sync output info to dashboard
+                                if self.dashboard.output_path.is_empty() {
+                                    self.dashboard.output_path = output_path(&self.output_panel);
+                                }
+                                let session_folder_available =
+                                    session_directory(&self.dashboard.output_path).is_some();
+                                self.dashboard.render(
+                                    ui,
+                                    self.language,
+                                    DashboardRenderInput {
+                                        diagnostic_history: &self.diagnostic_history,
+                                        persistent_log_available: self.log_directory.is_some(),
+                                        session_folder_available,
+                                        start_requested: &mut self.pending_start,
+                                        pause_requested: &mut self.pending_pause,
+                                        stop_requested: &mut self.pending_stop,
+                                        resume_requested: &mut self.pending_resume,
+                                    },
+                                );
+                                if std::mem::take(&mut self.dashboard.keep_screenshots_requested) {
+                                    self.stop_and_keep_screenshots();
+                                }
+                                if self.dashboard.copy_diagnostics_requested {
+                                    self.dashboard.copy_diagnostics_requested = false;
+                                    self.copy_diagnostics(ctx);
+                                    self.dashboard.show_diagnostics_status(
+                                        i18n::t_diagnostics_copied(self.language).to_string(),
+                                    );
+                                }
+                                if self.dashboard.open_log_directory_requested {
+                                    self.dashboard.open_log_directory_requested = false;
+                                    self.open_log_directory();
+                                }
+                            }
+                            Tab::Source => {
+                                self.source_panel.render(
+                                    ui,
+                                    self.language,
+                                    self.display_panel.selected_hmonitor != 0,
+                                );
+                                if self.source_panel.test_requested {
+                                    self.source_panel.test_requested = false;
+                                    self.send_test_capture();
+                                }
+                                if self.windows.is_empty() {
+                                    self.refresh_windows();
+                                }
+                            }
+                            Tab::Display => {
+                                self.display_panel.render(ui, self.language);
+                                if self.display_panel.test_capture_requested {
+                                    self.display_panel.test_capture_requested = false;
+                                    self.send_test_capture();
+                                }
+                                if self.monitors.is_empty() {
+                                    self.refresh_displays();
+                                }
+                            }
+                            Tab::Settings => {
+                                self.settings_panel.render(ui, self.language);
+                                // Immediately push settings changes to the worker
+                                if self.settings_panel.changed {
+                                    if let Some(ref tx) = self.cmd_tx {
+                                        let cfg = self.settings_panel.get_config();
+                                        let _ = tx.send(WorkerCommand::UpdateConfig(cfg));
+                                    }
+                                }
+                                self.settings_panel.changed = false;
+                            }
+                            Tab::Output => {
+                                let locked = self.dashboard.session_active;
+                                self.output_panel.render(ui, self.language, locked);
+                                // Handle open output directory button
+                                if self.output_panel.open_output_requested {
+                                    self.output_panel.open_output_requested = false;
+                                    let dir = self.output_panel.output_dir.trim();
+                                    let dir = if dir.is_empty() { "." } else { dir };
+                                    log::info!("Opening output directory: {}", dir);
+                                    #[cfg(target_os = "windows")]
+                                    {
+                                        let _ =
+                                            std::process::Command::new("explorer").arg(dir).spawn();
+                                    }
+                                    #[cfg(target_os = "macos")]
+                                    {
+                                        let _ = std::process::Command::new("open").arg(dir).spawn();
+                                    }
+                                    #[cfg(target_os = "linux")]
+                                    {
+                                        let _ =
+                                            std::process::Command::new("xdg-open").arg(dir).spawn();
+                                    }
+                                }
+                                if std::mem::take(&mut self.output_panel.manage_folders_requested) {
+                                    self.open_session_list();
+                                }
+                                // Sync output filename to dashboard
+                                if self.dashboard.output_path.is_empty() {
+                                    self.dashboard.output_path = output_path(&self.output_panel);
+                                }
+                            }
+                            Tab::Export => {
+                                self.export_panel.recording_root =
+                                    self.output_panel.output_dir.clone().into();
+                                self.export_panel.render(ui, self.language);
+                                if let Some(directory) = self.export_panel.take_open_request() {
+                                    self.open_directory(&directory);
+                                }
+                            }
                         }
-                    }
-                    self.settings_panel.changed = false;
-                }
-                Tab::Output => {
-                    if self.dashboard.session_active {
-                        ui.label(match self.language {
-                            Language::Chinese => "录制期间输出设置已锁定，停止后可修改。",
-                            Language::English => "Output settings are locked during recording.",
-                        });
-                    }
-                    ui.add_enabled_ui(!self.dashboard.session_active, |ui| {
-                        self.output_panel.render(ui, self.language)
                     });
-                    // Handle open output directory button
-                    if self.output_panel.open_output_requested {
-                        self.output_panel.open_output_requested = false;
-                        let dir = self.output_panel.output_dir.trim();
-                        let dir = if dir.is_empty() { "." } else { dir };
-                        log::info!("Opening output directory: {}", dir);
-                        #[cfg(target_os = "windows")]
-                        {
-                            let _ = std::process::Command::new("explorer").arg(dir).spawn();
-                        }
-                        #[cfg(target_os = "macos")]
-                        {
-                            let _ = std::process::Command::new("open").arg(dir).spawn();
-                        }
-                        #[cfg(target_os = "linux")]
-                        {
-                            let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
-                        }
-                    }
-                    if ui
-                        .button(match self.language {
-                            Language::Chinese => "管理录制文件夹…",
-                            Language::English => "Manage recording folders…",
-                        })
-                        .clicked()
-                    {
-                        self.open_session_list();
-                    }
-                    // Sync output filename to dashboard
-                    if self.dashboard.output_path.is_empty() {
-                        self.dashboard.output_path = output_path(&self.output_panel);
-                    }
-                }
-                Tab::Export => {
-                    self.export_panel.recording_root = self.output_panel.output_dir.clone().into();
-                    self.export_panel.render(ui, self.language);
-                    if let Some(directory) = self.export_panel.take_open_request() {
-                        self.open_directory(&directory);
-                    }
-                }
-            }
-        });
+            });
+
+        if self.dashboard.minimize_on_start != self.config.minimize_on_start {
+            self.config.minimize_on_start = self.dashboard.minimize_on_start;
+            let _ = self.config.save();
+        }
 
         if let Some(directory) = self.pending_session_delete.clone() {
             let mut confirmed = false;
@@ -1344,6 +1427,7 @@ impl Drop for PptAutoCaptureApp {
         self.config.last_monitor_hmonitor = self.display_panel.selected_hmonitor;
         self.config.last_monitor_description = self.display_panel.selected_description.clone();
         self.config.language = self.language;
+        self.config.minimize_on_start = self.dashboard.minimize_on_start;
         let _ = self.config.save();
         if let Some(mut worker) = self.worker.take() {
             worker.stop();
@@ -1479,6 +1563,72 @@ mod tests {
         app.handle_worker_disconnected();
         assert!(!app.close_after_stop);
         assert_eq!(app.dashboard.current_state, CaptureState::Error);
+    }
+
+    #[test]
+    fn minimize_option_arms_only_after_a_recording_starts() {
+        let mut app = std::mem::ManuallyDrop::new(PptAutoCaptureApp::new(LoggingSetup {
+            log_directory: None,
+            log_file: None,
+            warning: None,
+        }));
+        app.dashboard.minimize_on_start = true;
+        app.dashboard.session_active = false;
+        app.queue_minimize_on_start();
+        assert!(!app.minimize_requested);
+
+        app.dashboard.session_active = true;
+        app.queue_minimize_on_start();
+        assert!(app.minimize_requested);
+        assert!(app.consume_minimize_request());
+        assert!(app.minimized_by_start);
+        assert!(!app.consume_minimize_request());
+    }
+
+    #[test]
+    fn hidden_window_is_restored_after_start_failure_and_worker_disconnect() {
+        let mut app = std::mem::ManuallyDrop::new(PptAutoCaptureApp::new(LoggingSetup {
+            log_directory: None,
+            log_file: None,
+            warning: None,
+        }));
+        let (events, rx) = crate::capture::worker_event_channel();
+        app.event_rx = Some(rx);
+        app.dashboard.session_active = true;
+        app.minimized_by_start = true;
+
+        events
+            .send(WorkerEvent::StartFailed("failed".into()))
+            .unwrap();
+        app.process_events();
+        assert!(app.restore_window_requested);
+        assert!(app.consume_restore_request());
+        assert!(!app.minimized_by_start);
+
+        app.minimized_by_start = true;
+        app.handle_worker_disconnected();
+        assert!(app.restore_window_requested);
+        assert!(app.consume_restore_request());
+    }
+
+    #[test]
+    fn hidden_window_is_restored_when_recording_stops() {
+        let mut app = std::mem::ManuallyDrop::new(PptAutoCaptureApp::new(LoggingSetup {
+            log_directory: None,
+            log_file: None,
+            warning: None,
+        }));
+        let (events, rx) = crate::capture::worker_event_channel();
+        app.event_rx = Some(rx);
+        app.dashboard.session_active = true;
+        app.minimized_by_start = true;
+        events
+            .send(WorkerEvent::StateChanged(CaptureState::Stopped))
+            .unwrap();
+        app.process_events();
+        assert!(!app.dashboard.session_active);
+        assert!(app.restore_window_requested);
+        assert!(app.consume_restore_request());
     }
 
     #[test]

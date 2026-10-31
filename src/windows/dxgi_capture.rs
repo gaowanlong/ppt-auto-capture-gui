@@ -1,11 +1,13 @@
-use anyhow::Result;
 use crate::model::{Frame, MonitorInfo};
+use anyhow::Result;
 /// DXGI capturer stub — always returns an error, forcing GDI fallback.
 /// The windows crate 0.60 on MSVC has type resolution issues with COM casting
 /// and BOOL-dependent callback types. GDI capture is used instead.
 pub struct DxgiCapturer;
 impl DxgiCapturer {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self {
+        Self
+    }
     pub fn initialize(&mut self, _mon: &MonitorInfo) -> Result<()> {
         Err(anyhow::anyhow!("DXGI not available in this build"))
     }
@@ -13,5 +15,7 @@ impl DxgiCapturer {
         Err(anyhow::anyhow!("DXGI not available"))
     }
     pub fn release(&mut self) {}
-    pub fn is_initialized(&self) -> bool { false }
+    pub fn is_initialized(&self) -> bool {
+        false
+    }
 }

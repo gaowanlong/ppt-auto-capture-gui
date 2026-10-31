@@ -4,3 +4,4 @@ pub mod export_panel;
 pub mod output_panel;
 pub mod settings_panel;
 pub mod source_panel;
+pub mod theme;

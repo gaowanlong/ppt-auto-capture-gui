@@ -1,17 +1,20 @@
+use crate::model::{MonitorInfo, Region};
 use anyhow::Result;
 use windows::Win32::Foundation::RECT;
-use windows::Win32::Graphics::Gdi::{
-    HMONITOR, HDC, GetMonitorInfoW, MONITORINFOEXW, MONITORINFO,
-};
-use windows::Win32::Graphics::Dxgi::{IDXGIFactory1, CreateDXGIFactory1};
+use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
+use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, HDC, HMONITOR, MONITORINFO, MONITORINFOEXW};
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
-use crate::model::{MonitorInfo, Region};
 
 #[link(name = "user32")]
 extern "system" {
     /// Use raw pointers for HDC and HMONITOR to avoid FFI safety issues.
     /// This works across all Windows targets regardless of windows crate version.
-    fn EnumDisplayMonitors(hdc: *mut std::ffi::c_void, lprcClip: *const RECT, lpfnEnum: Option<unsafe extern "system" fn(isize, isize, *mut RECT, isize) -> i32>, dwData: isize) -> i32;
+    fn EnumDisplayMonitors(
+        hdc: *mut std::ffi::c_void,
+        lprcClip: *const RECT,
+        lpfnEnum: Option<unsafe extern "system" fn(isize, isize, *mut RECT, isize) -> i32>,
+        dwData: isize,
+    ) -> i32;
 }
 
 pub fn enumerate_monitors() -> Result<Vec<MonitorInfo>> {
@@ -29,10 +32,22 @@ pub fn enumerate_monitors() -> Result<Vec<MonitorInfo>> {
                     if let Ok(od) = unsafe { output.GetDesc() } {
                         let rc = od.DesktopCoordinates;
                         let oname = String::from_utf16_lossy(&od.DeviceName);
-                        ms.push(MonitorInfo{hmonitor:0, adapter_name:aname.clone(), output_name:oname,
-                            description:format!("{}x{}",rc.right-rc.left,rc.bottom-rc.top),
-                            region:Region::new(rc.left,rc.top,(rc.right-rc.left)as u32,(rc.bottom-rc.top)as u32),
-                            is_primary:rc.left==0&&rc.top==0, is_virtual_suspect:false, output_index:oi, adapter_index:ai});
+                        ms.push(MonitorInfo {
+                            hmonitor: 0,
+                            adapter_name: aname.clone(),
+                            output_name: oname,
+                            description: format!("{}x{}", rc.right - rc.left, rc.bottom - rc.top),
+                            region: Region::new(
+                                rc.left,
+                                rc.top,
+                                (rc.right - rc.left) as u32,
+                                (rc.bottom - rc.top) as u32,
+                            ),
+                            is_primary: rc.left == 0 && rc.top == 0,
+                            is_virtual_suspect: false,
+                            output_index: oi,
+                            adapter_index: ai,
+                        });
                     }
                     oi += 1;
                 }
@@ -43,7 +58,10 @@ pub fn enumerate_monitors() -> Result<Vec<MonitorInfo>> {
     // Fall back to GDI EnumDisplayMonitors if DXGI returned nothing
     let gdi = gdi_enum()?;
     for m in &mut ms {
-        if let Some(g) = gdi.iter().find(|g| g.region.x==m.region.x && g.region.y==m.region.y) {
+        if let Some(g) = gdi
+            .iter()
+            .find(|g| g.region.x == m.region.x && g.region.y == m.region.y)
+        {
             m.hmonitor = g.hmonitor;
         }
     }
@@ -66,14 +84,31 @@ fn gdi_enum() -> Result<Vec<MonitorInfo>> {
             info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
             if GetMonitorInfoW(hmon, &mut info as *mut _ as *mut MONITORINFO).0 != 0 {
                 let rc = info.monitorInfo.rcMonitor;
-                ms.push(MonitorInfo{hmonitor:hmon.0 as u64, adapter_name:String::new(),
-                    output_name:String::from_utf16_lossy(&info.szDevice), description:"GDI".into(),
-                    region:Region::new(rc.left,rc.top,(rc.right-rc.left)as u32,(rc.bottom-rc.top)as u32),
-                    is_primary:(info.monitorInfo.dwFlags & 1)!=0, is_virtual_suspect:false, output_index:0, adapter_index:0});
+                ms.push(MonitorInfo {
+                    hmonitor: hmon.0 as u64,
+                    adapter_name: String::new(),
+                    output_name: String::from_utf16_lossy(&info.szDevice),
+                    description: "GDI".into(),
+                    region: Region::new(
+                        rc.left,
+                        rc.top,
+                        (rc.right - rc.left) as u32,
+                        (rc.bottom - rc.top) as u32,
+                    ),
+                    is_primary: (info.monitorInfo.dwFlags & 1) != 0,
+                    is_virtual_suspect: false,
+                    output_index: 0,
+                    adapter_index: 0,
+                });
             }
             1i32
         }
-        let ret = EnumDisplayMonitors(std::ptr::null_mut(), std::ptr::null(), Some(ep), &mut ms as *mut _ as isize);
+        let ret = EnumDisplayMonitors(
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            Some(ep),
+            &mut ms as *mut _ as isize,
+        );
         if ret == 0 {
             log::warn!("EnumDisplayMonitors returned 0");
             return Err(anyhow::anyhow!("EnumDisplayMonitors returned 0"));
@@ -83,5 +118,7 @@ fn gdi_enum() -> Result<Vec<MonitorInfo>> {
 }
 
 pub fn find_monitor(hmonitor: u64) -> Result<Option<MonitorInfo>> {
-    Ok(enumerate_monitors()?.into_iter().find(|m| m.hmonitor == hmonitor))
+    Ok(enumerate_monitors()?
+        .into_iter()
+        .find(|m| m.hmonitor == hmonitor))
 }

@@ -16,13 +16,6 @@ impl Language {
             Language::English => "English",
         }
     }
-
-    pub fn next(self) -> Self {
-        match self {
-            Language::Chinese => Language::English,
-            Language::English => Language::Chinese,
-        }
-    }
 }
 
 // --- Translation helpers ---
@@ -64,6 +57,97 @@ pub fn t_tab_output(lang: Language) -> &'static str {
         Language::Chinese => "输出",
     }
 }
+pub fn t_tab_export(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Create PPTX",
+        Language::Chinese => "图片转 PPTX",
+    }
+}
+
+pub fn t_start_recording(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Start recording",
+        Language::Chinese => "开始录制",
+    }
+}
+pub fn t_pause_recording(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Pause",
+        Language::Chinese => "暂停",
+    }
+}
+pub fn t_resume_recording(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Resume capture",
+        Language::Chinese => "继续录制",
+    }
+}
+pub fn t_stop_recording(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Stop",
+        Language::Chinese => "停止",
+    }
+}
+pub fn t_saving_recording(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Saving and building PPTX…",
+        Language::Chinese => "正在保存并生成 PPTX…",
+    }
+}
+pub fn t_minimize_on_start(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Start minimized",
+        Language::Chinese => "开始录制时最小化窗口",
+    }
+}
+pub fn t_minimize_on_start_hint(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Capture begins immediately; the main window minimizes right away.",
+        Language::Chinese => "截图会立即开始，主窗口会同时最小化。",
+    }
+}
+pub fn t_refresh(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Refresh",
+        Language::Chinese => "刷新",
+    }
+}
+pub fn t_test_screenshot_short(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Test screenshot",
+        Language::Chinese => "测试截图",
+    }
+}
+pub fn t_test_capture_short(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Test capture",
+        Language::Chinese => "测试采集",
+    }
+}
+pub fn t_open_recording_folder(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Open recording folder",
+        Language::Chinese => "打开录制文件夹",
+    }
+}
+pub fn t_delete_recording_folder(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Delete recording folder…",
+        Language::Chinese => "删除录制文件夹…",
+    }
+}
+pub fn t_deleting_recording_folder(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Deleting…",
+        Language::Chinese => "正在删除…",
+    }
+}
+pub fn t_manage_recording_folders(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Manage recording folders…",
+        Language::Chinese => "管理录制文件夹…",
+    }
+}
 
 // --- Dashboard ---
 pub fn t_diagnostics(lang: Language) -> &'static str {
@@ -97,13 +181,6 @@ pub fn t_persistent_logging_unavailable(lang: Language) -> &'static str {
     }
 }
 
-pub fn t_status(lang: Language) -> &'static str {
-    match lang {
-        Language::English => "Status:",
-        Language::Chinese => "状态：",
-    }
-}
-
 pub fn t_capture_source(lang: Language) -> &'static str {
     match lang {
         Language::English => "Capture Source:",
@@ -114,62 +191,6 @@ pub fn t_display(lang: Language) -> &'static str {
     match lang {
         Language::English => "Display:",
         Language::Chinese => "显示器：",
-    }
-}
-pub fn t_output(lang: Language) -> &'static str {
-    match lang {
-        Language::English => "PPTX output (after stop):",
-        Language::Chinese => "PPTX 输出（停止后生成）：",
-    }
-}
-pub fn t_slides_saved(lang: Language) -> &'static str {
-    match lang {
-        Language::English => "Slides Saved:",
-        Language::Chinese => "已保存页：",
-    }
-}
-pub fn t_start(lang: Language) -> &'static str {
-    match lang {
-        Language::English => "▶ Start",
-        Language::Chinese => "▶ 开始",
-    }
-}
-pub fn t_pause(lang: Language) -> &'static str {
-    match lang {
-        Language::English => "⏸ Pause",
-        Language::Chinese => "⏸ 暂停",
-    }
-}
-pub fn t_resume(lang: Language) -> &'static str {
-    match lang {
-        Language::English => "▶ Resume",
-        Language::Chinese => "▶ 恢复",
-    }
-}
-pub fn t_stop(lang: Language) -> &'static str {
-    match lang {
-        Language::English => "⏹ Stop",
-        Language::Chinese => "⏹ 停止",
-    }
-}
-pub fn t_test_preview(lang: Language) -> &'static str {
-    match lang {
-        Language::English => "Test Capture Preview:",
-        Language::Chinese => "测试截图预览：",
-    }
-}
-pub fn t_protected_warning(lang: Language) -> &'static str {
-    match lang {
-        Language::English => {
-            "⚠ Protected or black content detected. Capture paused.\n\
-             The window might be showing protected video content or is blank.\n\
-             PPT will resume automatically when content becomes visible."
-        }
-        Language::Chinese => {
-            "⚠ 检测到受保护或黑屏内容。捕获已暂停。\n\
-             窗口可能正在播放受保护的视频内容或处于黑屏状态。\n\
-             当内容变得可见时，程序将自动恢复。"
-        }
     }
 }
 pub fn t_session_recovery_title(lang: Language) -> &'static str {
@@ -204,34 +225,10 @@ pub fn t_window_source(lang: Language) -> &'static str {
         Language::Chinese => "窗口源",
     }
 }
-pub fn t_refresh_windows(lang: Language) -> &'static str {
-    match lang {
-        Language::English => "🔄 Refresh Window List",
-        Language::Chinese => "🔄 刷新窗口列表",
-    }
-}
-pub fn t_no_windows(lang: Language) -> &'static str {
-    match lang {
-        Language::English => "No windows found. Click Refresh.",
-        Language::Chinese => "未找到窗口。点击刷新。",
-    }
-}
 pub fn t_selected(lang: Language) -> &'static str {
     match lang {
         Language::English => "Selected:",
         Language::Chinese => "已选择：",
-    }
-}
-pub fn t_move_to_display(lang: Language) -> &'static str {
-    match lang {
-        Language::English => "↗ Move to Display",
-        Language::Chinese => "↗ 移动到显示器",
-    }
-}
-pub fn t_maximize(lang: Language) -> &'static str {
-    match lang {
-        Language::English => "⬜ Maximize",
-        Language::Chinese => "⬜ 最大化",
     }
 }
 pub fn t_macos_window_controls_unavailable(lang: Language) -> &'static str {
@@ -240,30 +237,11 @@ pub fn t_macos_window_controls_unavailable(lang: Language) -> &'static str {
         Language::Chinese => "移动或最大化其他应用需要“辅助功能”权限，此 macOS 版本暂不提供该功能。",
     }
 }
-pub fn t_test_screenshot(lang: Language) -> &'static str {
-    match lang {
-        Language::English => "📷 Test Screenshot",
-        Language::Chinese => "📷 测试截图",
-    }
-}
-
 // --- Display Panel ---
 pub fn t_capture_display(lang: Language) -> &'static str {
     match lang {
         Language::English => "Capture Display",
         Language::Chinese => "捕获显示器",
-    }
-}
-pub fn t_refresh_displays(lang: Language) -> &'static str {
-    match lang {
-        Language::English => "🔄 Refresh Displays",
-        Language::Chinese => "🔄 刷新显示器",
-    }
-}
-pub fn t_no_displays(lang: Language) -> &'static str {
-    match lang {
-        Language::English => "No displays found. Click Refresh.",
-        Language::Chinese => "未找到显示器。点击刷新。",
     }
 }
 pub fn t_adapter(lang: Language) -> &'static str {
@@ -290,13 +268,6 @@ pub fn t_primary_monitor(lang: Language) -> &'static str {
         Language::Chinese => "★ 主显示器",
     }
 }
-pub fn t_test_capture(lang: Language) -> &'static str {
-    match lang {
-        Language::English => "📷 Test Capture",
-        Language::Chinese => "📷 测试采集",
-    }
-}
-
 // --- Settings Panel ---
 pub fn t_settings_title(lang: Language) -> &'static str {
     match lang {
@@ -342,10 +313,86 @@ pub fn t_filter_duplicates(lang: Language) -> &'static str {
 }
 
 // --- Output Panel ---
-pub fn t_output_settings(lang: Language) -> &'static str {
+pub fn t_output_page_title(lang: Language) -> &'static str {
     match lang {
-        Language::English => "Output Settings",
-        Language::Chinese => "输出设置",
+        Language::English => "Output & folders",
+        Language::Chinese => "输出与文件夹",
+    }
+}
+pub fn t_output_page_subtitle(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Choose where recordings live and how slides are laid out.",
+        Language::Chinese => "选择录制文件的存放位置和幻灯片版式。",
+    }
+}
+pub fn t_output_locked(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Recording in progress. Changes here apply to the next recording.",
+        Language::Chinese => "正在录制。这里的修改将在下次录制时生效。",
+    }
+}
+pub fn t_output_where(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Where files go",
+        Language::Chinese => "文件去向",
+    }
+}
+pub fn t_output_layout(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Slide layout",
+        Language::Chinese => "幻灯片版式",
+    }
+}
+pub fn t_output_folders(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Recording folders",
+        Language::Chinese => "录制文件夹",
+    }
+}
+pub fn t_output_dir_hint(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Relative paths are created under the app's working folder.",
+        Language::Chinese => "相对路径会创建在应用的工作目录下。",
+    }
+}
+pub fn t_filename_hint(lang: Language) -> &'static str {
+    match lang {
+        Language::English => {
+            "The automatic name refreshes on every start; a custom name stays unchanged."
+        }
+        Language::Chinese => "自动文件名会在每次开始时刷新；自定义文件名保持不变。",
+    }
+}
+pub fn t_automatic_name(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Automatic",
+        Language::Chinese => "自动命名",
+    }
+}
+pub fn t_auto_crop_label(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Auto-crop the slide area when building the PPTX",
+        Language::Chinese => "生成 PPTX 时自动裁剪幻灯片区域",
+    }
+}
+pub fn t_auto_crop_hint(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "If the slide cannot be identified, the full frame is kept.",
+        Language::Chinese => "如果无法识别幻灯片，则保留完整画面。",
+    }
+}
+pub fn t_output_notes_heading(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "What each recording saves",
+        Language::Chinese => "每次录制会保存什么",
+    }
+}
+pub fn t_output_folders_hint(lang: Language) -> &'static str {
+    match lang {
+        Language::English => {
+            "Every recording gets its own folder; earlier sessions are never overwritten."
+        }
+        Language::Chinese => "每次录制都有独立文件夹，之前的会话不会被覆盖。",
     }
 }
 pub fn t_output_dir(lang: Language) -> &'static str {
@@ -372,16 +419,16 @@ pub fn t_image_fit(lang: Language) -> &'static str {
         Language::Chinese => "图片适配：",
     }
 }
-pub fn t_open_output(lang: Language) -> &'static str {
+pub fn t_fit_fill(lang: Language) -> &'static str {
     match lang {
-        Language::English => "📂 Open Output Directory",
-        Language::Chinese => "📂 打开输出目录",
+        Language::English => "Fill",
+        Language::Chinese => "填充",
     }
 }
-pub fn t_output_notes(lang: Language) -> &'static str {
+pub fn t_fit_fit(lang: Language) -> &'static str {
     match lang {
-        Language::English => "Output notes:",
-        Language::Chinese => "输出说明：",
+        Language::English => "Fit",
+        Language::Chinese => "适应",
     }
 }
 pub fn t_output_notes_1(lang: Language) -> &'static str {
@@ -413,6 +460,82 @@ pub fn t_output_notes_4(lang: Language) -> &'static str {
     }
 }
 
+// --- Export Panel ---
+pub fn t_export_page_title(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Create PPTX from images",
+        Language::Chinese => "图片生成 PPTX",
+    }
+}
+pub fn t_export_page_subtitle(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Turn a folder of saved slides into editable presentations.",
+        Language::Chinese => "把已保存的截图整理成可编辑的幻灯片。",
+    }
+}
+pub fn t_export_source_card(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Source images",
+        Language::Chinese => "源图片",
+    }
+}
+pub fn t_export_source_hint(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "PNG/JPEG files are imported in natural filename order, 50 per PPTX.",
+        Language::Chinese => "按文件名中的数字顺序导入 PNG/JPEG，每 50 张生成一个 PPTX。",
+    }
+}
+pub fn t_export_deck_card(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Deck settings",
+        Language::Chinese => "幻灯片设置",
+    }
+}
+pub fn t_export_output_folder(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Output folder:",
+        Language::Chinese => "输出文件夹：",
+    }
+}
+pub fn t_export_browse(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Browse…",
+        Language::Chinese => "选择…",
+    }
+}
+pub fn t_export_generate(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Generate PPTX",
+        Language::Chinese => "开始生成",
+    }
+}
+pub fn t_export_open_folder(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Open generated folder",
+        Language::Chinese => "打开生成文件夹",
+    }
+}
+pub fn t_export_crop_label(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Detect and crop the presentation area",
+        Language::Chinese => "识别并裁剪演示区域",
+    }
+}
+pub fn t_export_crop_hint(lang: Language) -> &'static str {
+    match lang {
+        Language::English => {
+            "If detection is uncertain the full image is kept. Originals are unchanged; check the result."
+        }
+        Language::Chinese => "识别不确定时保留完整图片；原始截图不会被修改。请检查生成结果。",
+    }
+}
+pub fn t_export_ready_hint(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Pick a folder of slides to begin.",
+        Language::Chinese => "选择一个包含截图的文件夹开始。",
+    }
+}
+
 // --- Monitor errors ---
 pub fn t_no_display_selected(lang: Language) -> &'static str {
     match lang {
@@ -420,22 +543,10 @@ pub fn t_no_display_selected(lang: Language) -> &'static str {
         Language::Chinese => "请选择捕获显示器",
     }
 }
-pub fn t_black_frame(lang: Language) -> &'static str {
-    match lang {
-        Language::English => "Black frame",
-        Language::Chinese => "黑屏帧",
-    }
-}
 pub fn t_none(lang: Language) -> &'static str {
     match lang {
         Language::English => "None",
         Language::Chinese => "无",
-    }
-}
-pub fn t_language_switch(lang: Language) -> &'static str {
-    match lang {
-        Language::English => "🌐 Language",
-        Language::Chinese => "🌐 语言",
     }
 }
 
@@ -450,36 +561,35 @@ mod tests {
     }
 
     #[test]
-    fn test_language_next() {
-        assert_eq!(Language::English.next(), Language::Chinese);
-        assert_eq!(Language::Chinese.next(), Language::English);
-    }
-
-    #[test]
     fn test_all_translations_non_empty() {
         let langs = [Language::English, Language::Chinese];
         // Spot-check several translations
         for lang in &langs {
             assert!(!t_main_title(*lang).is_empty());
-            assert!(!t_status(*lang).is_empty());
-            assert!(!t_start(*lang).is_empty());
-            assert!(!t_stop(*lang).is_empty());
+            assert!(!t_start_recording(*lang).is_empty());
+            assert!(!t_stop_recording(*lang).is_empty());
             assert!(!t_window_source(*lang).is_empty());
             assert!(!t_capture_display(*lang).is_empty());
             assert!(!t_settings_title(*lang).is_empty());
-            assert!(!t_output_settings(*lang).is_empty());
+            assert!(!t_output_page_title(*lang).is_empty());
             assert!(!t_diagnostics(*lang).is_empty());
             assert!(!t_copy_diagnostics(*lang).is_empty());
             assert!(!t_open_log_folder(*lang).is_empty());
             assert!(!t_diagnostics_copied(*lang).is_empty());
             assert!(!t_persistent_logging_unavailable(*lang).is_empty());
+            assert!(!t_start_recording(*lang).is_empty());
+            assert!(!t_minimize_on_start(*lang).is_empty());
+            assert!(!t_minimize_on_start_hint(*lang).is_empty());
+            assert!(!t_tab_export(*lang).is_empty());
         }
     }
 
     #[test]
     fn test_chinese_and_english_different() {
-        assert_ne!(t_status(Language::English), t_status(Language::Chinese));
-        assert_ne!(t_start(Language::English), t_start(Language::Chinese));
+        assert_ne!(
+            t_start_recording(Language::English),
+            t_start_recording(Language::Chinese)
+        );
         assert_ne!(
             t_diagnostics(Language::English),
             t_diagnostics(Language::Chinese)

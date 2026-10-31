@@ -1,5 +1,7 @@
 use crate::gui::output_panel::OutputPanel;
-use crate::i18n::Language;
+use crate::gui::theme::{self, token};
+use crate::i18n::{self, Language};
+use egui::*;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
@@ -50,119 +52,200 @@ impl ExportPanel {
 
     pub fn render(&mut self, ui: &mut egui::Ui, language: Language) {
         self.poll(language);
-        let zh = language == Language::Chinese;
-        ui.heading(if zh {
-            "图片生成 PPTX"
-        } else {
-            "Create PPTX from images"
-        });
-        ui.label(if zh {
-            "选择图片文件夹：按文件名中的数字顺序导入 PNG/JPEG，每 50 张生成一个 PPTX。"
-        } else {
-            "Choose a folder: PNG/JPEG files are imported in natural filename order, 50 per PPTX."
-        });
-        ui.horizontal(|ui| {
-            ui.label(if zh {
-                "图片文件夹"
-            } else {
-                "Image folder"
-            });
-            ui.text_edit_singleline(&mut self.source_dir);
-            if ui
-                .add_enabled(
-                    self.picker.is_none(),
-                    egui::Button::new(if zh { "选择…" } else { "Browse…" }),
-                )
-                .clicked()
-            {
-                self.choose_folder();
-            }
-        });
-        ui.horizontal(|ui| {
-            ui.label(if zh {
-                "输出文件夹"
-            } else {
-                "Output folder"
-            });
-            ui.text_edit_singleline(&mut self.settings.output_dir);
-        });
-        ui.horizontal(|ui| {
-            ui.label(if zh {
-                "PPTX 文件名"
-            } else {
-                "PPTX filename"
-            });
-            if ui
-                .text_edit_singleline(&mut self.settings.output_filename)
-                .changed()
-            {
-                self.settings.filename_is_custom = true;
-            }
-            if ui
-                .button(if zh { "自动命名" } else { "Automatic" })
-                .clicked()
-            {
-                self.settings.filename_is_custom = false;
-                self.settings.output_filename = format!(
-                    "ppt-capture-{}.pptx",
-                    chrono::Local::now().format("%Y%m%d-%H%M%S")
+
+        theme::page_header(
+            ui,
+            i18n::t_export_page_title(language),
+            i18n::t_export_page_subtitle(language),
+        );
+
+        theme::card().show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            theme::section_title(ui, i18n::t_export_source_card(language));
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                let width = (ui.available_width() - 108.0).max(160.0);
+                ui.add(
+                    TextEdit::singleline(&mut self.source_dir)
+                        .desired_width(width)
+                        .hint_text(match language {
+                            Language::Chinese => "选择包含截图的文件夹",
+                            Language::English => "Choose a folder of slides",
+                        }),
                 );
-            }
+                if ui
+                    .add_enabled(
+                        self.picker.is_none(),
+                        theme::secondary_button(i18n::t_export_browse(language)),
+                    )
+                    .clicked()
+                {
+                    self.choose_folder();
+                }
+            });
+            ui.label(theme::muted(i18n::t_export_source_hint(language), 11.5));
         });
-        ui.horizontal(|ui| {
-            ui.label(if zh { "页面比例" } else { "Slide ratio" });
-            egui::ComboBox::from_id_salt("export_ratio")
-                .selected_text(&self.settings.page_ratio)
-                .show_ui(ui, |ui| {
-                    for ratio in ["16:9", "4:3", "3:2", "16:10"] {
-                        ui.selectable_value(
-                            &mut self.settings.page_ratio,
-                            ratio.to_string(),
-                            ratio,
+
+        ui.add_space(14.0);
+
+        theme::card().show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            theme::section_title(ui, i18n::t_export_deck_card(language));
+            ui.add_space(4.0);
+            let wide = ui.available_width() >= 560.0;
+
+            field_row(ui, wide, i18n::t_export_output_folder(language), |ui| {
+                let width = ui.available_width().min(430.0);
+                ui.add(TextEdit::singleline(&mut self.settings.output_dir).desired_width(width));
+            });
+            ui.add_space(6.0);
+
+            field_row(ui, wide, i18n::t_pptx_filename(language), |ui| {
+                ui.horizontal(|ui| {
+                    let width = (ui.available_width() - 112.0).clamp(140.0, 380.0);
+                    if ui
+                        .add(
+                            TextEdit::singleline(&mut self.settings.output_filename)
+                                .desired_width(width),
+                        )
+                        .changed()
+                    {
+                        self.settings.filename_is_custom = true;
+                    }
+                    if ui
+                        .add(theme::secondary_button(i18n::t_automatic_name(language)))
+                        .clicked()
+                    {
+                        self.settings.filename_is_custom = false;
+                        self.settings.output_filename = format!(
+                            "ppt-capture-{}.pptx",
+                            chrono::Local::now().format("%Y%m%d-%H%M%S")
                         );
                     }
                 });
-            ui.label(if zh { "图片适配" } else { "Image fit" });
-            egui::ComboBox::from_id_salt("export_fit")
-                .selected_text(&self.settings.image_fit)
-                .show_ui(ui, |ui| {
-                    for fit in ["fit", "fill"] {
-                        ui.selectable_value(&mut self.settings.image_fit, fit.to_string(), fit);
+            });
+            ui.add_space(8.0);
+
+            let ratio = i18n::t_slide_aspect(language)
+                .trim_end_matches([':', '：'])
+                .to_string();
+            let fit = i18n::t_image_fit(language)
+                .trim_end_matches([':', '：'])
+                .to_string();
+            let fit_options = [
+                ("fit", i18n::t_fit_fit(language)),
+                ("fill", i18n::t_fit_fill(language)),
+            ];
+            if wide {
+                ui.columns(2, |columns| {
+                    combo(
+                        &mut columns[0],
+                        &ratio,
+                        "export_ratio",
+                        &mut self.settings.page_ratio,
+                        &[
+                            ("16:9", "16:9"),
+                            ("4:3", "4:3"),
+                            ("3:2", "3:2"),
+                            ("16:10", "16:10"),
+                        ],
+                    );
+                    combo(
+                        &mut columns[1],
+                        &fit,
+                        "export_fit",
+                        &mut self.settings.image_fit,
+                        &fit_options,
+                    );
+                });
+            } else {
+                combo(
+                    ui,
+                    &ratio,
+                    "export_ratio",
+                    &mut self.settings.page_ratio,
+                    &[
+                        ("16:9", "16:9"),
+                        ("4:3", "4:3"),
+                        ("3:2", "3:2"),
+                        ("16:10", "16:10"),
+                    ],
+                );
+                ui.add_space(6.0);
+                combo(
+                    ui,
+                    &fit,
+                    "export_fit",
+                    &mut self.settings.image_fit,
+                    &fit_options,
+                );
+            }
+
+            theme::divider(ui);
+            ui.checkbox(
+                &mut self.settings.auto_crop,
+                i18n::t_export_crop_label(language),
+            );
+            ui.label(theme::muted(i18n::t_export_crop_hint(language), 11.5));
+        });
+
+        ui.add_space(16.0);
+
+        ui.horizontal(|ui| {
+            let ready = self.export.is_none() && !self.source_dir.trim().is_empty();
+            if ui
+                .add_enabled(
+                    ready,
+                    theme::primary_button(i18n::t_export_generate(language)),
+                )
+                .clicked()
+            {
+                self.start(language);
+            }
+            if self.export.is_none() && self.source_dir.trim().is_empty() {
+                ui.label(theme::muted(i18n::t_export_ready_hint(language), 12.0));
+            }
+            if self.export.is_some() {
+                ui.label(theme::muted(
+                    match language {
+                        Language::Chinese => "生成在后台进行，可以继续切换页面。",
+                        Language::English => {
+                            "Generation runs in the background; you can keep browsing."
+                        }
+                    },
+                    12.0,
+                ));
+            }
+        });
+
+        if !self.status.is_empty() {
+            ui.add_space(12.0);
+            let error = status_is_error(&self.status);
+            let success = !error && self.export.is_none() && self.output_to_open.is_some();
+            let (fill, stroke, text) = if error {
+                (token::WARN_SOFT, token::WARN_LINE, token::WARN)
+            } else if success {
+                (token::OK_SOFT, token::LINE, token::OK)
+            } else {
+                (token::PRIMARY_SOFT, token::LINE, token::PRIMARY)
+            };
+            theme::banner_frame(fill, stroke).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(&self.status).size(12.5).color(text));
+                    if self.output_to_open.is_some()
+                        && ui
+                            .with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                ui.add(theme::quiet_button(i18n::t_export_open_folder(language)))
+                            })
+                            .inner
+                            .clicked()
+                    {
+                        // The application consumes this by calling take_output_to_open after rendering.
+                        self.open_requested = true;
                     }
                 });
-        });
-        ui.checkbox(
-            &mut self.settings.auto_crop,
-            if zh {
-                "自动识别并裁剪演示区域"
-            } else {
-                "Automatically detect and crop presentation area"
-            },
-        );
-        ui.label(if zh { "识别不确定时保留完整图片；原始截图不会被修改。请检查生成结果。" } else { "If detection is uncertain, the full image is kept. Originals are unchanged; check the result." });
-        if ui
-            .add_enabled(
-                self.export.is_none() && !self.source_dir.trim().is_empty(),
-                egui::Button::new(if zh { "开始生成" } else { "Generate PPTX" }),
-            )
-            .clicked()
-        {
-            self.start(language);
-        }
-        if !self.status.is_empty() {
-            ui.label(&self.status);
-        }
-        if self.output_to_open.is_some()
-            && ui
-                .button(if zh {
-                    "打开生成文件夹"
-                } else {
-                    "Open generated folder"
-                })
-                .clicked()
-        {
-            // The application consumes this by calling take_output_to_open after rendering.
-            self.open_requested = true;
+            });
         }
     }
 
@@ -358,6 +441,55 @@ impl ExportPanel {
     }
 }
 
+fn field_row(ui: &mut Ui, wide: bool, label: &str, add: impl FnOnce(&mut Ui)) {
+    if wide {
+        ui.horizontal_top(|ui| {
+            ui.allocate_ui_with_layout(Vec2::new(190.0, 0.0), Layout::top_down(Align::Min), |ui| {
+                ui.set_min_width(190.0);
+                ui.add_space(8.0);
+                ui.label(RichText::new(label).size(12.5).color(token::INK).strong());
+            });
+            ui.vertical(|ui| {
+                ui.set_width(ui.available_width());
+                add(ui);
+            });
+        });
+    } else {
+        ui.label(RichText::new(label).size(12.5).color(token::INK).strong());
+        ui.add_space(2.0);
+        add(ui);
+    }
+}
+
+fn combo(ui: &mut Ui, label: &str, id: &str, value: &mut String, options: &[(&str, &str)]) {
+    ui.label(theme::muted(label, 12.0));
+    ui.add_space(2.0);
+    let selected = options
+        .iter()
+        .find(|(key, _)| *key == value.as_str())
+        .map(|(_, text)| *text)
+        .unwrap_or(value.as_str());
+    ComboBox::from_id_salt(id)
+        .selected_text(selected)
+        .width(ui.available_width().min(220.0))
+        .show_ui(ui, |ui| {
+            for (key, text) in options {
+                if ui.selectable_label(value.as_str() == *key, *text).clicked() {
+                    *value = (*key).to_string();
+                }
+            }
+        });
+}
+
+fn status_is_error(status: &str) -> bool {
+    let lower = status.to_lowercase();
+    lower.contains("failed")
+        || lower.contains("cannot")
+        || lower.contains("unexpectedly")
+        || status.contains("失败")
+        || status.contains("中断")
+}
+
 fn pick_folder(initial: Option<&std::path::Path>) -> Result<Option<PathBuf>, String> {
     #[cfg(target_os = "windows")]
     let result = std::process::Command::new("powershell.exe").env("PPT_CAPTURE_INITIAL_FOLDER", initial.unwrap_or_else(|| std::path::Path::new(""))).args(["-NoProfile", "-STA", "-Command", "Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.FolderBrowserDialog; $d.SelectedPath = $env:PPT_CAPTURE_INITIAL_FOLDER; if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; [Console]::Write($d.SelectedPath) }"]).output();
@@ -508,5 +640,12 @@ mod tests {
             .unwrap()
             .join(panel.settings.output_filename)
             .is_file());
+    }
+
+    #[test]
+    fn status_banner_classifies_errors() {
+        assert!(status_is_error("Export failed: disk full"));
+        assert!(status_is_error("生成失败：磁盘已满"));
+        assert!(!status_is_error("Generated 2 PPTX file(s)"));
     }
 }

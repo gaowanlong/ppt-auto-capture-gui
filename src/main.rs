@@ -55,8 +55,8 @@ fn main() -> Result<(), eframe::Error> {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([900.0, 700.0])
-            .with_min_inner_size([600.0, 500.0])
+            .with_inner_size([1080.0, 760.0])
+            .with_min_inner_size([760.0, 560.0])
             .with_title("PPT Auto Capture"),
         #[cfg(target_os = "windows")]
         vsync: true,
@@ -67,15 +67,17 @@ fn main() -> Result<(), eframe::Error> {
         "PPT Auto Capture",
         options,
         Box::new(move |cc| {
-            // Load CJK fonts for Chinese text support
+            // Load CJK fonts for Chinese text support, then apply the shared
+            // light workspace theme before any panel is drawn.
             setup_cjk_fonts(&cc.egui_ctx);
+            gui::theme::apply(&cc.egui_ctx);
             Ok(Box::new(app::PptAutoCaptureApp::new(logging)))
         }),
     )
 }
 
-/// Add CJK font support by loading system fonts on Windows.
-/// Add CJK font support by loading system fonts on Windows.
+/// Append platform CJK fonts as fallbacks so Latin text keeps egui's compact
+/// interface face while Chinese glyphs still resolve on every platform.
 fn setup_cjk_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
 
@@ -92,7 +94,11 @@ fn setup_cjk_fonts(ctx: &egui::Context) {
         "/System/Library/Fonts/AppleSDGothicNeo.ttc",
     ];
     #[cfg(target_os = "linux")]
-    let font_list: &[&str] = &[];
+    let font_list: &[&str] = &[
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+    ];
 
     for (i, path) in font_list.iter().enumerate() {
         if let Ok(data) = std::fs::read(path) {
@@ -104,7 +110,14 @@ fn setup_cjk_fonts(ctx: &egui::Context) {
                 .families
                 .entry(egui::FontFamily::Proportional)
                 .or_default()
-                .insert(0, name);
+                .push(name.clone());
+            // Monospace details (paths, timestamps, window metadata) also carry
+            // Chinese copy, so the same glyph fallback is needed there.
+            fonts
+                .families
+                .entry(egui::FontFamily::Monospace)
+                .or_default()
+                .push(name);
         }
     }
     ctx.set_fonts(fonts);

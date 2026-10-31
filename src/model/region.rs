@@ -9,7 +9,12 @@ pub struct Region {
 
 impl Region {
     pub fn new(x: i32, y: i32, width: u32, height: u32) -> Self {
-        Self { x, y, width, height }
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 
     pub fn area(&self) -> u64 {
@@ -27,7 +32,6 @@ impl Region {
             && y < self.y + self.height as i32
     }
 }
-
 
 #[cfg(test)]
 mod tests {

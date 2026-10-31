@@ -1,4 +1,5 @@
 use crate::capture::CaptureConfig;
+use crate::gui::theme::{self, token};
 use crate::i18n::{self, Language};
 use egui::*;
 
@@ -39,78 +40,120 @@ impl SettingsPanel {
     pub fn render(&mut self, ui: &mut Ui, language: Language) {
         self.changed = false;
 
-        ui.vertical(|ui| {
-            ui.heading(i18n::t_settings_title(language));
+        theme::page_header(
+            ui,
+            i18n::t_settings_title(language),
+            match language {
+                Language::English => {
+                    "Fine-tune how quickly slide changes are detected. Changes apply immediately."
+                }
+                Language::Chinese => "调整换页检测的灵敏度，修改会立即生效。",
+            },
+        );
 
-            egui::Grid::new("settings_grid")
-                .num_columns(2)
-                .spacing([8.0, 4.0])
-                .striped(true)
-                .show(ui, |grid| {
-                    grid.label(i18n::t_sample_interval(language));
-                    let resp = grid.add(Slider::new(&mut self.sample_interval_ms, 100..=5000).text("ms"));
-                    let resp = resp.on_hover_text(match language {
-                        Language::English => "How often to check the display for changes. Lower = more responsive but higher CPU usage.",
-                        Language::Chinese => "多久检查一次显示器变化。数值越低越灵敏，但CPU占用更高。",
-                    });
-                    if resp.changed() { self.changed = true; }
-                    grid.end_row();
+        theme::card().show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            let wide = ui.available_width() >= 540.0;
 
-                    grid.label(i18n::t_stability_frames(language));
-                    let resp = grid.add(Slider::new(&mut self.stability_frames, 1..=10).text("frames"));
-                    let resp = resp.on_hover_text(match language {
-                        Language::English => "Number of consecutive identical frames required before saving. Higher = fewer accidental captures.",
-                        Language::Chinese => "保存前需要连续相同帧的数量。数值越高，误捕获越少。",
-                    });
-                    if resp.changed() { self.changed = true; }
-                    grid.end_row();
-
-                    grid.label(i18n::t_anim_timeout(language));
-                    let resp = grid.add(Slider::new(&mut self.animation_timeout_ms, 1000..=30000).text("ms"));
-                    let resp = resp.on_hover_text(match language {
-                        Language::English => "Maximum time to wait for animation to stabilize. Force-captures after this duration.",
-                        Language::Chinese => "等待动画稳定的最长时间。超过此时间将强制截图。",
-                    });
-                    if resp.changed() { self.changed = true; }
-                    grid.end_row();
-
-                    grid.label(i18n::t_change_threshold(language));
-                    let mut val = self.change_threshold * 100.0;
-                    let resp = grid.add(Slider::new(&mut val, 0.1..=50.0).text("%"));
-                    let resp = resp.on_hover_text(match language {
-                        Language::English => "Fraction of pixels that must change to detect a new slide. Lower = more sensitive to small animation changes.",
-                        Language::Chinese => "需要改变的像素比例。数值越低，对微小动画变化越敏感。",
-                    });
-                    self.change_threshold = val / 100.0;
-                    if resp.changed() { self.changed = true; }
-                    grid.end_row();
-
-                    grid.label(i18n::t_black_threshold(language));
-                    let mut val = self.black_threshold * 100.0;
-                    let resp = grid.add(Slider::new(&mut val, 50.0..=100.0).text("%"));
-                    let resp = resp.on_hover_text(match language {
-                        Language::English => "Threshold at which a frame is considered black/protected. Lower = tolerates more dark content.",
-                        Language::Chinese => "判断黑屏/受保护内容的阈值。数值越低，容忍更多暗色内容。",
-                    });
-                    self.black_threshold = val / 100.0;
-                    if resp.changed() { self.changed = true; }
-                    grid.end_row();
-
-                    grid.label(i18n::t_filter_duplicates(language));
-                    let resp = grid.add(Checkbox::new(&mut self.filter_duplicates, ""));
-                    let resp = resp.on_hover_text(match language {
-                        Language::English => "Ignore small pointer changes and learned local video motion when comparing with the last saved slide. Full-screen video cannot be reliably distinguished from slide changes; disable this if small content changes are being missed.",
-                        Language::Chinese => "与上一张比较时忽略微小鼠标变化和已识别的局部视频动态。全屏视频无法可靠区分换页；若细微内容变化被漏掉，可关闭此项。",
-                    });
-                    if resp.changed() { self.changed = true; }
-                    grid.end_row();
+            control_row(ui, wide, i18n::t_sample_interval(language), |ui| {
+                let mut millis = self.sample_interval_ms as f64;
+                let response = theme::slider(ui, &mut millis, 100.0..=5000.0, 10.0, 0, " ms");
+                self.sample_interval_ms = millis.round() as u64;
+                let response = response.on_hover_text(match language {
+                    Language::English => "How often to check the display for changes. Lower values react faster but use more CPU.",
+                    Language::Chinese => "多久检查一次显示器变化。数值越低越灵敏，但 CPU 占用更高。",
                 });
+                if response.changed() {
+                    self.changed = true;
+                }
+            });
+            theme::divider(ui);
 
-            ui.separator();
-            ui.label(RichText::new(match language {
-                Language::English => "Tip: Hover over each setting for details.",
-                Language::Chinese => "提示：将鼠标悬停在每个设置项上查看详细说明。",
-            }).size(11.0).color(egui::Color32::GRAY));
+            control_row(ui, wide, i18n::t_stability_frames(language), |ui| {
+                let unit = match language {
+                    Language::English => " frames",
+                    Language::Chinese => " 帧",
+                };
+                let mut frames = self.stability_frames as f64;
+                let response = theme::slider(ui, &mut frames, 1.0..=10.0, 1.0, 0, unit);
+                self.stability_frames = frames.round() as u32;
+                let response = response.on_hover_text(match language {
+                    Language::English => "Consecutive identical frames required before saving. Higher values reduce accidental captures.",
+                    Language::Chinese => "保存前需要连续相同帧的数量。数值越高，误捕获越少。",
+                });
+                if response.changed() {
+                    self.changed = true;
+                }
+            });
+            theme::divider(ui);
+
+            control_row(ui, wide, i18n::t_anim_timeout(language), |ui| {
+                let mut millis = self.animation_timeout_ms as f64;
+                let response = theme::slider(ui, &mut millis, 1000.0..=30000.0, 100.0, 0, " ms");
+                self.animation_timeout_ms = millis.round() as u64;
+                let response = response.on_hover_text(match language {
+                    Language::English => "Longest wait for an animation to settle. Capture is forced after this time.",
+                    Language::Chinese => "等待动画稳定的最长时间，超过后会强制截图。",
+                });
+                if response.changed() {
+                    self.changed = true;
+                }
+            });
+            theme::divider(ui);
+
+            control_row(ui, wide, i18n::t_change_threshold(language), |ui| {
+                let mut value = self.change_threshold * 100.0;
+                let response = theme::slider(ui, &mut value, 0.1..=50.0, 0.1, 1, " %");
+                self.change_threshold = value / 100.0;
+                let response = response.on_hover_text(match language {
+                    Language::English => "Share of pixels that must change to count as a new slide. Lower values notice smaller changes.",
+                    Language::Chinese => "判定为新页面所需的像素变化比例。数值越低，对细微变化越敏感。",
+                });
+                if response.changed() {
+                    self.changed = true;
+                }
+            });
+            theme::divider(ui);
+
+            control_row(ui, wide, i18n::t_black_threshold(language), |ui| {
+                let mut value = self.black_threshold * 100.0;
+                let response = theme::slider(ui, &mut value, 50.0..=100.0, 1.0, 1, " %");
+                self.black_threshold = value / 100.0;
+                let response = response.on_hover_text(match language {
+                    Language::English => "Threshold for treating a frame as black or protected. Lower values tolerate darker slides.",
+                    Language::Chinese => "判断黑屏或受保护内容的阈值。数值越低，容忍更多暗色画面。",
+                });
+                if response.changed() {
+                    self.changed = true;
+                }
+            });
+            theme::divider(ui);
+
+            control_row(ui, wide, i18n::t_filter_duplicates(language), |ui| {
+                let state = match (self.filter_duplicates, language) {
+                    (true, Language::English) => "On",
+                    (true, Language::Chinese) => "开启",
+                    (false, Language::English) => "Off",
+                    (false, Language::Chinese) => "关闭",
+                };
+                let response = ui.checkbox(&mut self.filter_duplicates, state);
+                let response = response.on_hover_text(match language {
+                    Language::English => "Ignore tiny pointer changes and learned local video motion when comparing with the last saved slide. Full-screen video cannot be reliably distinguished from slide changes; disable this if small content changes are missed.",
+                    Language::Chinese => "与上一张比较时忽略微小鼠标变化和已识别的局部视频动态。全屏视频无法可靠区分换页；若细微内容变化被漏掉，可关闭此项。",
+                });
+                if response.changed() {
+                    self.changed = true;
+                }
+            });
+
+            ui.add_space(6.0);
+            ui.label(theme::muted(
+                match language {
+                    Language::English => "Hover over a setting to see how it affects capture.",
+                    Language::Chinese => "将鼠标悬停在设置项上可查看详细说明。",
+                },
+                11.5,
+            ));
         });
     }
 
@@ -123,5 +166,22 @@ impl SettingsPanel {
             black_threshold: self.black_threshold,
             filter_duplicates: self.filter_duplicates,
         }
+    }
+}
+
+fn control_row(ui: &mut Ui, wide: bool, label: &str, add: impl FnOnce(&mut Ui)) {
+    if wide {
+        ui.horizontal(|ui| {
+            ui.allocate_ui_with_layout(Vec2::new(200.0, 0.0), Layout::top_down(Align::Min), |ui| {
+                ui.set_min_width(200.0);
+                ui.add_space(6.0);
+                ui.label(RichText::new(label).size(12.5).color(token::INK).strong());
+            });
+            add(ui);
+        });
+    } else {
+        ui.label(RichText::new(label).size(12.5).color(token::INK).strong());
+        ui.add_space(2.0);
+        add(ui);
     }
 }

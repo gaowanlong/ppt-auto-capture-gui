@@ -57,6 +57,9 @@ pub struct AppConfig {
     pub last_monitor_description: String,
     /// Whether to use DXGI (vs GDI).
     pub use_dxgi: bool,
+    /// Minimize the main window as soon as a recording starts successfully.
+    #[serde(default)]
+    pub minimize_on_start: bool,
     /// UI language
     pub language: Language,
 }
@@ -86,6 +89,7 @@ impl Default for AppConfig {
             last_monitor_hmonitor: 0,
             last_monitor_description: String::new(),
             use_dxgi: true,
+            minimize_on_start: false,
             language: Language::English,
         }
     }
@@ -173,6 +177,7 @@ mod tests {
         assert_eq!(cfg.page_ratio, "16:9");
         assert_eq!(cfg.image_fit, "fit");
         assert!(cfg.keep_previous);
+        assert!(!cfg.minimize_on_start);
     }
 
     #[test]
@@ -190,6 +195,14 @@ mod tests {
         value.as_object_mut().unwrap().remove("auto_crop");
         let restored: AppConfig = serde_json::from_value(value).unwrap();
         assert!(!restored.auto_crop);
+    }
+
+    #[test]
+    fn old_config_without_minimize_option_keeps_the_window_visible() {
+        let mut value = serde_json::to_value(AppConfig::default()).unwrap();
+        value.as_object_mut().unwrap().remove("minimize_on_start");
+        let restored: AppConfig = serde_json::from_value(value).unwrap();
+        assert!(!restored.minimize_on_start);
     }
 
     #[test]
