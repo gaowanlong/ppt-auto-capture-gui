@@ -18,9 +18,14 @@
 //!    returns a rectangle without a chrome-like border, so an ambiguous dark
 //!    slide keeps the full screenshot instead of gaining black bars or losing
 //!    slide content.
+//! 4. Every candidate then passes a safety guard. Each edge is extended
+//!    outward across a band that may hold text or graphics (a dark title band,
+//!    a footer, a side panel), and only rectangles with a standard slide or
+//!    page proportion are accepted. A guard never crops inward.
 //!
 //! Whenever a stage is uncertain the function returns `None` and the caller
-//! embeds the original screenshot unchanged.
+//! embeds the original screenshot unchanged. Losing presentation content is
+//! treated as far worse than shipping the un-cropped window.
 
 use image::imageops::FilterType;
 use image::{DynamicImage, GenericImageView};
@@ -466,6 +471,260 @@ fn refine_edges(planes: &Planes, rect: Rect, scale: f64, prefer_positive: bool) 
     }
 }
 
+/// Presentation and page proportions accepted by the safety guard. A crop that
+/// does not match one of these is almost certainly cutting into the slide.
+const STANDARD_ASPECTS: [f64; 10] = [
+    16.0 / 9.0,
+    16.0 / 10.0,
+    4.0 / 3.0,
+    3.0 / 2.0,
+    std::f64::consts::SQRT_2,
+    9.0 / 16.0,
+    10.0 / 16.0,
+    3.0 / 4.0,
+    2.0 / 3.0,
+    std::f64::consts::FRAC_1_SQRT_2,
+];
+
+/// Base brightness of a line, using a low percentile so glyphs and graphics
+/// sitting on a uniform band do not hide the band's background.
+fn line_background(
+    planes: &Planes,
+    column: bool,
+    position: usize,
+    start: usize,
+    end: usize,
+) -> Option<u8> {
+    let limit = if column { planes.width } else { planes.height };
+    if start >= end || position >= limit {
+        return None;
+    }
+    let step = ((end - start) / 256).max(1);
+    let mut values = Vec::with_capacity((end - start) / step + 1);
+    let mut along = start;
+    while along < end {
+        let (x, y) = if column {
+            (position, along)
+        } else {
+            (along, position)
+        };
+        values.push(planes.luma_at(x, y));
+        along += step;
+    }
+    Some(percentile_u8(&mut values, 0.2))
+}
+
+/// True when a line carries glyph-like detail: enough sharply changing
+/// neighbouring pixels. Letterbox bars and flat window chrome stay negative,
+/// while text, icons, and chart strokes stay positive.
+fn line_has_detail(
+    planes: &Planes,
+    column: bool,
+    position: usize,
+    start: usize,
+    end: usize,
+) -> bool {
+    let limit = if column { planes.width } else { planes.height };
+    if start >= end || position >= limit {
+        return false;
+    }
+    let step = ((end - start) / 1024).max(1);
+    let mut hits = 0usize;
+    let mut pairs = 0usize;
+    let mut previous: Option<(u8, u8)> = None;
+    let mut along = start;
+    while along < end {
+        let (x, y) = if column {
+            (position, along)
+        } else {
+            (along, position)
+        };
+        let current = (planes.luma_at(x, y), planes.saturation_at(x, y));
+        if let Some((luma, saturation)) = previous {
+            let change = (current.0 as i32 - luma as i32).unsigned_abs()
+                + (current.1 as i32 - saturation as i32).unsigned_abs() / 2;
+            if change >= 32 {
+                hits += 1;
+            }
+            pairs += 1;
+        }
+        previous = Some(current);
+        along += step;
+    }
+    hits >= 4 && hits * 200 >= pairs
+}
+
+/// Extend one edge outward across a band with a stable background that
+/// contains glyph-like detail. A dark title band on a dark slide therefore
+/// survives even though its flat background looks like chrome, while a plain
+/// letterbox bar is left outside the crop. The band must end at a brightness
+/// change; a band running to the image edge without one is not trusted.
+fn expand_past_text_band(
+    planes: &Planes,
+    edge: u32,
+    start: bool,
+    column: bool,
+    perpendicular: (usize, usize),
+) -> Option<u32> {
+    let limit = if column { planes.width } else { planes.height } as i64;
+    if perpendicular.1.saturating_sub(perpendicular.0) < 8 {
+        return Some(edge);
+    }
+    let direction: i64 = if start { -1 } else { 1 };
+    let first = edge as i64 + direction;
+    if !(0..limit).contains(&first) {
+        return Some(edge);
+    }
+    let Some(background) = line_background(
+        planes,
+        column,
+        first as usize,
+        perpendicular.0,
+        perpendicular.1,
+    ) else {
+        return Some(edge);
+    };
+    let cap = ((limit as f64 * 0.35) as usize).max(2);
+    let mut outer = edge as i64;
+    let mut detail = false;
+    let mut length = 0usize;
+    let mut position = first;
+    while (0..limit).contains(&position) && length < cap {
+        let Some(value) = line_background(
+            planes,
+            column,
+            position as usize,
+            perpendicular.0,
+            perpendicular.1,
+        ) else {
+            break;
+        };
+        if (value as i32 - background as i32).abs() > 8 {
+            break;
+        }
+        if line_has_detail(
+            planes,
+            column,
+            position as usize,
+            perpendicular.0,
+            perpendicular.1,
+        ) {
+            detail = true;
+        }
+        outer = position;
+        length += 1;
+        position += direction;
+    }
+    if length >= cap {
+        // The band reaches deep into the picture. With detail inside it the
+        // edge may cut content that cannot be attributed to a bounded band,
+        // so the crop is abandoned instead of guessed.
+        return if detail { None } else { Some(edge) };
+    }
+    if detail && length > 0 {
+        Some(if start {
+            outer as u32
+        } else {
+            (outer + 1).min(limit) as u32
+        })
+    } else {
+        Some(edge)
+    }
+}
+
+/// True when the pixels immediately outside one edge still look like slide
+/// content: glyph-like detail or a saturated band. Such an edge would slice
+/// through the presentation, so the crop is abandoned.
+fn edge_band_has_content(
+    planes: &Planes,
+    edge: u32,
+    start: bool,
+    column: bool,
+    span: (usize, usize),
+    limit: usize,
+) -> bool {
+    const PROBE_DEPTH: i64 = 8;
+    if span.0 >= span.1 {
+        return false;
+    }
+    for step in 0..PROBE_DEPTH {
+        let position = if start {
+            edge as i64 - 1 - step
+        } else {
+            edge as i64 + step
+        };
+        if !(0..limit as i64).contains(&position) {
+            break;
+        }
+        let (luma, saturation, _) = line_stats(planes, column, position as usize, span.0, span.1);
+        if luma >= 20.0 && saturation >= 40.0 {
+            return true;
+        }
+        if line_has_detail(planes, column, position as usize, span.0, span.1) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Only accept rectangles whose proportions match a presentation or page
+/// format. This rejects crops that slice through the slide even when they
+/// contain no obvious glyphs, which keeps the original screenshot instead.
+fn has_standard_aspect(rect: Rect) -> bool {
+    let aspect = rect.width() as f64 / rect.height() as f64;
+    STANDARD_ASPECTS
+        .iter()
+        .any(|&standard| (aspect / standard - 1.0).abs() <= 0.05)
+}
+
+/// Safety net for every candidate crop. Each edge is first extended across a
+/// band that may hold text, then the result must look like a real slide or
+/// page. Any doubt keeps the untouched screenshot (`None`), because losing
+/// presentation content is worse than shipping the full window.
+fn guard_crop(planes: &Planes, rect: Rect) -> Option<Rect> {
+    let horizontal_span = (rect.x0 as usize, rect.x1 as usize);
+    let vertical_span = (rect.y0 as usize, rect.y1 as usize);
+    let guarded = Rect {
+        x0: expand_past_text_band(planes, rect.x0, true, true, vertical_span)?,
+        y0: expand_past_text_band(planes, rect.y0, true, false, horizontal_span)?,
+        x1: expand_past_text_band(planes, rect.x1, false, true, vertical_span)?,
+        y1: expand_past_text_band(planes, rect.y1, false, false, horizontal_span)?,
+    };
+    if guarded.width() < 4 || guarded.height() < 4 {
+        return None;
+    }
+    if (guarded.width() as f64 * guarded.height() as f64)
+        > (planes.width * planes.height) as f64 * 0.985
+    {
+        return None;
+    }
+    let horizontal_span = (guarded.x0 as usize, guarded.x1 as usize);
+    let vertical_span = (guarded.y0 as usize, guarded.y1 as usize);
+    let cuts_content =
+        edge_band_has_content(planes, guarded.x0, true, true, vertical_span, planes.width)
+            || edge_band_has_content(
+                planes,
+                guarded.y0,
+                true,
+                false,
+                horizontal_span,
+                planes.height,
+            )
+            || edge_band_has_content(planes, guarded.x1, false, true, vertical_span, planes.width)
+            || edge_band_has_content(
+                planes,
+                guarded.y1,
+                false,
+                false,
+                horizontal_span,
+                planes.height,
+            );
+    if cuts_content || !has_standard_aspect(guarded) {
+        return None;
+    }
+    Some(guarded)
+}
+
 /// A fallback rectangle that still contains letterbox or control bands is
 /// ambiguous for dark slides; keeping the full screenshot is safer than
 /// shipping black bars or cropping into the slide.
@@ -573,7 +832,7 @@ fn has_wide_content_gap(
 }
 
 /// Detect a mostly white slide canvas and return its full-resolution bounds.
-fn detect_white_canvas(image: &DynamicImage) -> Option<Rect> {
+fn detect_white_canvas(image: &DynamicImage, full: &Planes) -> Option<Rect> {
     let work = Planes::new(image, 640);
     let (width, height) = (work.width, work.height);
     let total = (width * height) as f64;
@@ -676,7 +935,6 @@ fn detect_white_canvas(image: &DynamicImage) -> Option<Rect> {
         return None;
     }
 
-    let full = Planes::new(image, u32::MAX);
     let scale_x = full.width as f64 / width as f64;
     let scale_y = full.height as f64 / height as f64;
     let rough = Rect {
@@ -686,8 +944,8 @@ fn detect_white_canvas(image: &DynamicImage) -> Option<Rect> {
         y1: ((y1 as f64 * scale_y).round() as u32).min(full.height as u32),
     };
     let refined = refine_edges(
-        &full,
-        expand_graphic_bands(&full, rough),
+        full,
+        expand_graphic_bands(full, rough),
         (scale_x + scale_y) / 2.0,
         true,
     );
@@ -785,7 +1043,7 @@ impl RgbWork {
 /// standard-ratio rectangle bounded by edge transitions, then rejects results
 /// that still contain chrome-like bands.
 #[allow(clippy::needless_range_loop)]
-fn detect_edge_fallback(image: &DynamicImage) -> Option<Rect> {
+fn detect_edge_fallback(image: &DynamicImage, full: &Planes) -> Option<Rect> {
     let work = RgbWork::new(image, 480);
     let (width, height) = (work.width, work.height);
     if width < 16 || height < 16 {
@@ -942,7 +1200,6 @@ fn detect_edge_fallback(image: &DynamicImage) -> Option<Rect> {
         }
     }
     let (_, best) = best?;
-    let full = Planes::new(image, u32::MAX);
     let scale_x = full.width as f64 / width as f64;
     let scale_y = full.height as f64 / height as f64;
     let rough = Rect {
@@ -951,8 +1208,8 @@ fn detect_edge_fallback(image: &DynamicImage) -> Option<Rect> {
         x1: (best.x1 as f64 * scale_x) as u32,
         y1: (best.y1 as f64 * scale_y) as u32,
     };
-    let refined = refine_edges(&full, rough, (scale_x + scale_y) / 2.0, false);
-    if has_chrome_border(&full, refined) {
+    let refined = refine_edges(full, rough, (scale_x + scale_y) / 2.0, false);
+    if has_chrome_border(full, refined) {
         None
     } else {
         Some(refined)
@@ -964,11 +1221,12 @@ pub(super) fn detect_presentation(image: &DynamicImage) -> Option<(u32, u32, u32
         return None;
     }
     let probe = Planes::new(image, 320);
+    let full = Planes::new(image, u32::MAX);
     let bright =
         probe.luma.iter().filter(|&&value| value >= 235).count() as f64 / probe.luma.len() as f64;
     let rect = if bright < 0.02 {
-        detect_edge_fallback(image)
-    } else if let Some(rect) = detect_white_canvas(image) {
+        detect_edge_fallback(image, &full)
+    } else if let Some(rect) = detect_white_canvas(image, &full) {
         Some(rect)
     } else {
         let left = probe.width / 3;
@@ -993,12 +1251,13 @@ pub(super) fn detect_presentation(image: &DynamicImage) -> Option<(u32, u32, u32
         // dominated by strict white (which would indicate a bright slide whose
         // centre merely contains a dark photo).
         if centre < 110.0 && strict_white < 0.30 {
-            detect_edge_fallback(image)
+            detect_edge_fallback(image, &full)
         } else {
             None
         }
     };
-    rect.map(|rect| (rect.x0, rect.y0, rect.width(), rect.height()))
+    let rect = guard_crop(&full, rect?)?;
+    Some((rect.x0, rect.y0, rect.width(), rect.height()))
 }
 
 #[cfg(test)]
@@ -1254,6 +1513,14 @@ mod tests {
     }
 
     #[test]
+    fn leaves_a_non_standard_canvas_uncropped() {
+        let (width, height) = (800, 600);
+        let mut image = canvas(width, height, DARK_CHROME);
+        fill(&mut image, 250, 150, 550, 450, WHITE);
+        assert!(detect(&image).is_none());
+    }
+
+    #[test]
     fn tolerates_compression_noise_around_the_white_canvas() {
         let (mut image, slide) = dark_meeting_screenshot();
         let mut seed = 0x9e37_79b9u32;
@@ -1268,6 +1535,145 @@ mod tests {
                     image.put_pixel(x, y, image::Rgb([adjusted, adjusted, adjusted]));
                 }
             }
+        }
+        assert_crop(detect(&image), slide, 2);
+    }
+
+    #[test]
+    fn keeps_a_dark_title_band_with_white_text() {
+        let (mut image, slide) = dark_meeting_screenshot();
+        let band_bottom = slide.1 + (slide.3 - slide.1) * 18 / 100;
+        fill(
+            &mut image,
+            slide.0 as i64,
+            slide.1 as i64,
+            slide.2 as i64,
+            band_bottom as i64,
+            [18, 18, 18],
+        );
+        for index in 0..6 {
+            let x = slide.0 + 80 + index * 180;
+            fill(
+                &mut image,
+                x as i64,
+                slide.1 as i64 + 35,
+                (x + 110) as i64,
+                slide.1 as i64 + 62,
+                WHITE,
+            );
+        }
+        assert_crop(detect(&image), slide, 2);
+    }
+
+    #[test]
+    fn keeps_a_dark_footer_band_with_light_text() {
+        let (mut image, slide) = dark_meeting_screenshot();
+        let band_top = slide.3 - (slide.3 - slide.1) * 16 / 100;
+        fill(
+            &mut image,
+            slide.0 as i64,
+            band_top as i64,
+            slide.2 as i64,
+            slide.3 as i64,
+            [18, 18, 18],
+        );
+        // Light text is below the white-canvas threshold, so only the guard
+        // can notice that the crop would otherwise cut the footer off.
+        for index in 0..6 {
+            let x = slide.0 + 90 + index * 180;
+            fill(
+                &mut image,
+                x as i64,
+                band_top as i64 + 30,
+                (x + 100) as i64,
+                band_top as i64 + 58,
+                [235, 235, 235],
+            );
+        }
+        assert_crop(detect(&image), slide, 2);
+    }
+
+    #[test]
+    fn keeps_a_dark_side_band_with_light_text() {
+        let (mut image, slide) = dark_meeting_screenshot();
+        let band_right = slide.0 + (slide.2 - slide.0) * 14 / 100;
+        fill(
+            &mut image,
+            slide.0 as i64,
+            slide.1 as i64,
+            band_right as i64,
+            slide.3 as i64,
+            [18, 18, 18],
+        );
+        for index in 0..4 {
+            let y = slide.1 + 90 + index * 100;
+            fill(
+                &mut image,
+                (slide.0 + 30) as i64,
+                y as i64,
+                (slide.0 + 110) as i64,
+                (y + 32) as i64,
+                [235, 235, 235],
+            );
+        }
+        assert_crop(detect(&image), slide, 2);
+    }
+
+    #[test]
+    fn does_not_crop_a_white_content_box_out_of_a_colored_slide() {
+        let (mut image, slide) = dark_meeting_screenshot();
+        fill(
+            &mut image,
+            slide.0 as i64,
+            slide.1 as i64,
+            slide.2 as i64,
+            slide.3 as i64,
+            [20, 60, 130],
+        );
+        let box_width = (slide.2 - slide.0) * 72 / 100;
+        let box_height = box_width * 9 / 16;
+        let box_x = slide.0 + ((slide.2 - slide.0) - box_width) / 2;
+        let box_y = slide.1 + ((slide.3 - slide.1) - box_height) / 2;
+        fill(
+            &mut image,
+            box_x as i64,
+            box_y as i64,
+            (box_x + box_width) as i64,
+            (box_y + box_height) as i64,
+            WHITE,
+        );
+        assert!(detect(&image).is_none());
+    }
+
+    #[test]
+    fn does_not_crop_inside_a_bordered_chart() {
+        let (mut image, slide) = dark_meeting_screenshot();
+        let chart = (slide.0 + 140, slide.1 + 90, slide.2 - 140, slide.3 - 90);
+        fill(
+            &mut image,
+            chart.0 as i64,
+            chart.1 as i64,
+            chart.2 as i64,
+            chart.3 as i64,
+            [30, 70, 140],
+        );
+        fill(
+            &mut image,
+            chart.0 as i64 + 8,
+            chart.1 as i64 + 8,
+            chart.2 as i64 - 8,
+            chart.3 as i64 - 8,
+            WHITE,
+        );
+        for bar in 0..5 {
+            fill(
+                &mut image,
+                (chart.0 + 30 + bar * 100) as i64,
+                (chart.3 - 70) as i64,
+                (chart.0 + 80 + bar * 100) as i64,
+                (chart.3 - 30) as i64,
+                [0, 112, 192],
+            );
         }
         assert_crop(detect(&image), slide, 2);
     }
