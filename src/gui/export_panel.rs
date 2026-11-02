@@ -88,11 +88,7 @@ impl ExportPanel {
                     (ExportMode::Images, i18n::t_export_mode_images(language)),
                     (ExportMode::Deck, i18n::t_export_mode_deck(language)),
                 ] {
-                    let button = if self.mode == mode {
-                        theme::primary_button(label)
-                    } else {
-                        theme::secondary_button(label)
-                    };
+                    let button = theme::segment_button(label, self.mode == mode);
                     if ui.add_enabled(self.export.is_none(), button).clicked() {
                         self.switch_mode(mode);
                     }

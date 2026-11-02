@@ -212,6 +212,22 @@ pub fn secondary_button(text: impl Into<String>) -> Button<'static> {
         .min_size(Vec2::new(0.0, 36.0))
 }
 
+/// One option of a segmented control. Selected and unselected options keep the
+/// same font, stroke, and height, so switching choices never makes the row jump.
+pub fn segment_button(text: impl Into<String>, selected: bool) -> Button<'static> {
+    let text = text.into();
+    let (fill, stroke, color) = if selected {
+        (token::PRIMARY, token::PRIMARY, Color32::WHITE)
+    } else {
+        (token::SURFACE_SOFT, token::LINE, token::INK)
+    };
+    Button::new(RichText::new(text).size(13.5).color(color))
+        .fill(fill)
+        .stroke(Stroke::new(1.0_f32, stroke))
+        .corner_radius(8)
+        .min_size(Vec2::new(0.0, 36.0))
+}
+
 pub fn danger_button(text: impl Into<String>) -> Button<'static> {
     Button::new(RichText::new(text.into()).size(13.5).color(token::DANGER))
         .fill(token::DANGER_SOFT)
