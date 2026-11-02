@@ -1,3 +1,4 @@
+use crate::gui::file_chooser::{pick_file, pick_folder, ChooserKind};
 use crate::gui::output_panel::OutputPanel;
 use crate::gui::theme::{self, token};
 use crate::i18n::{self, Language};
@@ -383,11 +384,11 @@ impl ExportPanel {
         let error = status_is_error(&self.status);
         let success = !error && self.export.is_none() && self.output_to_open.is_some();
         let (fill, stroke, text) = if error {
-            (token::WARN_SOFT, token::WARN_LINE, token::WARN)
+            (token::warn_soft(), token::warn_line(), token::warn())
         } else if success {
-            (token::OK_SOFT, token::LINE, token::OK)
+            (token::ok_soft(), token::line(), token::ok())
         } else {
-            (token::PRIMARY_SOFT, token::LINE, token::PRIMARY)
+            (token::primary_soft(), token::line(), token::accent())
         };
         theme::banner_frame(fill, stroke).show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -663,7 +664,7 @@ impl ExportPanel {
             .name("folder-picker".into())
             .spawn(move || {
                 let _ = tx.send(if file {
-                    pick_file(initial.as_deref())
+                    pick_file(ChooserKind::Presentation, initial.as_deref())
                 } else {
                     pick_folder(initial.as_deref())
                 });
@@ -753,7 +754,7 @@ fn placement_option(
     ui.radio_value(
         current,
         value,
-        RichText::new(label).size(12.5).color(token::INK).strong(),
+        RichText::new(label).size(12.5).color(token::ink()).strong(),
     );
     ui.horizontal(|ui| {
         ui.add_space(24.0);
@@ -767,7 +768,7 @@ fn field_row(ui: &mut Ui, wide: bool, label: &str, add: impl FnOnce(&mut Ui)) {
             ui.allocate_ui_with_layout(Vec2::new(190.0, 0.0), Layout::top_down(Align::Min), |ui| {
                 ui.set_min_width(190.0);
                 ui.add_space(8.0);
-                ui.label(RichText::new(label).size(12.5).color(token::INK).strong());
+                ui.label(RichText::new(label).size(12.5).color(token::ink()).strong());
             });
             ui.vertical(|ui| {
                 ui.set_width(ui.available_width());
@@ -775,7 +776,7 @@ fn field_row(ui: &mut Ui, wide: bool, label: &str, add: impl FnOnce(&mut Ui)) {
             });
         });
     } else {
-        ui.label(RichText::new(label).size(12.5).color(token::INK).strong());
+        ui.label(RichText::new(label).size(12.5).color(token::ink()).strong());
         ui.add_space(2.0);
         add(ui);
     }
@@ -809,149 +810,6 @@ fn status_is_error(status: &str) -> bool {
         || lower.contains("stopped")
         || status.contains("失败")
         || status.contains("中断")
-}
-
-/// The Windows choosers print the chosen path as the hex of its UTF-8 bytes.
-///
-/// Plain text would travel through the console code page, which turns any path
-/// that is not ASCII into question marks, and the usual workaround — setting
-/// `[Console]::OutputEncoding` — is exactly what a helper without a console
-/// cannot do. Hex is ASCII whatever the code page is.
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-const WINDOWS_FOLDER_CHOOSER: &str = "Add-Type -AssemblyName System.Windows.Forms; \
-$d = New-Object System.Windows.Forms.FolderBrowserDialog; \
-$d.SelectedPath = $env:PPT_CAPTURE_INITIAL_FOLDER; \
-if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { \
-$b = [System.Text.Encoding]::UTF8.GetBytes($d.SelectedPath); \
-([System.BitConverter]::ToString($b)).Replace('-', '') }";
-
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-const WINDOWS_FILE_CHOOSER: &str = "Add-Type -AssemblyName System.Windows.Forms; \
-$d = New-Object System.Windows.Forms.OpenFileDialog; \
-$d.Filter = 'PowerPoint presentation (*.pptx)|*.pptx'; \
-$d.InitialDirectory = $env:PPT_CAPTURE_INITIAL_FOLDER; \
-if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { \
-$b = [System.Text.Encoding]::UTF8.GetBytes($d.FileName); \
-([System.BitConverter]::ToString($b)).Replace('-', '') }";
-
-/// What the platform chooser printed, as a path. An empty answer means the user
-/// cancelled the dialog.
-fn chooser_path(stdout: &[u8]) -> Result<Option<PathBuf>, String> {
-    let raw = std::str::from_utf8(stdout)
-        .map_err(|_| "The chooser returned text that is not UTF-8".to_string())?;
-    let text = decode_chooser_output(raw.trim())?;
-    let text = text
-        .trim_start_matches('\u{feff}')
-        .trim_end_matches(['\r', '\n']);
-    Ok(if text.is_empty() {
-        None
-    } else {
-        Some(PathBuf::from(text))
-    })
-}
-
-#[cfg(target_os = "windows")]
-fn decode_chooser_output(raw: &str) -> Result<String, String> {
-    decode_hex_text(raw)
-}
-
-#[cfg(not(target_os = "windows"))]
-fn decode_chooser_output(raw: &str) -> Result<String, String> {
-    Ok(raw.to_string())
-}
-
-/// Decode the hex of a UTF-8 string. Platform-neutral so the decoding is covered
-/// by the tests that run on every platform.
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-fn decode_hex_text(raw: &str) -> Result<String, String> {
-    if !raw.len().is_multiple_of(2) {
-        return Err("The chooser returned an odd number of hex digits".into());
-    }
-    let mut bytes = Vec::with_capacity(raw.len() / 2);
-    for pair in raw.as_bytes().chunks(2) {
-        let high = (pair[0] as char)
-            .to_digit(16)
-            .ok_or_else(|| "The chooser returned text that is not hex".to_string())?;
-        let low = (pair[1] as char)
-            .to_digit(16)
-            .ok_or_else(|| "The chooser returned text that is not hex".to_string())?;
-        bytes.push((high * 16 + low) as u8);
-    }
-    String::from_utf8(bytes).map_err(|_| "The chosen path is not UTF-8".to_string())
-}
-
-fn pick_folder(initial: Option<&std::path::Path>) -> Result<Option<PathBuf>, String> {
-    #[cfg(target_os = "windows")]
-    let result = crate::platform::quiet_command("powershell.exe")
-        .env(
-            "PPT_CAPTURE_INITIAL_FOLDER",
-            initial.unwrap_or_else(|| std::path::Path::new("")),
-        )
-        .args(["-NoProfile", "-STA", "-Command", WINDOWS_FOLDER_CHOOSER])
-        .output();
-    #[cfg(target_os = "macos")]
-    let result = crate::platform::quiet_command("osascript")
-        .args([
-            "-e",
-            "on run argv\nif (item 1 of argv) is not \"\" then\nreturn POSIX path of (choose folder with prompt \"Select an image folder\" default location (POSIX file (item 1 of argv)))\nelse\nreturn POSIX path of (choose folder with prompt \"Select an image folder\")\nend if\nend run",
-            "--",
-        ])
-        .arg(initial.unwrap_or_else(|| std::path::Path::new("")))
-        .output();
-    #[cfg(target_os = "linux")]
-    let result = {
-        let mut command = crate::platform::quiet_command("zenity");
-        command.args(["--file-selection", "--directory"]);
-        if let Some(path) = initial {
-            command.arg(format!("--filename={}/", path.display()));
-        }
-        command.output()
-    };
-    let result = result.map_err(|error| {
-        format!("Cannot open folder chooser ({error}); enter the folder path manually")
-    })?;
-    if !result.status.success() {
-        return Ok(None);
-    }
-    chooser_path(&result.stdout)
-}
-
-fn pick_file(initial: Option<&std::path::Path>) -> Result<Option<PathBuf>, String> {
-    #[cfg(target_os = "windows")]
-    let result = crate::platform::quiet_command("powershell.exe")
-        .env(
-            "PPT_CAPTURE_INITIAL_FOLDER",
-            initial.unwrap_or_else(|| std::path::Path::new("")),
-        )
-        .args(["-NoProfile", "-STA", "-Command", WINDOWS_FILE_CHOOSER])
-        .output();
-    #[cfg(target_os = "macos")]
-    let result = crate::platform::quiet_command("osascript")
-        .args([
-            "-e",
-            "on run argv\nif (item 1 of argv) is not \"\" then\nreturn POSIX path of (choose file with prompt \"Select a PPTX\" default location (POSIX file (item 1 of argv)) of type {\"org.openxmlformats.presentationml.presentation\"})\nelse\nreturn POSIX path of (choose file with prompt \"Select a PPTX\" of type {\"org.openxmlformats.presentationml.presentation\"})\nend if\nend run",
-            "--",
-        ])
-        .arg(initial.unwrap_or_else(|| std::path::Path::new("")))
-        .output();
-    #[cfg(target_os = "linux")]
-    let result = {
-        let mut command = crate::platform::quiet_command("zenity");
-        command.args([
-            "--file-selection",
-            "--file-filter=PowerPoint (*.pptx) | *.pptx",
-        ]);
-        if let Some(path) = initial {
-            command.arg(format!("--filename={}/", path.display()));
-        }
-        command.output()
-    };
-    let result = result
-        .map_err(|error| format!("Cannot open file chooser ({error}); enter the path manually"))?;
-    if !result.status.success() {
-        return Ok(None);
-    }
-    chooser_path(&result.stdout)
 }
 
 #[cfg(test)]
@@ -1065,56 +923,6 @@ mod tests {
             .unwrap()
             .join(panel.settings.output_filename)
             .is_file());
-    }
-
-    #[test]
-    fn the_windows_chooser_scripts_are_single_line_commands() {
-        for script in [WINDOWS_FOLDER_CHOOSER, WINDOWS_FILE_CHOOSER] {
-            // The literal continues over several source lines; what PowerShell
-            // receives has to be one command with every statement separated.
-            assert!(!script.contains('\n'), "{script}");
-            assert!(!script.contains('\\'), "{script}");
-            assert!(
-                script.contains("[System.Windows.Forms.DialogResult]::OK"),
-                "{script}"
-            );
-            assert!(script.contains("Replace('-', '')"), "{script}");
-            assert!(
-                script.contains("$env:PPT_CAPTURE_INITIAL_FOLDER"),
-                "{script}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_chinese_path_survives_the_hex_the_windows_chooser_prints() {
-        // What [BitConverter]::ToString produces for the UTF-8 bytes of
-        // "C:\数据\幻灯片.pptx", minus the dashes.
-        let hex = "433A5CE695B0E68DAE5CE5B9BBE781AFE789872E70707478";
-        assert_eq!(decode_hex_text(hex).unwrap(), r"C:\数据\幻灯片.pptx");
-    }
-
-    #[test]
-    fn malformed_hex_is_rejected_instead_of_becoming_a_path() {
-        assert!(decode_hex_text("ABC").is_err(), "odd number of digits");
-        assert!(decode_hex_text("ZZ").is_err(), "not hex");
-        assert!(decode_hex_text("FFFE").is_err(), "not UTF-8");
-        assert_eq!(decode_hex_text("").unwrap(), "");
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    #[test]
-    fn a_plain_path_from_the_native_chooser_is_taken_as_is() {
-        assert_eq!(
-            chooser_path(b"/Users/allen/\xe8\xb5\x84\xe6\x96\x99/\n").unwrap(),
-            Some(PathBuf::from("/Users/allen/资料"))
-        );
-    }
-
-    #[test]
-    fn a_cancelled_chooser_returns_no_path() {
-        assert_eq!(chooser_path(b"").unwrap(), None);
-        assert_eq!(chooser_path(b"\r\n").unwrap(), None);
     }
 
     #[test]

@@ -7,7 +7,8 @@ A desktop tool that captures presentation screenshots and creates PPTX files aft
 - **Auto-capture**: Detects slide changes on a selected display, waits for animations to settle, then captures
 - **Native capture engines**: DXGI/GDI on Windows and xcap/CoreGraphics on macOS
 - **GUI-driven**: No command-line interaction — launch the `.exe` and configure visually
-- **Focused workspace UI**: Sidebar navigation, card-based settings, a light pine palette, and reviewed English/Chinese layouts
+- **Focused workspace UI**: Sidebar navigation, card-based settings, a pine palette in light and dark, and reviewed English/Chinese layouts
+- **Appearance page**: Switch between light, dark, and matching the system, and put your own picture behind the workspace
 - **Minimize on Start**: Record with the main window minimized; restore it from the taskbar or Dock when you want to stop
 - **Window management**: Select a window, move it to the capture display, maximize it — all from the UI
 - **Deferred PPTX**: Screenshots are saved during capture; PPTX files are generated on Stop, with up to 50 slides each
@@ -71,6 +72,17 @@ Two placements are available for the trimmed result:
 Page size, slide order, notes, and every other package part are preserved byte for byte; only the cropped media and the picture offsets and extents of the slides that were trimmed change. The slides that could not be trimmed keep their original picture, and the final status line reports how many slides were trimmed out of the total.
 
 On restart, recovery rebuilds unfinished recordings from their journal and PNGs, preserving the original filename, slide size, and image-fit setting. Keep each session folder together. Missing/corrupt images or journals produce an error instead of a silently incomplete presentation; existing PPTX files remain intact. Legacy `manifest.jsonl` recordings lack layout metadata and therefore retain the old 16:9/fit recovery default. Recovery cannot infer pages already overwritten by older versions.
+
+### Appearance
+
+The **Appearance** page sets how the window looks; every change applies as you click and is remembered in `ppt-auto-capture-config.json` next to the executable.
+
+- **Light / Dark / Match system** — the palette covers the workspace, sidebar, cards, banners, and controls, so recorded screenshots are the only thing that stays untouched. *Match system* re-checks the operating system's appearance while the window is open.
+- **Background picture** — choose a PNG, JPEG, BMP, or WebP file and it is scaled to fill the workspace behind the cards. The cards themselves stay opaque, so text keeps its contrast. The picture is downscaled to at most 2560 px on its longest side before it reaches the GPU, and the file is only read: moving it later just brings back the solid background with a note on the page.
+- **Dimming** — fades the picture behind the interface. Raise it when the picture is busy or bright; the preview above the slider shows the result, including the fade.
+
+Both palettes are checked by a unit test that measures WCAG contrast for every text role the panels combine, so a colour change that makes text hard to read fails before release.
+
 
 ### macOS troubleshooting and diagnostics
 

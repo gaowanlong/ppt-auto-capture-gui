@@ -5,9 +5,11 @@ use crossbeam_channel::Sender;
 
 use crate::capture::WorkerEventReceiver;
 use crate::capture::{CaptureSource, CaptureState, CaptureWorker, WorkerCommand, WorkerEvent};
+use crate::gui::appearance_panel::AppearancePanel;
 use crate::gui::dashboard::{DashboardPanel, DashboardRenderInput};
 use crate::gui::display_panel::DisplayPanel;
 use crate::gui::export_panel::ExportPanel;
+use crate::gui::file_chooser::{pick_file, ChooserKind};
 use crate::gui::output_panel::OutputPanel;
 use crate::gui::settings_panel::SettingsPanel;
 use crate::gui::source_panel::SourcePanel;
@@ -31,6 +33,12 @@ pub struct PptAutoCaptureApp {
     settings_panel: SettingsPanel,
     output_panel: OutputPanel,
     export_panel: ExportPanel,
+    appearance_panel: AppearancePanel,
+    background_texture: Option<egui::TextureHandle>,
+    background_picker:
+        Option<std::sync::mpsc::Receiver<Result<Option<std::path::PathBuf>, String>>>,
+    background_attempted: bool,
+    appearance_save_due: Option<std::time::Instant>,
     worker: Option<CaptureWorker>,
     cmd_tx: Option<Sender<WorkerCommand>>,
     event_rx: Option<WorkerEventReceiver>,
@@ -72,6 +80,7 @@ enum Tab {
     Source,
     Display,
     Settings,
+    Appearance,
     Output,
     Export,
 }
@@ -79,6 +88,8 @@ enum Tab {
 impl PptAutoCaptureApp {
     pub fn new(logging: LoggingSetup) -> Self {
         let config = AppConfig::load();
+        let mut appearance_panel = AppearancePanel::new();
+        appearance_panel.load_from_config(&config);
         let mut app = Self {
             config: config.clone(),
             dashboard: DashboardPanel::new(),
@@ -89,6 +100,11 @@ impl PptAutoCaptureApp {
             export_panel: ExportPanel::new(&OutputPanel::new_with_filename(
                 &config.output_filename,
             )),
+            appearance_panel,
+            background_texture: None,
+            background_picker: None,
+            background_attempted: false,
+            appearance_save_due: None,
             worker: None,
             cmd_tx: None,
             event_rx: None,
@@ -171,6 +187,131 @@ impl PptAutoCaptureApp {
         app.refresh_displays();
         app.check_recovery();
         app
+    }
+
+    /// Apply the saved appearance and react to the appearance page: load the
+    /// background picture once, run the chooser off the UI thread, persist
+    /// changes, and keep "match system" in step with the operating system.
+    fn sync_appearance(&mut self, ctx: &egui::Context) {
+        self.poll_background_picker(ctx);
+
+        if !self.background_attempted {
+            self.background_attempted = true;
+            self.load_background_texture(ctx);
+        }
+        if std::mem::take(&mut self.appearance_panel.pick_requested) {
+            self.choose_background_file();
+        }
+        if std::mem::take(&mut self.appearance_panel.clear_requested) {
+            self.appearance_panel.background = None;
+            self.background_texture = None;
+            self.appearance_panel.error = None;
+            self.appearance_panel.changed = true;
+        }
+
+        // A "match system" choice has to be re-resolved on every frame: the
+        // operating system can switch appearance while the window is open.
+        let system_dark = ctx.system_theme().map(|theme| theme == egui::Theme::Dark);
+        let dark = self.appearance_panel.mode.is_dark(system_dark);
+        if dark != theme::is_dark() {
+            theme::apply(ctx, dark);
+            ctx.request_repaint();
+        }
+
+        if std::mem::take(&mut self.appearance_panel.changed) {
+            self.config.theme_mode = self.appearance_panel.mode;
+            self.config.background_image = self.appearance_panel.background_setting();
+            self.config.background_dim = self.appearance_panel.dim;
+            // Dragging the dimming slider changes the value every frame; the
+            // write waits until the value has settled.
+            self.appearance_save_due =
+                Some(std::time::Instant::now() + std::time::Duration::from_millis(400));
+            ctx.request_repaint_after(std::time::Duration::from_millis(400));
+        }
+        if self
+            .appearance_save_due
+            .is_some_and(|due| std::time::Instant::now() >= due)
+        {
+            self.appearance_save_due = None;
+            let _ = self.config.save();
+        }
+    }
+
+    fn choose_background_file(&mut self) {
+        let initial = self
+            .appearance_panel
+            .background
+            .as_ref()
+            .and_then(|path| path.parent().map(std::path::Path::to_path_buf));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let spawned = std::thread::Builder::new()
+            .name("background-picker".into())
+            .spawn(move || {
+                let _ = tx.send(pick_file(ChooserKind::Image, initial.as_deref()));
+            });
+        match spawned {
+            Ok(_) => self.background_picker = Some(rx),
+            Err(error) => {
+                self.appearance_panel.error =
+                    Some(format!("Cannot open the picture chooser: {error}"))
+            }
+        }
+    }
+
+    fn poll_background_picker(&mut self, ctx: &egui::Context) {
+        let Some(rx) = &self.background_picker else {
+            return;
+        };
+        let message = match rx.try_recv() {
+            Ok(message) => message,
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                ctx.request_repaint_after(std::time::Duration::from_millis(80));
+                return;
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                Err("The picture chooser closed before it returned a path".to_string())
+            }
+        };
+        self.background_picker = None;
+        match message {
+            Ok(Some(path)) => {
+                let previous = self.appearance_panel.background.replace(path);
+                self.appearance_panel.error = None;
+                self.load_background_texture(ctx);
+                if self.background_texture.is_some() {
+                    self.appearance_panel.changed = true;
+                } else {
+                    // Keep the picture that still works instead of saving a
+                    // path that cannot be read.
+                    self.appearance_panel.background = previous;
+                }
+            }
+            Ok(None) => {}
+            Err(error) => self.appearance_panel.error = Some(error),
+        }
+    }
+
+    fn load_background_texture(&mut self, ctx: &egui::Context) {
+        let Some(path) = self.appearance_panel.background.clone() else {
+            self.background_texture = None;
+            return;
+        };
+        match decode_background(&path) {
+            Ok(image) => {
+                self.background_texture = Some(ctx.load_texture(
+                    "workspace-background",
+                    image,
+                    egui::TextureOptions::LINEAR,
+                ));
+            }
+            Err(error) => {
+                self.background_texture = None;
+                self.appearance_panel.error = Some(format!(
+                    "{} ({error})",
+                    i18n::t_background_unreadable(self.language)
+                ));
+            }
+        }
     }
 
     fn record_error(&mut self, category: &str, message: String) {
@@ -952,11 +1093,12 @@ fn apply_output_to_config(panel: &OutputPanel, config: &mut AppConfig) {
 
 impl eframe::App for PptAutoCaptureApp {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        token::BG.to_normalized_gamma_f32()
+        token::bg().to_normalized_gamma_f32()
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.process_events();
+        self.sync_appearance(ctx);
         self.export_panel.poll(self.language);
         self.poll_recovery();
         self.poll_session_deletion();
@@ -1096,7 +1238,7 @@ impl eframe::App for PptAutoCaptureApp {
             .resizable(false)
             .frame(
                 egui::Frame::new()
-                    .fill(token::SIDEBAR)
+                    .fill(token::sidebar())
                     .inner_margin(egui::Margin::symmetric(12, 18)),
             )
             .show(ctx, |ui| {
@@ -1123,6 +1265,11 @@ impl eframe::App for PptAutoCaptureApp {
                         Tab::Settings,
                         NavIcon::Settings,
                         i18n::t_tab_settings(self.language),
+                    ),
+                    (
+                        Tab::Appearance,
+                        NavIcon::Theme,
+                        i18n::t_tab_appearance(self.language),
                     ),
                     (
                         Tab::Output,
@@ -1157,10 +1304,15 @@ impl eframe::App for PptAutoCaptureApp {
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::new()
-                    .fill(token::BG)
+                    .fill(token::bg())
                     .inner_margin(egui::Margin::symmetric(28, 24)),
             )
             .show(ctx, |ui| {
+                // Behind every page, so the workspace keeps its picture while the
+                // user moves between tabs.
+                if let Some(texture) = &self.background_texture {
+                    theme::paint_background(ui, texture, self.appearance_panel.dim);
+                }
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
@@ -1236,6 +1388,10 @@ impl eframe::App for PptAutoCaptureApp {
                                     }
                                 }
                                 self.settings_panel.changed = false;
+                            }
+                            Tab::Appearance => {
+                                let preview = self.background_texture.as_ref();
+                                self.appearance_panel.render(ui, self.language, preview);
                             }
                             Tab::Output => {
                                 let locked = self.dashboard.session_active;
@@ -1428,7 +1584,7 @@ impl eframe::App for PptAutoCaptureApp {
                 } else if let Some(status) = &self.dashboard.cleanup_status {
                     let text = egui::RichText::new(status);
                     ui.label(if self.dashboard.cleanup_failed {
-                        text.color(token::DANGER)
+                        text.color(token::danger())
                     } else {
                         text
                     });
@@ -2067,5 +2223,70 @@ mod tests {
             .map(|entry| entry.message.as_str())
             .collect();
         assert_eq!(messages, ["Capture worker disconnected"]);
+    }
+}
+
+/// A wallpaper is often far larger than the window, so the texture is capped:
+/// a 6000 px photo would otherwise cost a hundred megabytes of video memory.
+const MAX_BACKGROUND_SIDE: u32 = 2560;
+
+fn decode_background(path: &std::path::Path) -> Result<egui::ColorImage, String> {
+    let image = image::open(path).map_err(|error| error.to_string())?;
+    let image = if image.width() > MAX_BACKGROUND_SIDE || image.height() > MAX_BACKGROUND_SIDE {
+        image.thumbnail(MAX_BACKGROUND_SIDE, MAX_BACKGROUND_SIDE)
+    } else {
+        image
+    };
+    let rgba = image.to_rgba8();
+    Ok(egui::ColorImage::from_rgba_unmultiplied(
+        [rgba.width() as usize, rgba.height() as usize],
+        rgba.as_raw(),
+    ))
+}
+
+#[cfg(test)]
+mod background_tests {
+    use super::*;
+
+    fn write_picture(path: &std::path::Path, width: u32, height: u32) {
+        let mut picture = image::RgbaImage::new(width, height);
+        for (x, y, pixel) in picture.enumerate_pixels_mut() {
+            *pixel = image::Rgba([(x % 255) as u8, (y % 255) as u8, 120, 255]);
+        }
+        picture.save(path).unwrap();
+    }
+
+    #[test]
+    fn a_small_picture_keeps_its_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("small.png");
+        write_picture(&path, 320, 180);
+        let image = decode_background(&path).unwrap();
+        assert_eq!(image.size, [320, 180]);
+        assert_eq!(image.pixels.len(), 320 * 180);
+    }
+
+    #[test]
+    fn a_huge_picture_is_scaled_down_before_it_reaches_the_gpu() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("huge.png");
+        write_picture(&path, 3000, 1000);
+        let image = decode_background(&path).unwrap();
+        assert_eq!(image.size[0], MAX_BACKGROUND_SIDE as usize);
+        assert!(image.size[1] < 1000, "{:?}", image.size);
+        // The aspect ratio survives the downscale.
+        let ratio = image.size[0] as f32 / image.size[1] as f32;
+        assert!((ratio - 3.0).abs() < 0.02, "{ratio}");
+    }
+
+    #[test]
+    fn a_missing_or_broken_picture_reports_an_error_instead_of_panicking() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nope.png");
+        assert!(decode_background(&missing).is_err());
+
+        let broken = dir.path().join("broken.png");
+        std::fs::write(&broken, b"not a picture").unwrap();
+        assert!(decode_background(&broken).is_err());
     }
 }

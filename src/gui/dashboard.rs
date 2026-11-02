@@ -152,7 +152,7 @@ impl DashboardPanel {
     }
 
     fn render_error(&mut self, ui: &mut Ui, language: Language, error: String) {
-        theme::banner_frame(token::DANGER_SOFT, token::DANGER_LINE).show(ui, |ui| {
+        theme::banner_frame(token::danger_soft(), token::danger_line()).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal_top(|ui| {
                 let text_width = (ui.available_width() - 76.0).max(120.0);
@@ -164,11 +164,11 @@ impl DashboardPanel {
                             Language::Chinese => "录制需要处理",
                         })
                         .size(12.5)
-                        .color(token::DANGER)
+                        .color(token::danger())
                         .strong(),
                     );
                     ui.add_space(2.0);
-                    ui.label(RichText::new(error).size(12.0).color(token::DANGER));
+                    ui.label(RichText::new(error).size(12.0).color(token::danger()));
                 });
                 ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
                     if ui
@@ -198,20 +198,20 @@ impl DashboardPanel {
         let stopping = self.stopping;
         let accent = state_accent(state, stopping);
         let (fill, border) = if stopping {
-            (token::WARN_SOFT, token::WARN_LINE)
+            (token::warn_soft(), token::warn_line())
         } else {
             match state {
                 CaptureState::Running
                 | CaptureState::WaitingForStable
                 | CaptureState::Stable
-                | CaptureState::Saving => (token::RECORD_SOFT, token::RECORD_LINE),
+                | CaptureState::Saving => (token::record_soft(), token::record_line()),
                 CaptureState::Paused | CaptureState::WaitingForDesktop => {
-                    (token::WARN_SOFT, token::WARN_LINE)
+                    (token::warn_soft(), token::warn_line())
                 }
                 CaptureState::Error | CaptureState::ProtectedOrBlack => {
-                    (token::DANGER_SOFT, token::DANGER_LINE)
+                    (token::danger_soft(), token::danger_line())
                 }
-                _ => (token::SURFACE, token::LINE),
+                _ => (token::surface(), token::line()),
             }
         };
 
@@ -292,7 +292,7 @@ impl DashboardPanel {
             ui.label(
                 RichText::new(state_title(language, state, stopping))
                     .size(26.0)
-                    .color(token::INK)
+                    .color(token::ink())
                     .strong(),
             );
         });
@@ -300,7 +300,7 @@ impl DashboardPanel {
         ui.label(
             RichText::new(state_detail(language, state, stopping))
                 .size(13.0)
-                .color(token::MUTED),
+                .color(token::muted()),
         );
 
         if self.session_active && !stopping && self.saved_slides_count > 0 {
@@ -313,7 +313,7 @@ impl DashboardPanel {
                     Language::Chinese => format!("本次录制已保存 {} 页", self.saved_slides_count),
                 })
                 .size(11.5)
-                .color(token::MUTED),
+                .color(token::muted()),
             );
         }
 
@@ -389,7 +389,7 @@ impl DashboardPanel {
                 &mut self.minimize_on_start,
                 RichText::new(i18n::t_minimize_on_start(language))
                     .size(13.0)
-                    .color(token::INK),
+                    .color(token::ink()),
             )
             .on_hover_text(i18n::t_minimize_on_start_hint(language));
         });
@@ -517,7 +517,7 @@ impl DashboardPanel {
                         ui.label(
                             RichText::new(status.clone())
                                 .size(11.5)
-                                .color(token::DANGER),
+                                .color(token::danger()),
                         );
                         if ui
                             .add(theme::quiet_button(i18n::t_retry_delete(language)))
@@ -599,7 +599,7 @@ impl DashboardPanel {
                 ui.label(
                     RichText::new(i18n::t_diagnostics(language))
                         .size(13.0)
-                        .color(token::INK)
+                        .color(token::ink())
                         .strong(),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -620,14 +620,14 @@ impl DashboardPanel {
             theme::divider(ui);
 
             if let Some(status) = &self.diagnostics_status {
-                ui.label(RichText::new(status).size(11.5).color(token::OK));
+                ui.label(RichText::new(status).size(11.5).color(token::ok()));
                 ui.add_space(4.0);
             }
             if !persistent_log_available {
                 ui.label(
                     RichText::new(i18n::t_persistent_logging_unavailable(language))
                         .size(11.5)
-                        .color(token::WARN),
+                        .color(token::warn()),
                 );
                 ui.add_space(4.0);
             }
@@ -650,9 +650,9 @@ impl DashboardPanel {
                         ui.add_space(7.0);
                     }
                     let color = match entry.level {
-                        DiagnosticLevel::Info => token::MUTED,
-                        DiagnosticLevel::Warning => token::WARN,
-                        DiagnosticLevel::Error => token::DANGER,
+                        DiagnosticLevel::Info => token::muted(),
+                        DiagnosticLevel::Warning => token::warn(),
+                        DiagnosticLevel::Error => token::danger(),
                     };
                     let message = entry.message.clone();
                     let hover = format!("{} ({})", entry.level, entry.category);
@@ -666,13 +666,13 @@ impl DashboardPanel {
                                     )
                                     .monospace()
                                     .size(10.5)
-                                    .color(token::FAINT),
+                                    .color(token::faint()),
                                 )
                                 .truncate(),
                             );
                             let (dot, _) = ui.allocate_exact_size(Vec2::splat(5.0), Sense::hover());
                             ui.painter().circle_filled(dot.center(), 2.5, color);
-                            ui.label(RichText::new(message).size(12.0).color(token::INK))
+                            ui.label(RichText::new(message).size(12.0).color(token::ink()))
                                 .on_hover_text(hover);
                         });
                     } else {
@@ -680,12 +680,12 @@ impl DashboardPanel {
                             RichText::new(entry.timestamp.format("%m-%d %H:%M:%S").to_string())
                                 .monospace()
                                 .size(10.5)
-                                .color(token::FAINT),
+                                .color(token::faint()),
                         );
                         ui.horizontal_top(|ui| {
                             let (dot, _) = ui.allocate_exact_size(Vec2::splat(5.0), Sense::hover());
                             ui.painter().circle_filled(dot.center(), 2.5, color);
-                            ui.label(RichText::new(message).size(12.0).color(token::INK));
+                            ui.label(RichText::new(message).size(12.0).color(token::ink()));
                         });
                     }
                 }
@@ -695,10 +695,10 @@ impl DashboardPanel {
 }
 
 fn setup_column(ui: &mut Ui, label: &str, value: &str) {
-    ui.label(RichText::new(label).size(11.0).color(token::MUTED));
+    ui.label(RichText::new(label).size(11.0).color(token::muted()));
     ui.add_space(2.0);
     ui.add(
-        Label::new(RichText::new(value).size(13.0).color(token::INK))
+        Label::new(RichText::new(value).size(13.0).color(token::ink()))
             .truncate()
             .halign(Align::LEFT),
     )
@@ -707,17 +707,17 @@ fn setup_column(ui: &mut Ui, label: &str, value: &str) {
 
 fn state_accent(state: CaptureState, stopping: bool) -> Color32 {
     if stopping {
-        return token::WARN;
+        return token::warn();
     }
     match state {
         CaptureState::Running
         | CaptureState::WaitingForStable
         | CaptureState::Stable
-        | CaptureState::Saving => token::RECORD,
-        CaptureState::Paused | CaptureState::WaitingForDesktop => token::WARN,
-        CaptureState::Error | CaptureState::ProtectedOrBlack => token::DANGER,
-        CaptureState::Stopped => token::OK,
-        _ => token::PRIMARY,
+        | CaptureState::Saving => token::record(),
+        CaptureState::Paused | CaptureState::WaitingForDesktop => token::warn(),
+        CaptureState::Error | CaptureState::ProtectedOrBlack => token::danger(),
+        CaptureState::Stopped => token::ok(),
+        _ => token::accent(),
     }
 }
 
@@ -812,8 +812,8 @@ fn draw_stage(ui: &mut Ui, recording: bool, count: u32, language: Language) {
     painter.rect(
         slide,
         CornerRadius::same(7),
-        token::SURFACE,
-        Stroke::new(1.0_f32, token::LINE),
+        token::surface(),
+        Stroke::new(1.0_f32, token::line()),
         StrokeKind::Inside,
     );
     painter.text(
@@ -821,7 +821,7 @@ fn draw_stage(ui: &mut Ui, recording: bool, count: u32, language: Language) {
         Align2::CENTER_CENTER,
         count.to_string(),
         FontId::new(34.0, FontFamily::Monospace),
-        token::INK,
+        token::ink(),
     );
     painter.text(
         slide.center() + Vec2::new(0.0, 20.0),
@@ -831,10 +831,14 @@ fn draw_stage(ui: &mut Ui, recording: bool, count: u32, language: Language) {
             Language::Chinese => "已保存截图",
         },
         FontId::new(10.5, FontFamily::Proportional),
-        token::MUTED,
+        token::muted(),
     );
     if recording {
-        painter.circle_filled(slide.left_top() + Vec2::new(12.0, 12.0), 3.2, token::RECORD);
+        painter.circle_filled(
+            slide.left_top() + Vec2::new(12.0, 12.0),
+            3.2,
+            token::record(),
+        );
     }
 }
 

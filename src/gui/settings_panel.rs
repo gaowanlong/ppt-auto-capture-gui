@@ -175,12 +175,12 @@ fn control_row(ui: &mut Ui, wide: bool, label: &str, add: impl FnOnce(&mut Ui)) 
             ui.allocate_ui_with_layout(Vec2::new(200.0, 0.0), Layout::top_down(Align::Min), |ui| {
                 ui.set_min_width(200.0);
                 ui.add_space(6.0);
-                ui.label(RichText::new(label).size(12.5).color(token::INK).strong());
+                ui.label(RichText::new(label).size(12.5).color(token::ink()).strong());
             });
             add(ui);
         });
     } else {
-        ui.label(RichText::new(label).size(12.5).color(token::INK).strong());
+        ui.label(RichText::new(label).size(12.5).color(token::ink()).strong());
         ui.add_space(2.0);
         add(ui);
     }

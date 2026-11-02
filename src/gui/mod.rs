@@ -1,6 +1,8 @@
+pub mod appearance_panel;
 pub mod dashboard;
 pub mod display_panel;
 pub mod export_panel;
+pub mod file_chooser;
 pub mod output_panel;
 pub mod settings_panel;
 pub mod source_panel;

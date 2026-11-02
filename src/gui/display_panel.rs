@@ -47,7 +47,7 @@ impl DisplayPanel {
                         Language::Chinese => "显示器",
                     })
                     .size(13.0)
-                    .color(token::INK)
+                    .color(token::ink())
                     .strong(),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -140,7 +140,7 @@ impl DisplayPanel {
             ui.label(
                 RichText::new(&self.selected_description)
                     .size(16.0)
-                    .color(token::INK)
+                    .color(token::ink())
                     .strong(),
             );
 
@@ -155,20 +155,20 @@ impl DisplayPanel {
                     ui.label(
                         RichText::new(i18n::t_virtual_suspect(language))
                             .size(11.5)
-                            .color(token::WARN),
+                            .color(token::warn()),
                     );
                 } else {
                     ui.label(
                         RichText::new(i18n::t_physical_display(language))
                             .size(11.5)
-                            .color(token::OK),
+                            .color(token::ok()),
                     );
                 }
                 if mon.is_primary {
                     ui.label(
                         RichText::new(i18n::t_primary_monitor(language))
                             .size(11.5)
-                            .color(token::OK),
+                            .color(token::ok()),
                     );
                 }
             }

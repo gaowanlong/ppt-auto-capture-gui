@@ -63,6 +63,12 @@ pub fn t_tab_export(lang: Language) -> &'static str {
         Language::Chinese => "生成 PPTX",
     }
 }
+pub fn t_tab_appearance(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Appearance",
+        Language::Chinese => "外观",
+    }
+}
 
 pub fn t_start_recording(lang: Language) -> &'static str {
     match lang {
@@ -673,6 +679,113 @@ pub fn t_none(lang: Language) -> &'static str {
     match lang {
         Language::English => "None",
         Language::Chinese => "无",
+    }
+}
+
+// --- Appearance ---
+
+pub fn t_appearance_title(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Appearance",
+        Language::Chinese => "外观",
+    }
+}
+pub fn t_appearance_subtitle(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Pick a palette and, if you like, a picture behind the workspace.",
+        Language::Chinese => "选择界面配色，也可以挑一张图片作为工作区背景。",
+    }
+}
+pub fn t_appearance_theme(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Theme",
+        Language::Chinese => "主题模式",
+    }
+}
+pub fn t_theme_light(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Light",
+        Language::Chinese => "浅色",
+    }
+}
+pub fn t_theme_dark(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Dark",
+        Language::Chinese => "深色",
+    }
+}
+pub fn t_theme_system(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Match system",
+        Language::Chinese => "跟随系统",
+    }
+}
+pub fn t_theme_hint(lang: Language) -> &'static str {
+    match lang {
+        Language::English => {
+            "Applies immediately and is remembered. Matching the system keeps the window in step with the operating system."
+        }
+        Language::Chinese => {
+            "修改立即生效并被记住。选「跟随系统」时，界面会随操作系统的外观切换。"
+        }
+    }
+}
+pub fn t_appearance_background(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Background picture",
+        Language::Chinese => "背景图片",
+    }
+}
+pub fn t_background_hint(lang: Language) -> &'static str {
+    match lang {
+        Language::English => {
+            "The picture is scaled to fill the workspace behind the cards. Cards stay opaque, so text keeps its contrast."
+        }
+        Language::Chinese => {
+            "图片会铺满工作区并显示在卡片之后。卡片保持不透明，文字对比度不受影响。"
+        }
+    }
+}
+pub fn t_background_choose(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Choose a picture…",
+        Language::Chinese => "选择图片…",
+    }
+}
+pub fn t_background_remove(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Remove",
+        Language::Chinese => "移除",
+    }
+}
+pub fn t_background_none(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "No picture chosen; the workspace uses a solid colour.",
+        Language::Chinese => "尚未选择图片，工作区使用纯色背景。",
+    }
+}
+pub fn t_background_dim(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Dimming",
+        Language::Chinese => "背景遮罩",
+    }
+}
+pub fn t_background_dim_hint(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Higher values fade the picture further behind the interface.",
+        Language::Chinese => "数值越高，图片越淡，界面元素越突出。",
+    }
+}
+pub fn t_background_preview(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Preview",
+        Language::Chinese => "预览",
+    }
+}
+pub fn t_background_unreadable(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "This picture cannot be read, so the workspace keeps a solid colour.",
+        Language::Chinese => "这张图片无法读取，工作区继续使用纯色背景。",
     }
 }
 

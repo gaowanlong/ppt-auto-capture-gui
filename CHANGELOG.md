@@ -1,99 +1,125 @@
-# Changelog
+# 更新日志
 
-All notable changes to this project are recorded here. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
-[Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+本项目的重要改动都记录在这里。格式参考
+[Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循
+[语义化版本](https://semver.org/lang/zh-CN/)。
 
-Newest releases come first. **Every release tag needs a section here**: the
-release workflow publishes the matching section as the GitHub release body and
-refuses to release a tag that has none, so the notes on the releases page always
-say what actually changed.
+新版本写在最前面。**每个发布标签都必须有一节对应记录**：发布工作流会把该节
+内容作为 GitHub Release 正文发布，缺少这一节的分支在 preflight 直接失败，所以
+Releases 页面上的说明始终与实际改动一致。
 
-## [Unreleased]
+## [2.9.0] - 2026-11-02
 
-### Changed
+### 新增
 
-- Release notes now come from this file. The release workflow publishes the
-  section for the tag as the GitHub release body and stops at preflight when the
-  section is missing, instead of shipping generated notes that only link a
-  comparison because commits go straight to `main`.
+- **外观页。** 侧边栏新增「外观」，用来改变软件自身的界面，不影响截图内容。
+  - **主题模式**：浅色、深色、跟随系统。点击即生效并写入配置文件；选「跟随系统」
+    时会在窗口打开期间持续跟随操作系统的外观变化。
+  - **背景图片**：可以选择一张本地图片（PNG/JPEG/BMP/WebP），按铺满方式绘制在
+    工作区卡片之后。卡片保持不透明，文字对比度不受影响。
+  - **背景遮罩**：控制图片淡化的程度，滑块上方的预览按当前遮罩显示实际效果。
+  - 图片在送入显卡前会缩放到最长边 2560 像素，避免大图占满显存；文件只读取不复制，
+    原图被移动后自动回退为纯色背景，并在页面上说明原因。
+- 调色板抽出为 `theme::Palette`，浅色与深色各一套，界面颜色改为运行时读取。新增
+  `accent`（文字与图标）与 `primary`（填充）两个角色：深色下强调色更亮，既能读清
+  又能托住白色按钮文字。
+- 文件选择器抽成 `gui/file_chooser.rs`，同时支持「演示文稿」与「图片」两种类型，
+  背景图与 PPTX 共用同一套跨平台实现。
+
+### 变更
+
+- 主题样式会同时写入浅色与深色两个槽位，系统主题变化时不会闪回 egui 自带的配色。
+- 背景图片相关的配置项（`theme_mode` / `background_image` / `background_dim`）都带
+  默认值，旧配置文件可以直接读取。
+- 配置写入做了 400 毫秒防抖，拖动遮罩滑块不会每帧都写磁盘。
+- 更新日志改为中文。
+
+### 修复
+
+- 浅色模式下次要文字在浅色面板上的对比度不足（`muted` 4.39:1、`faint` 2.94:1），
+  已调到 4.5:1 与 3:1 以上。
+- 深色模式下侧边栏当前页与背景几乎同色，新增 `nav_selected` 颜色让选中行抬起。
+
+### 测试
+
+- 新增调色板对比度测试：逐个校验两套配色里实际组合使用的文字/背景对
+  （正文 7:1、次要文字 4.5:1、元数据 3:1、按钮文字 4.5:1），配色改坏会在发布前失败。
+- 新增背景图解码测试：小图保持原尺寸、超大图按比例缩到上限、缺失或损坏的文件返回
+  错误而不是崩溃。
+- 新增配置兼容性测试：缺少外观字段的旧配置读成浅色纯色背景。
+
+## [未发布]
+
+### 变更
+
+- 发布说明改为取自本文件。发布工作流会发布标签对应的小节，缺少小节时在
+  preflight 阶段就停止，不再使用 GitHub 自动生成的说明——本项目直接向 `main`
+  提交，自动生成的正文只有一条版本对比链接。
 
 ## [2.8.3] - 2026-11-02
 
-### Fixed
+### 修复
 
-- Choosing a folder or a `.pptx` on Windows no longer flashes a black console
-  window over the desktop. The application is a GUI binary and owns no console,
-  so Windows allocated one for the PowerShell helper behind each chooser; the
-  helpers now start with `CREATE_NO_WINDOW`. The dialog is unchanged, only its
-  console is gone.
-- The chooser result now travels as the hex of its UTF-8 bytes instead of plain
-  text, so a path such as `C:\资料\幻灯片.pptx` arrives intact. This also drops
-  the `[Console]::OutputEncoding` call, which a helper without a console cannot
-  rely on.
+- Windows 上选择文件夹或 `.pptx` 不再闪出黑色命令行窗口。应用是 GUI 程序，
+  本身没有控制台，因此每次启动 Powershell 辅助进程时 Windows 都会为它新建一个
+  控制台；现在这些辅助进程以 `CREATE_NO_WINDOW` 启动，对话框不变，只是不再附带
+  控制台。
+- 选择结果改为以 UTF-8 字节的十六进制回传，不再是纯文本，所以
+  `C:\资料\幻灯片.pptx` 这类路径能完整保留。同时去掉了
+  `[Console]::OutputEncoding` 调用——没有控制台的进程无法可靠地使用它。
 
 ## [2.8.2] - 2026-11-02
 
-### Fixed
+### 修复
 
-- The Create PPTX mode switch keeps its height in both states. The selected
-  option was drawn with the primary button style and stood 2px taller in a
-  larger font, so the whole row jumped every time the other mode was picked.
+- 「生成 PPTX」的模式切换在两种状态下高度一致。此前选中项用的是主按钮样式，
+  比未选中项高 2px、字号也大一号，每次切换整行都会跳一下。
 
 ## [2.8.1] - 2026-11-02
 
-### Added
+### 新增
 
-- A regression test proving that a deck this tool already trimmed is not trimmed
-  a second time: every media part comes back byte for byte identical, so a
-  repeated pass cannot eat into slide content.
+- 新增回归测试，证明本工具已经裁剪过的文件不会被二次裁剪：每个媒体部件都逐字节
+  保持一致，重复处理不会侵占幻灯片内容。
 
-### Changed
+### 变更
 
-- The Create PPTX page title, subtitle, and Chinese sidebar label now name both
-  modes instead of describing the image folder only.
+- 「生成 PPTX」页的标题、副标题与中文侧边栏标签同时覆盖两种模式，不再只描述
+  图片文件夹。
 
-### Fixed
+### 修复
 
-- A picture carrying `<a:srcRect l="0" t="0" r="0" b="0"/>`, which PowerPoint
-  writes on some round trips, is no longer treated as already cropped and is
-  trimmed like any other.
+- 带 `<a:srcRect l="0" t="0" r="0" b="0"/>` 的图片（PowerPoint 在某些往返保存后
+  会写入）不再被当作已裁剪，仍会正常裁剪。
 
 ## [2.8.0] - 2026-11-02
 
-### Added
+### 新增
 
-- **Trim a deck that already exists.** The Create PPTX page has a second mode:
-  point it at a finished `.pptx` and it writes a new deck whose embedded slide
-  screenshots have their window chrome, taskbar, meeting controls, and letterbox
-  bars trimmed. The source file is only read.
-  - The package is parsed through `presentation.xml`, slide relationships, and
-    each `p:pic` offset and extent. Only the trimmed media parts and those
-    pictures' geometry are rewritten; page size, slide order, notes, and every
-    other part are copied byte for byte.
-  - Trimming reuses the existing detector with a cross-slide frame reference, so
-    a taskbar or control strip that is identical on every slide is removed while
-    content that changes between slides is kept. Only pictures covering at least
-    a third of a slide count as screenshots, and pictures that already carry a
-    crop rectangle or are rotated or flipped are skipped, so logos and
-    decorations stay untouched.
-  - Two placements: **fill the original area** (a full-bleed picture grows to the
-    page, removing the margin the bars used to occupy) and **keep the original
-    scale** (edges only, no resampling).
-  - A crop that matches the frame within half a percent is snapped to it, so a
-    full-page screenshot cannot leave a hairline of background around itself.
-  - Trimmed pixels are staged on disk before any slide is edited, so a picture
-    that cannot be re-encoded keeps both its bytes and its geometry. The new
-    export folder is removed if the deck fails or cannot be verified.
-- A `.pptx` file chooser for each platform, the placement choice, progress
-  reporting, and a localized result line on the Create PPTX page.
+- **裁剪已经生成好的 PPTX。** 「生成 PPTX」页新增第二种模式：选择一个已有的
+  `.pptx`，输出一个把内嵌截图上的窗口边框、任务栏、会议控件和黑边裁掉的新文件。
+  源文件只读。
+  - 通过 `presentation.xml`、幻灯片关系以及每个 `p:pic` 的偏移与尺寸解析包体，
+    只重写被裁剪的媒体部件和这些图片的几何；页面尺寸、幻灯片顺序、备注以及其余
+    部件全部逐字节复制。
+  - 裁剪复用已有的检测器并加入跨帧参考，因此每页都相同的任务栏或控制条会被裁掉，
+    而页间变化的内容会保留。只有覆盖页面三分之一以上的图片才视为截图；已经带有
+    裁剪矩形、被旋转或翻转的图片会跳过，所以 logo 和装饰图不受影响。
+  - 两种摆放方式：**填满原来的位置**（全出血图片放大到整页，去掉黑边曾占用的
+    留白）与**保持原尺寸**（只削边缘，不重采样）。
+  - 裁剪比例与图框相差在 0.5% 以内时直接吸附，整页截图不会在自己周围留下发丝
+    宽的背景。
+  - 裁剪后的像素先落盘再改几何，无法重新编码的图片会同时保留原始字节和原始位置；
+    生成失败或校验不通过时删除新的导出目录。
+- 「生成 PPTX」页新增各平台的 `.pptx` 文件选择器、摆放方式选项、进度显示与本地化
+  的结果提示。
 
-### Fixed
+### 修复
 
-- The Linux `.pptx` chooser honours its starting folder. The ignored argument
-  also pushed the Clippy warning count over its ceiling on Linux builds.
+- Linux 的 `.pptx` 选择器会使用传入的起始目录。此前该参数被忽略，也让 Linux 构建
+  的 Clippy 警告数超过了上限。
 
-## Earlier releases
+## 更早的版本
 
-Releases before 2.8.0 predate this file. Their notes live in the commit history
-and in the tag comparison links on the releases page.
+2.8.0 之前的版本早于本文件。它们的说明留在提交历史以及 Releases 页面上的标签
+对比链接里。

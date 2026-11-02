@@ -40,21 +40,25 @@ impl OutputPanel {
         );
 
         if locked {
-            theme::banner_frame(token::WARN_SOFT, token::WARN_LINE).show(ui, |ui| {
+            theme::banner_frame(token::warn_soft(), token::warn_line()).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.label(
                     RichText::new(i18n::t_output_locked(language))
                         .size(12.5)
-                        .color(token::WARN),
+                        .color(token::warn()),
                 );
             });
             ui.add_space(14.0);
         }
 
         if !self.status_text.is_empty() {
-            theme::banner_frame(token::OK_SOFT, token::LINE).show(ui, |ui| {
+            theme::banner_frame(token::ok_soft(), token::line()).show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.label(RichText::new(&self.status_text).size(12.5).color(token::OK));
+                ui.label(
+                    RichText::new(&self.status_text)
+                        .size(12.5)
+                        .color(token::ok()),
+                );
             });
             ui.add_space(14.0);
         }
@@ -264,7 +268,7 @@ fn field_row(ui: &mut Ui, wide: bool, label: &str, add: impl FnOnce(&mut Ui)) {
             ui.allocate_ui_with_layout(Vec2::new(190.0, 0.0), Layout::top_down(Align::Min), |ui| {
                 ui.set_min_width(190.0);
                 ui.add_space(8.0);
-                ui.label(RichText::new(label).size(12.5).color(token::INK).strong());
+                ui.label(RichText::new(label).size(12.5).color(token::ink()).strong());
             });
             ui.vertical(|ui| {
                 ui.set_width(ui.available_width());
@@ -272,7 +276,7 @@ fn field_row(ui: &mut Ui, wide: bool, label: &str, add: impl FnOnce(&mut Ui)) {
             });
         });
     } else {
-        ui.label(RichText::new(label).size(12.5).color(token::INK).strong());
+        ui.label(RichText::new(label).size(12.5).color(token::ink()).strong());
         ui.add_space(2.0);
         add(ui);
     }

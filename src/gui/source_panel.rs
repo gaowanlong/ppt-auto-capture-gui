@@ -54,7 +54,7 @@ impl SourcePanel {
                         Language::Chinese => "可用窗口",
                     })
                     .size(13.0)
-                    .color(token::INK)
+                    .color(token::ink())
                     .strong(),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -179,7 +179,7 @@ impl SourcePanel {
                     self.selected_title.as_str()
                 })
                 .size(16.0)
-                .color(token::INK)
+                .color(token::ink())
                 .strong(),
             );
             ui.add_space(2.0);

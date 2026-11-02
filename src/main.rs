@@ -71,7 +71,9 @@ fn main() -> Result<(), eframe::Error> {
             // Load CJK fonts for Chinese text support, then apply the shared
             // light workspace theme before any panel is drawn.
             setup_cjk_fonts(&cc.egui_ctx);
-            gui::theme::apply(&cc.egui_ctx);
+            // Light is the default; the saved preference is applied on the first
+            // frame, once the configuration has been loaded.
+            gui::theme::apply(&cc.egui_ctx, false);
             Ok(Box::new(app::PptAutoCaptureApp::new(logging)))
         }),
     )

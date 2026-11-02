@@ -20,6 +20,28 @@ pub fn filename_for_new_operation(filename: &str) -> String {
     }
 }
 
+/// How the interface picks a palette.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ThemeMode {
+    #[default]
+    Light,
+    Dark,
+    /// Follow the operating system's appearance.
+    System,
+}
+
+impl ThemeMode {
+    /// Resolve to "is dark" using the system appearance when following it.
+    /// `system_dark` is `None` when the platform does not report a preference.
+    pub fn is_dark(self, system_dark: Option<bool>) -> bool {
+        match self {
+            Self::Light => false,
+            Self::Dark => true,
+            Self::System => system_dark.unwrap_or(false),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     /// Sample interval in milliseconds.
@@ -62,6 +84,21 @@ pub struct AppConfig {
     pub minimize_on_start: bool,
     /// UI language
     pub language: Language,
+    /// Light, dark, or follow the system.
+    #[serde(default)]
+    pub theme_mode: ThemeMode,
+    /// Optional picture drawn behind the workspace.
+    #[serde(default)]
+    pub background_image: String,
+    /// How much the background picture is dimmed, 0..=90 percent.
+    #[serde(default = "default_background_dim")]
+    pub background_dim: f64,
+}
+
+pub const DEFAULT_BACKGROUND_DIM: f64 = 45.0;
+
+fn default_background_dim() -> f64 {
+    DEFAULT_BACKGROUND_DIM
 }
 
 impl Default for AppConfig {
@@ -91,6 +128,9 @@ impl Default for AppConfig {
             use_dxgi: true,
             minimize_on_start: false,
             language: Language::English,
+            theme_mode: ThemeMode::Light,
+            background_image: String::new(),
+            background_dim: DEFAULT_BACKGROUND_DIM,
         }
     }
 }
@@ -203,6 +243,29 @@ mod tests {
         value.as_object_mut().unwrap().remove("minimize_on_start");
         let restored: AppConfig = serde_json::from_value(value).unwrap();
         assert!(!restored.minimize_on_start);
+    }
+
+    #[test]
+    fn old_config_without_appearance_options_keeps_a_light_themed_app() {
+        let mut value = serde_json::to_value(AppConfig::default()).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.remove("theme_mode");
+        object.remove("background_image");
+        object.remove("background_dim");
+        let restored: AppConfig = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.theme_mode, ThemeMode::Light);
+        assert!(restored.background_image.is_empty());
+        assert_eq!(restored.background_dim, DEFAULT_BACKGROUND_DIM);
+    }
+
+    #[test]
+    fn theme_mode_resolves_against_the_system_appearance() {
+        assert!(!ThemeMode::Light.is_dark(Some(true)));
+        assert!(ThemeMode::Dark.is_dark(Some(false)));
+        assert!(ThemeMode::System.is_dark(Some(true)));
+        assert!(!ThemeMode::System.is_dark(Some(false)));
+        // A platform that does not report a preference stays light.
+        assert!(!ThemeMode::System.is_dark(None));
     }
 
     #[test]
