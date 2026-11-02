@@ -92,6 +92,8 @@ For release acceptance on Windows, run one capture for at least 24 hours at the 
 
 Windows CI now also pressure-tests real window capture, cleanup and reinitialization. The manually dispatched **Windows native stress** workflow produces JSON resource reports and a standalone stress kit with ten-minute and 24-hour launchers. See [Windows stress testing](docs/testing/windows-stress.md) for running the kit without Rust, report thresholds and the distinction between controlled-window stress and real meeting-app acceptance. The UI event mailbox is bounded during state/error storms; screenshot previews work before recording, retain their actual aspect ratio and reuse their GPU texture. Stop interrupts the sample wait and shows a saving status; the Dashboard can open the current recording's folder directly.
 
+The folder and file choosers are PowerShell helpers, and the application itself owns no console as a GUI binary. Windows would therefore allocate one for every helper and flash a black window over the desktop, so the helpers are started with `CREATE_NO_WINDOW`. The chosen path comes back as the hex of its UTF-8 bytes rather than as text: hex is ASCII under any console code page, which keeps paths such as `C:\资料\幻灯片.pptx` intact without the helper having to touch console APIs it has no console for.
+
 ## Building from Source
 
 ### Prerequisites

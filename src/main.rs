@@ -18,6 +18,7 @@ mod diagnostics;
 mod gui;
 mod i18n;
 mod model;
+mod platform;
 mod pptx;
 mod storage;
 
