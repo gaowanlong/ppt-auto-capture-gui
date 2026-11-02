@@ -550,6 +550,116 @@ pub fn t_export_ready_hint(lang: Language) -> &'static str {
     }
 }
 
+// --- Import an existing PPTX and trim its screenshots ---
+pub fn t_export_mode_card(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "What are you converting?",
+        Language::Chinese => "要转换的内容",
+    }
+}
+pub fn t_export_mode_images(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "A folder of images",
+        Language::Chinese => "图片文件夹",
+    }
+}
+pub fn t_export_mode_deck(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "An existing PPTX",
+        Language::Chinese => "已有的 PPTX",
+    }
+}
+pub fn t_export_mode_hint(lang: Language) -> &'static str {
+    match lang {
+        Language::English => {
+            "Build a deck from saved screenshots, or trim the window edges from a deck you already have."
+        }
+        Language::Chinese => {
+            "可以从截图文件夹新建 PPTX，也可以把已有 PPTX 里的截图边缘裁剪干净。"
+        }
+    }
+}
+pub fn t_export_pptx_source_card(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Source PPTX",
+        Language::Chinese => "源 PPTX",
+    }
+}
+pub fn t_export_pptx_source_hint(lang: Language) -> &'static str {
+    match lang {
+        Language::English => {
+            "The file is only read. A new, trimmed deck is written to the output folder; slides that cannot be identified keep their original picture."
+        }
+        Language::Chinese => {
+            "只读取该文件，裁剪后的新 PPTX 写到输出文件夹；无法识别的幻灯片保留原图。"
+        }
+    }
+}
+pub fn t_export_choose_pptx(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Choose PPTX…",
+        Language::Chinese => "选择 PPTX…",
+    }
+}
+pub fn t_export_pptx_crop_hint(lang: Language) -> &'static str {
+    match lang {
+        Language::English => {
+            "Taskbars, meeting controls, and black letterbox bars are trimmed away; title, footer, and side-label bands stay. Page size and slide order never change."
+        }
+        Language::Chinese => {
+            "会去掉任务栏、会议控件和黑边；标题、页脚、侧边标签等有条带会保留。页面尺寸和幻灯片顺序不会改变。"
+        }
+    }
+}
+pub fn t_export_placement(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Cropped picture placement:",
+        Language::Chinese => "裁剪后的摆放方式：",
+    }
+}
+pub fn t_placement_fill(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Fill the original area",
+        Language::Chinese => "填满原来的位置",
+    }
+}
+pub fn t_placement_fill_hint(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "The trimmed screenshot is enlarged to the space it occupied, so the slide has no leftover margin.",
+        Language::Chinese => "裁剪后的截图放大到原来的位置，幻灯片不会留下空白边距。",
+    }
+}
+pub fn t_placement_keep(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Keep the original scale",
+        Language::Chinese => "保持原尺寸",
+    }
+}
+pub fn t_placement_keep_hint(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Only the edges are shaved off; no pixel is resampled, so the slide gains a margin where the bars were.",
+        Language::Chinese => "只削掉边缘，不重新采样像素，原来的黑边位置会留白。",
+    }
+}
+pub fn t_export_crop_generate(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Trim and save PPTX",
+        Language::Chinese => "开始裁剪",
+    }
+}
+pub fn t_export_pptx_ready_hint(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Choose a PPTX to trim.",
+        Language::Chinese => "选择一个 PPTX 开始裁剪。",
+    }
+}
+pub fn t_export_pptx_missing(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "The selected PPTX was not found; choose it again.",
+        Language::Chinese => "选中的 PPTX 文件不存在，请重新选择。",
+    }
+}
+
 // --- Monitor errors ---
 pub fn t_no_display_selected(lang: Language) -> &'static str {
     match lang {

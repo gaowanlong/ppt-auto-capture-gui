@@ -1,18 +1,35 @@
 use crate::gui::output_panel::OutputPanel;
 use crate::gui::theme::{self, token};
 use crate::i18n::{self, Language};
+use crate::pptx::{crop_deck_images, CropPlacement, DeckCropSummary};
 use egui::*;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+
+/// Which input the page converts: a folder of screenshots, or a deck that
+/// already contains them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExportMode {
+    Images,
+    Deck,
+}
 
 enum ExportMessage {
     Progress(usize, usize),
-    Finished(Result<Vec<PathBuf>, String>),
+    Finished(Result<ExportOutcome, String>),
+}
+
+struct ExportOutcome {
+    paths: Vec<PathBuf>,
+    deck: Option<DeckCropSummary>,
 }
 
 pub struct ExportPanel {
     pub settings: OutputPanel,
+    pub mode: ExportMode,
     pub source_dir: String,
+    pub source_pptx: String,
+    pub placement: CropPlacement,
     pub status: String,
     pub output_to_open: Option<PathBuf>,
     open_requested: bool,
@@ -39,7 +56,10 @@ impl ExportPanel {
     pub fn new(settings: &OutputPanel) -> Self {
         Self {
             settings: settings.clone(),
+            mode: ExportMode::Images,
             source_dir: String::new(),
+            source_pptx: String::new(),
+            placement: CropPlacement::FillArea,
             status: String::new(),
             output_to_open: None,
             open_requested: false,
@@ -61,6 +81,59 @@ impl ExportPanel {
 
         theme::card().show(ui, |ui| {
             ui.set_width(ui.available_width());
+            theme::section_title(ui, i18n::t_export_mode_card(language));
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                for (mode, label) in [
+                    (ExportMode::Images, i18n::t_export_mode_images(language)),
+                    (ExportMode::Deck, i18n::t_export_mode_deck(language)),
+                ] {
+                    let button = if self.mode == mode {
+                        theme::primary_button(label)
+                    } else {
+                        theme::secondary_button(label)
+                    };
+                    if ui.add_enabled(self.export.is_none(), button).clicked() {
+                        self.switch_mode(mode);
+                    }
+                }
+            });
+            ui.add_space(4.0);
+            ui.label(theme::muted(i18n::t_export_mode_hint(language), 11.5));
+        });
+
+        ui.add_space(14.0);
+
+        match self.mode {
+            ExportMode::Images => {
+                self.images_source_card(ui, language);
+                ui.add_space(14.0);
+                self.deck_settings_card(ui, language, false);
+            }
+            ExportMode::Deck => {
+                self.pptx_source_card(ui, language);
+                ui.add_space(14.0);
+                self.deck_settings_card(ui, language, true);
+            }
+        }
+
+        ui.add_space(16.0);
+        self.actions(ui, language);
+        self.status_banner(ui, language);
+    }
+
+    fn switch_mode(&mut self, mode: ExportMode) {
+        if self.mode == mode {
+            return;
+        }
+        self.mode = mode;
+        self.status.clear();
+        self.output_to_open = None;
+    }
+
+    fn images_source_card(&mut self, ui: &mut egui::Ui, language: Language) {
+        theme::card().show(ui, |ui| {
+            ui.set_width(ui.available_width());
             theme::section_title(ui, i18n::t_export_source_card(language));
             ui.add_space(6.0);
             ui.horizontal(|ui| {
@@ -80,14 +153,46 @@ impl ExportPanel {
                     )
                     .clicked()
                 {
-                    self.choose_folder();
+                    self.choose_path(false);
                 }
             });
             ui.label(theme::muted(i18n::t_export_source_hint(language), 11.5));
         });
+    }
 
-        ui.add_space(14.0);
+    fn pptx_source_card(&mut self, ui: &mut egui::Ui, language: Language) {
+        theme::card().show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            theme::section_title(ui, i18n::t_export_pptx_source_card(language));
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                let width = (ui.available_width() - 130.0).max(160.0);
+                ui.add(
+                    TextEdit::singleline(&mut self.source_pptx)
+                        .desired_width(width)
+                        .hint_text(match language {
+                            Language::Chinese => "选择一个 PPTX 文件",
+                            Language::English => "Choose a PPTX file",
+                        }),
+                );
+                if ui
+                    .add_enabled(
+                        self.picker.is_none(),
+                        theme::secondary_button(i18n::t_export_choose_pptx(language)),
+                    )
+                    .clicked()
+                {
+                    self.choose_path(true);
+                }
+            });
+            ui.label(theme::muted(
+                i18n::t_export_pptx_source_hint(language),
+                11.5,
+            ));
+        });
+    }
 
+    fn deck_settings_card(&mut self, ui: &mut egui::Ui, language: Language, cropped: bool) {
         theme::card().show(ui, |ui| {
             ui.set_width(ui.available_width());
             theme::section_title(ui, i18n::t_export_deck_card(language));
@@ -117,14 +222,45 @@ impl ExportPanel {
                         .clicked()
                     {
                         self.settings.filename_is_custom = false;
-                        self.settings.output_filename = format!(
-                            "ppt-capture-{}.pptx",
-                            chrono::Local::now().format("%Y%m%d-%H%M%S")
-                        );
+                        self.settings.output_filename = if cropped {
+                            self.cropped_filename()
+                        } else {
+                            format!(
+                                "ppt-capture-{}.pptx",
+                                chrono::Local::now().format("%Y%m%d-%H%M%S")
+                            )
+                        };
                     }
                 });
             });
             ui.add_space(8.0);
+
+            if cropped {
+                theme::divider(ui);
+                let wide = ui.available_width() >= 560.0;
+                field_row(ui, wide, i18n::t_export_placement(language), |ui| {
+                    ui.vertical(|ui| {
+                        placement_option(
+                            ui,
+                            &mut self.placement,
+                            CropPlacement::FillArea,
+                            i18n::t_placement_fill(language),
+                            i18n::t_placement_fill_hint(language),
+                        );
+                        ui.add_space(4.0);
+                        placement_option(
+                            ui,
+                            &mut self.placement,
+                            CropPlacement::KeepScale,
+                            i18n::t_placement_keep(language),
+                            i18n::t_placement_keep_hint(language),
+                        );
+                    });
+                });
+                ui.add_space(6.0);
+                ui.label(theme::muted(i18n::t_export_pptx_crop_hint(language), 11.5));
+                return;
+            }
 
             let ratio = i18n::t_slide_aspect(language)
                 .trim_end_matches([':', '：'])
@@ -188,22 +324,46 @@ impl ExportPanel {
             );
             ui.label(theme::muted(i18n::t_export_crop_hint(language), 11.5));
         });
+    }
 
-        ui.add_space(16.0);
-
+    fn actions(&mut self, ui: &mut egui::Ui, language: Language) {
         ui.horizontal(|ui| {
-            let ready = self.export.is_none() && !self.source_dir.trim().is_empty();
+            let ready = self.export.is_none()
+                && match self.mode {
+                    ExportMode::Images => !self.source_dir.trim().is_empty(),
+                    ExportMode::Deck => {
+                        !self.source_pptx.trim().is_empty()
+                            && Path::new(self.source_pptx.trim()).is_file()
+                    }
+                };
+            let label = match self.mode {
+                ExportMode::Images => i18n::t_export_generate(language),
+                ExportMode::Deck => i18n::t_export_crop_generate(language),
+            };
             if ui
-                .add_enabled(
-                    ready,
-                    theme::primary_button(i18n::t_export_generate(language)),
-                )
+                .add_enabled(ready, theme::primary_button(label))
                 .clicked()
             {
                 self.start(language);
             }
-            if self.export.is_none() && self.source_dir.trim().is_empty() {
-                ui.label(theme::muted(i18n::t_export_ready_hint(language), 12.0));
+            if self.export.is_none() {
+                let missing = match self.mode {
+                    ExportMode::Images => self.source_dir.trim().is_empty(),
+                    ExportMode::Deck => self.source_pptx.trim().is_empty(),
+                };
+                if missing {
+                    ui.label(theme::muted(
+                        match self.mode {
+                            ExportMode::Images => i18n::t_export_ready_hint(language),
+                            ExportMode::Deck => i18n::t_export_pptx_ready_hint(language),
+                        },
+                        12.0,
+                    ));
+                } else if self.mode == ExportMode::Deck
+                    && !Path::new(self.source_pptx.trim()).is_file()
+                {
+                    ui.label(theme::muted(i18n::t_export_pptx_missing(language), 12.0));
+                }
             }
             if self.export.is_some() {
                 ui.label(theme::muted(
@@ -217,42 +377,119 @@ impl ExportPanel {
                 ));
             }
         });
+    }
 
-        if !self.status.is_empty() {
-            ui.add_space(12.0);
-            let error = status_is_error(&self.status);
-            let success = !error && self.export.is_none() && self.output_to_open.is_some();
-            let (fill, stroke, text) = if error {
-                (token::WARN_SOFT, token::WARN_LINE, token::WARN)
-            } else if success {
-                (token::OK_SOFT, token::LINE, token::OK)
-            } else {
-                (token::PRIMARY_SOFT, token::LINE, token::PRIMARY)
-            };
-            theme::banner_frame(fill, stroke).show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(&self.status).size(12.5).color(text));
-                    if self.output_to_open.is_some()
-                        && ui
-                            .with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                ui.add(theme::quiet_button(i18n::t_export_open_folder(language)))
-                            })
-                            .inner
-                            .clicked()
-                    {
-                        // The application consumes this by calling take_output_to_open after rendering.
-                        self.open_requested = true;
-                    }
-                });
-            });
+    fn status_banner(&mut self, ui: &mut egui::Ui, language: Language) {
+        if self.status.is_empty() {
+            return;
         }
+        ui.add_space(12.0);
+        let error = status_is_error(&self.status);
+        let success = !error && self.export.is_none() && self.output_to_open.is_some();
+        let (fill, stroke, text) = if error {
+            (token::WARN_SOFT, token::WARN_LINE, token::WARN)
+        } else if success {
+            (token::OK_SOFT, token::LINE, token::OK)
+        } else {
+            (token::PRIMARY_SOFT, token::LINE, token::PRIMARY)
+        };
+        theme::banner_frame(fill, stroke).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(&self.status).size(12.5).color(text));
+                if self.output_to_open.is_some()
+                    && ui
+                        .with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            ui.add(theme::quiet_button(i18n::t_export_open_folder(language)))
+                        })
+                        .inner
+                        .clicked()
+                {
+                    // The application consumes this by calling take_output_to_open after rendering.
+                    self.open_requested = true;
+                }
+            });
+        });
+    }
+
+    fn cropped_filename(&self) -> String {
+        let stem = Path::new(self.source_pptx.trim())
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if stem.is_empty() {
+            return "pptx-cropped.pptx".into();
+        }
+        format!("{stem}-cropped.pptx")
     }
 
     fn start(&mut self, language: Language) {
         if self.export.is_some() {
             return;
         }
+        match self.mode {
+            ExportMode::Images => self.start_images(language),
+            ExportMode::Deck => self.start_deck(language),
+        }
+    }
+
+    fn start_deck(&mut self, language: Language) {
+        let source = PathBuf::from(self.source_pptx.trim());
+        if !source.is_file() {
+            self.status = i18n::t_export_pptx_missing(language).to_string();
+            return;
+        }
+        let destination = PathBuf::from(self.settings.output_dir.trim());
+        let filename = if self.settings.filename_is_custom {
+            self.settings.output_filename.clone()
+        } else {
+            self.cropped_filename()
+        };
+        self.settings.output_filename = filename.clone();
+        let placement = self.placement;
+        let (tx, rx) = mpsc::sync_channel(32);
+        let spawned = std::thread::Builder::new()
+            .name("pptx-crop".into())
+            .spawn(move || {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    crop_deck_images(
+                        &source,
+                        &destination,
+                        &filename,
+                        placement,
+                        |done, total| {
+                            if done == total {
+                                let _ = tx.send(ExportMessage::Progress(done, total));
+                            } else {
+                                let _ = tx.try_send(ExportMessage::Progress(done, total));
+                            }
+                        },
+                    )
+                }))
+                .map_err(|_| "PPTX cropping stopped unexpectedly".to_string())
+                .and_then(|result| result.map_err(|error| format!("{error:#}")))
+                .map(|summary| ExportOutcome {
+                    paths: vec![summary.output.clone()],
+                    deck: Some(summary),
+                });
+                let _ = tx.send(ExportMessage::Finished(result));
+            });
+        match spawned {
+            Ok(_) => {
+                self.export = Some(rx);
+                self.output_to_open = None;
+                self.status = if language == Language::Chinese {
+                    "正在裁剪截图边缘…"
+                } else {
+                    "Trimming screenshot edges…"
+                }
+                .into();
+            }
+            Err(error) => self.status = format!("Failed to start cropping: {error}"),
+        }
+    }
+
+    fn start_images(&mut self, language: Language) {
         let source = PathBuf::from(self.source_dir.trim());
         let destination = PathBuf::from(self.settings.output_dir.trim());
         let filename = if self.settings.filename_is_custom {
@@ -286,7 +523,8 @@ impl ExportPanel {
                     )
                 }))
                 .map_err(|_| "PPTX generation stopped unexpectedly".to_string())
-                .and_then(|result| result.map_err(|error| format!("{error:#}")));
+                .and_then(|result| result.map_err(|error| format!("{error:#}")))
+                .map(|paths| ExportOutcome { paths, deck: None });
                 let _ = tx.send(ExportMessage::Finished(result));
             });
         match spawned {
@@ -316,7 +554,14 @@ impl ExportPanel {
         if let Some(rx) = &self.picker {
             match rx.try_recv() {
                 Ok(Ok(Some(path))) => {
-                    self.source_dir = path.to_string_lossy().into_owned();
+                    if self.mode == ExportMode::Deck {
+                        self.source_pptx = path.to_string_lossy().into_owned();
+                        if !self.settings.filename_is_custom {
+                            self.settings.output_filename = self.cropped_filename();
+                        }
+                    } else {
+                        self.source_dir = path.to_string_lossy().into_owned();
+                    }
                     self.picker = None;
                 }
                 Ok(Ok(None)) => self.picker = None,
@@ -349,30 +594,40 @@ impl ExportPanel {
                 };
                 match message {
                     ExportMessage::Progress(done, total) => {
+                        let trimming = self.mode == ExportMode::Deck;
                         self.status = if language == Language::Chinese {
                             if done == total {
-                                format!("已处理 {done}/{total}，正在生成 PPTX…")
+                                if trimming {
+                                    format!("已分析 {done}/{total} 张幻灯片，正在写出新 PPTX…")
+                                } else {
+                                    format!("已处理 {done}/{total}，正在生成 PPTX…")
+                                }
+                            } else if trimming {
+                                format!("正在分析幻灯片 {done}/{total}…")
                             } else {
                                 format!("正在处理图片 {done}/{total}…")
                             }
                         } else if done == total {
-                            format!("Processed {done}/{total}; generating PPTX…")
+                            if trimming {
+                                format!("Analysed {done}/{total} slides; writing the new PPTX…")
+                            } else {
+                                format!("Processed {done}/{total}; generating PPTX…")
+                            }
+                        } else if trimming {
+                            format!("Analysing slides {done}/{total}…")
                         } else {
                             format!("Processing images {done}/{total}…")
                         };
                     }
                     ExportMessage::Finished(result) => {
                         match result {
-                            Ok(paths) => {
-                                self.output_to_open = paths
+                            Ok(outcome) => {
+                                self.output_to_open = outcome
+                                    .paths
                                     .first()
                                     .and_then(|path| path.parent())
                                     .map(PathBuf::from);
-                                self.status = if language == Language::Chinese {
-                                    format!("生成完成：{} 个 PPTX", paths.len())
-                                } else {
-                                    format!("Generated {} PPTX file(s)", paths.len())
-                                };
+                                self.status = describe_outcome(&outcome, language);
                             }
                             Err(error) => {
                                 self.status = if language == Language::Chinese {
@@ -390,8 +645,15 @@ impl ExportPanel {
         }
     }
 
-    fn choose_folder(&mut self) {
-        let initial = self.initial_folder().map(|path| {
+    fn choose_path(&mut self, file: bool) {
+        let initial = if file {
+            Path::new(self.source_pptx.trim())
+                .parent()
+                .map(Path::to_path_buf)
+        } else {
+            self.initial_folder()
+        }
+        .map(|path| {
             if path.is_absolute() {
                 path
             } else {
@@ -404,11 +666,21 @@ impl ExportPanel {
         let spawned = std::thread::Builder::new()
             .name("folder-picker".into())
             .spawn(move || {
-                let _ = tx.send(pick_folder(initial.as_deref()));
+                let _ = tx.send(if file {
+                    pick_file(initial.as_deref())
+                } else {
+                    pick_folder(initial.as_deref())
+                });
             });
         match spawned {
             Ok(_) => self.picker = Some(rx),
-            Err(error) => self.status = format!("Failed to open folder picker: {error}"),
+            Err(error) => {
+                self.status = if file {
+                    format!("Failed to open file picker: {error}")
+                } else {
+                    format!("Failed to open folder picker: {error}")
+                }
+            }
         }
     }
 
@@ -439,6 +711,58 @@ impl ExportPanel {
         });
         sessions.pop().map(|path| path.join("slides"))
     }
+}
+
+fn describe_outcome(outcome: &ExportOutcome, language: Language) -> String {
+    match &outcome.deck {
+        Some(summary) => {
+            if language == Language::Chinese {
+                if summary.cropped == 0 {
+                    format!(
+                        "已生成新文件：{} 张幻灯片都不需要裁剪，内容与原件相同。",
+                        summary.slides
+                    )
+                } else {
+                    format!(
+                        "裁剪完成：共 {} 张幻灯片，裁剪了 {} 张截图。",
+                        summary.slides, summary.cropped
+                    )
+                }
+            } else if summary.cropped == 0 {
+                format!(
+                    "Generated the deck: none of the {} slides needed trimming, so it matches the original.",
+                    summary.slides
+                )
+            } else {
+                format!("Trimmed {} of {} slides.", summary.cropped, summary.slides)
+            }
+        }
+        None => {
+            if language == Language::Chinese {
+                format!("生成完成：{} 个 PPTX", outcome.paths.len())
+            } else {
+                format!("Generated {} PPTX file(s)", outcome.paths.len())
+            }
+        }
+    }
+}
+
+fn placement_option(
+    ui: &mut Ui,
+    current: &mut CropPlacement,
+    value: CropPlacement,
+    label: &str,
+    hint: &str,
+) {
+    ui.radio_value(
+        current,
+        value,
+        RichText::new(label).size(12.5).color(token::INK).strong(),
+    );
+    ui.horizontal(|ui| {
+        ui.add_space(24.0);
+        ui.label(theme::muted(hint, 11.5));
+    });
 }
 
 fn field_row(ui: &mut Ui, wide: bool, label: &str, add: impl FnOnce(&mut Ui)) {
@@ -486,6 +810,7 @@ fn status_is_error(status: &str) -> bool {
     lower.contains("failed")
         || lower.contains("cannot")
         || lower.contains("unexpectedly")
+        || lower.contains("stopped")
         || status.contains("失败")
         || status.contains("中断")
 }
@@ -519,6 +844,42 @@ fn pick_folder(initial: Option<&std::path::Path>) -> Result<Option<PathBuf>, Str
     }
     let path =
         String::from_utf8(result.stdout).map_err(|_| "Folder path is not UTF-8".to_string())?;
+    let path = path
+        .trim_start_matches('\u{feff}')
+        .trim_end_matches(['\r', '\n']);
+    Ok(if path.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(path))
+    })
+}
+
+fn pick_file(initial: Option<&std::path::Path>) -> Result<Option<PathBuf>, String> {
+    #[cfg(target_os = "windows")]
+    let result = std::process::Command::new("powershell.exe").env("PPT_CAPTURE_INITIAL_FOLDER", initial.unwrap_or_else(|| std::path::Path::new(""))).args(["-NoProfile", "-STA", "-Command", "Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.OpenFileDialog; $d.Filter = 'PowerPoint presentation (*.pptx)|*.pptx'; $d.InitialDirectory = $env:PPT_CAPTURE_INITIAL_FOLDER; if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; [Console]::Write($d.FileName) }"]).output();
+    #[cfg(target_os = "macos")]
+    let result = std::process::Command::new("osascript")
+        .args([
+            "-e",
+            "on run argv\nif (item 1 of argv) is not \"\" then\nreturn POSIX path of (choose file with prompt \"Select a PPTX\" default location (POSIX file (item 1 of argv)) of type {\"org.openxmlformats.presentationml.presentation\"})\nelse\nreturn POSIX path of (choose file with prompt \"Select a PPTX\" of type {\"org.openxmlformats.presentationml.presentation\"})\nend if\nend run",
+            "--",
+        ])
+        .arg(initial.unwrap_or_else(|| std::path::Path::new("")))
+        .output();
+    #[cfg(target_os = "linux")]
+    let result = std::process::Command::new("zenity")
+        .args([
+            "--file-selection",
+            "--file-filter=PowerPoint (*.pptx) | *.pptx",
+        ])
+        .output();
+    let result = result
+        .map_err(|error| format!("Cannot open file chooser ({error}); enter the path manually"))?;
+    if !result.status.success() {
+        return Ok(None);
+    }
+    let path =
+        String::from_utf8(result.stdout).map_err(|_| "File path is not UTF-8".to_string())?;
     let path = path
         .trim_start_matches('\u{feff}')
         .trim_end_matches(['\r', '\n']);
@@ -647,5 +1008,37 @@ mod tests {
         assert!(status_is_error("Export failed: disk full"));
         assert!(status_is_error("生成失败：磁盘已满"));
         assert!(!status_is_error("Generated 2 PPTX file(s)"));
+    }
+
+    #[test]
+    fn cropped_filename_follows_the_source_deck() {
+        let mut panel = ExportPanel::new(&OutputPanel::new_with_filename("deck.pptx"));
+        panel.source_pptx = "/tmp/harmony-review.pptx".into();
+        assert_eq!(panel.cropped_filename(), "harmony-review-cropped.pptx");
+        panel.source_pptx = String::new();
+        assert_eq!(panel.cropped_filename(), "pptx-cropped.pptx");
+    }
+
+    #[test]
+    fn deck_mode_requires_an_existing_file_before_starting() {
+        let output = tempfile::tempdir().unwrap();
+        let mut settings = OutputPanel::new_with_filename("deck.pptx");
+        settings.output_dir = output.path().display().to_string();
+        let mut panel = ExportPanel::new(&settings);
+        panel.mode = ExportMode::Deck;
+        panel.source_pptx = output.path().join("missing.pptx").display().to_string();
+        panel.start(Language::English);
+        assert!(panel.export.is_none());
+        assert!(panel.status.contains("not found"), "{}", panel.status);
+    }
+
+    #[test]
+    fn switching_modes_clears_a_stale_result_banner() {
+        let mut panel = ExportPanel::new(&OutputPanel::new_with_filename("deck.pptx"));
+        panel.status = "Generated 1 PPTX file(s)".into();
+        panel.output_to_open = Some(PathBuf::from("/tmp"));
+        panel.switch_mode(ExportMode::Deck);
+        assert!(panel.status.is_empty());
+        assert!(panel.output_to_open.is_none());
     }
 }

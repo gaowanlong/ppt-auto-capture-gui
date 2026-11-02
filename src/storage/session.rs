@@ -25,7 +25,7 @@ pub struct SessionStore {
     pub records: Vec<SlideRecord>,
 }
 
-pub(super) fn plain_filename(value: &str) -> bool {
+pub(crate) fn plain_filename(value: &str) -> bool {
     let mut parts = Path::new(value).components();
     matches!(parts.next(), Some(Component::Normal(_)))
         && parts.next().is_none()
