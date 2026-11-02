@@ -49,7 +49,9 @@ commands = Array(preflight["steps"]).map { |step| step["run"] }.compact.join("\n
   "ruby tests/test_ci_workflow.rb",
   "ruby tests/test_action_runtime_versions.rb",
   "bash scripts/check-rustfmt-changed.sh",
-  "bash scripts/check-clippy-baseline.sh"
+  "bash scripts/check-clippy-baseline.sh",
+  "bash scripts/release-notes.sh",
+  "bash tests/test_release_notes.sh"
 ].each do |command|
   assert(commands.include?(command), "preflight must run #{command}")
 end
@@ -62,6 +64,22 @@ release_needs = Array(jobs.fetch("create-release")["needs"])
 %w[build-windows build-linux build-macos].each do |job_name|
   assert(release_needs.include?(job_name), "create-release must need #{job_name}")
 end
+
+# Every release must carry the changelog section for its tag rather than
+# whatever GitHub can infer from commits pushed straight to main.
+release_steps = Array(jobs.fetch("create-release")["steps"])
+notes_step = release_steps.find { |step| step["name"] == "Build release notes" }
+assert(notes_step, "create-release must build the notes from CHANGELOG.md")
+assert(
+  notes_step.fetch("run").include?("scripts/release-notes.sh"),
+  "the notes step must call scripts/release-notes.sh"
+)
+
+publish = release_steps.find { |step| step["uses"].to_s.include?("softprops/action-gh-release") }
+assert(publish, "create-release must publish with action-gh-release")
+with = publish.fetch("with")
+assert(with["body_path"] == "release-notes.md", "the release body must be the changelog section")
+assert(!with.key?("generate_release_notes"), "generate_release_notes would ignore CHANGELOG.md")
 RUBY
 
 assert_contains "ppt-auto-capture-gui-macos-apple-silicon.dmg" "$README"

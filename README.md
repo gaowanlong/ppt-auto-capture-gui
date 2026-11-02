@@ -129,6 +129,16 @@ rustup target add x86_64-pc-windows-gnu
 cargo zigbuild --target x86_64-pc-windows-gnu --release
 ```
 
+### Releasing
+
+Every release needs a written changelog. GitHub's generated notes are not used: this repository commits straight to `main`, so they would carry nothing but a comparison link.
+
+1. Bump `version` in `Cargo.toml` (and let `cargo build` update `Cargo.lock`).
+2. Add a `## [x.y.z] - YYYY-MM-DD` section to [CHANGELOG.md](CHANGELOG.md), under `### Added`, `### Changed`, and `### Fixed`.
+3. Commit, push `main`, then `git tag -a vX.Y.Z` and push the tag.
+
+The release workflow turns that section into the GitHub release body, so the notes on the releases page state what actually changed. A tag with no section stops at preflight instead of shipping empty notes; `bash scripts/release-notes.sh vX.Y.Z` prints what would be published.
+
 ## Architecture
 
 ```

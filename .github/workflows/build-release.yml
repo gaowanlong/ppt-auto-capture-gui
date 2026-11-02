@@ -38,10 +38,13 @@ jobs:
         run: bash scripts/validate-release-tag.sh "$RELEASE_TAG"
       - name: Run Rust tests
         run: cargo test --all-targets --all-features
+      - name: Validate changelog entry
+        run: bash scripts/release-notes.sh "$RELEASE_TAG" > /dev/null
       - name: Run regression contracts
         run: |
           bash tests/test_macos_dmg_packaging.sh
           bash tests/test_release_tag.sh
+          bash tests/test_release_notes.sh
           bash tests/test_release_workflow.sh
           ruby tests/test_ci_workflow.rb
           ruby tests/test_action_runtime_versions.rb
@@ -158,14 +161,25 @@ jobs:
           cp downloaded-artifacts/ppt-auto-capture-gui-windows-x86_64-msvc/README.md release-files/README-windows.md
           tar czf release-files/ppt-auto-capture-gui-linux-x86_64.tar.gz -C downloaded-artifacts/ppt-auto-capture-gui-linux-x86_64 ppt-auto-capture-gui README.md
           cp downloaded-artifacts/ppt-auto-capture-gui-macos-apple-silicon/ppt-auto-capture-gui-macos-apple-silicon.dmg release-files/
+      - name: Build release notes
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          bash scripts/release-notes.sh "$RELEASE_TAG" > release-notes.md
+          previous="$(git describe --tags --abbrev=0 "${RELEASE_TAG}^" 2>/dev/null || true)"
+          if [ -n "$previous" ]; then
+            printf '\n**Full changelog**: https://github.com/%s/compare/%s...%s\n' \
+              "$GITHUB_REPOSITORY" "$previous" "$RELEASE_TAG" >> release-notes.md
+          fi
+          cat release-notes.md
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
           name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          body_path: release-notes.md
           draft: false
           prerelease: false
-          generate_release_notes: true
           files: |
             release-files/ppt-auto-capture-gui.exe
             release-files/ppt-auto-capture-gui-linux-x86_64.tar.gz
