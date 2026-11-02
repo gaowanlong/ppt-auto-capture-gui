@@ -1329,6 +1329,65 @@ mod pipeline_tests {
     }
 
     #[test]
+    fn trimming_an_already_trimmed_deck_changes_nothing() {
+        let base = tempfile::tempdir().unwrap();
+        let shots = base.path().join("shots");
+        std::fs::create_dir_all(&shots).unwrap();
+        for frame in 0..3 {
+            write_window_frame(&shots.join(format!("slide_{:04}.png", frame + 1)), frame);
+        }
+        let decks = crate::storage::import_directory(
+            &shots,
+            base.path(),
+            "capture.pptx",
+            "16:9",
+            "fit",
+            false,
+            |_, _| {},
+        )
+        .unwrap();
+        let first = crop_deck_images(
+            &decks[0],
+            base.path(),
+            "once.pptx",
+            CropPlacement::FillArea,
+            |_, _| {},
+        )
+        .unwrap();
+        assert_eq!(first.cropped, 3);
+
+        let second = crop_deck_images(
+            &first.output,
+            base.path(),
+            "twice.pptx",
+            CropPlacement::FillArea,
+            |_, _| {},
+        )
+        .unwrap();
+        assert_eq!(
+            second.cropped, 0,
+            "a slide-only screenshot must not be cropped again"
+        );
+        let mut first_archive = ZipArchive::new(File::open(&first.output).unwrap()).unwrap();
+        let mut second_archive = ZipArchive::new(File::open(&second.output).unwrap()).unwrap();
+        for number in 1..=3 {
+            let mut before = Vec::new();
+            first_archive
+                .by_name(&format!("ppt/media/image{number}.png"))
+                .unwrap()
+                .read_to_end(&mut before)
+                .unwrap();
+            let mut after = Vec::new();
+            second_archive
+                .by_name(&format!("ppt/media/image{number}.png"))
+                .unwrap()
+                .read_to_end(&mut after)
+                .unwrap();
+            assert_eq!(before, after, "slide {number} media changed");
+        }
+    }
+
+    #[test]
     fn a_deck_of_plain_white_pictures_is_copied_without_touching_the_media() {
         let base = tempfile::tempdir().unwrap();
         let shots = base.path().join("shots");
