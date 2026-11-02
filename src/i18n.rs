@@ -60,7 +60,7 @@ pub fn t_tab_output(lang: Language) -> &'static str {
 pub fn t_tab_export(lang: Language) -> &'static str {
     match lang {
         Language::English => "Create PPTX",
-        Language::Chinese => "图片转 PPTX",
+        Language::Chinese => "生成 PPTX",
     }
 }
 
@@ -477,14 +477,16 @@ pub fn t_output_notes_4(lang: Language) -> &'static str {
 // --- Export Panel ---
 pub fn t_export_page_title(lang: Language) -> &'static str {
     match lang {
-        Language::English => "Create PPTX from images",
-        Language::Chinese => "图片生成 PPTX",
+        Language::English => "Create a PPTX",
+        Language::Chinese => "生成 PPTX",
     }
 }
 pub fn t_export_page_subtitle(lang: Language) -> &'static str {
     match lang {
-        Language::English => "Turn a folder of saved slides into editable presentations.",
-        Language::Chinese => "把已保存的截图整理成可编辑的幻灯片。",
+        Language::English => {
+            "Turn saved screenshots into a deck, or trim the edges of a deck you already have."
+        }
+        Language::Chinese => "把截图整理成幻灯片，或裁剪已有 PPTX 中的截图边缘。",
     }
 }
 pub fn t_export_source_card(lang: Language) -> &'static str {

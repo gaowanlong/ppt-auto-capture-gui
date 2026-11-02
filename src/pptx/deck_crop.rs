@@ -121,7 +121,7 @@ pub fn crop_deck_images(
             let Some(media) = slide.relationships.get(embed) else {
                 continue;
             };
-            if picture.has_src_rect || picture.transformed {
+            if picture.already_cropped || picture.transformed {
                 continue;
             }
             let Some(geometry) = picture.geometry else {
@@ -441,7 +441,7 @@ struct Picture {
     geometry: Option<Geometry>,
     off_span: Option<Range<usize>>,
     ext_span: Option<Range<usize>>,
-    has_src_rect: bool,
+    already_cropped: bool,
     transformed: bool,
 }
 
@@ -489,11 +489,25 @@ fn scan_pictures(xml: &str) -> Vec<Picture> {
             geometry,
             off_span,
             ext_span,
-            has_src_rect: block.contains("<a:srcRect"),
+            already_cropped: has_crop_rectangle(block),
             transformed,
         });
     }
     pictures
+}
+
+/// True when the picture already shows only part of its image. PowerPoint
+/// writes an all-zero `a:srcRect` on some round-trips, which is not a crop.
+fn has_crop_rectangle(block: &str) -> bool {
+    let Some((start, end)) = element_bounds(block, 0, block.len(), "a:srcRect") else {
+        return false;
+    };
+    let tag = &block[start..end];
+    ["l", "t", "r", "b"].iter().any(|name| {
+        attribute(tag, name)
+            .and_then(|value| value.trim().parse::<i64>().ok())
+            .is_some_and(|value| value != 0)
+    })
 }
 
 struct SlideEdit {
@@ -1099,7 +1113,15 @@ mod tests {
 
         let xml = slide_xml(full_page(), "rId2").replace("<a:blip", r#"<a:srcRect l="0"/><a:blip"#);
         let pictures = scan_pictures(&xml);
-        assert!(pictures[0].has_src_rect);
+        assert!(
+            !pictures[0].already_cropped,
+            "an all-zero crop rectangle is not a crop"
+        );
+
+        let xml =
+            slide_xml(full_page(), "rId2").replace("<a:blip", r#"<a:srcRect l="10000"/><a:blip"#);
+        let pictures = scan_pictures(&xml);
+        assert!(pictures[0].already_cropped);
     }
 
     #[test]
