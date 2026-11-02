@@ -867,12 +867,17 @@ fn pick_file(initial: Option<&std::path::Path>) -> Result<Option<PathBuf>, Strin
         .arg(initial.unwrap_or_else(|| std::path::Path::new("")))
         .output();
     #[cfg(target_os = "linux")]
-    let result = std::process::Command::new("zenity")
-        .args([
+    let result = {
+        let mut command = std::process::Command::new("zenity");
+        command.args([
             "--file-selection",
             "--file-filter=PowerPoint (*.pptx) | *.pptx",
-        ])
-        .output();
+        ]);
+        if let Some(path) = initial {
+            command.arg(format!("--filename={}/", path.display()));
+        }
+        command.output()
+    };
     let result = result
         .map_err(|error| format!("Cannot open file chooser ({error}); enter the path manually"))?;
     if !result.status.success() {
