@@ -1328,7 +1328,7 @@ fn trim_dark_area_band(
     /// The first slide line must be clearly brighter than the band it replaces.
     const MIN_CONTENT_CONTRAST: f64 = 30.0;
 
-    let limit = if column { planes.width } else { planes.height } as usize;
+    let limit = if column { planes.width } else { planes.height };
     if perpendicular.1.saturating_sub(perpendicular.0) < 16 {
         return edge;
     }
