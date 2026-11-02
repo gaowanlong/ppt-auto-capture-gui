@@ -159,7 +159,11 @@ impl FrameReference {
     const MIN_FRAMES: usize = 2;
     /// At least this share of the picture must change between frames, so a
     /// session of identical screenshots cannot turn the whole slide static.
-    const MIN_DYNAMIC_SHARE: f64 = 0.02;
+    /// Decks whose slides share one template change only a little, and those
+    /// are exactly the sessions where the static toolbar is worth finding, so
+    /// the floor is low; a trim that would leave no changing content behind is
+    /// reverted later.
+    const MIN_DYNAMIC_SHARE: f64 = 0.001;
     const MAX_DYNAMIC_SHARE: f64 = 0.98;
     const STABLE_LUMA_SPREAD: i32 = 8;
     const STABLE_SATURATION_SPREAD: i32 = 12;
@@ -465,6 +469,40 @@ fn line_stats(
     (mean, saturation_sum / count, deviation)
 }
 
+/// Median luma of a line of pixels. Used instead of the mean where a bright
+/// slide surface shares the line with dark window chrome: the mean lands in
+/// between, while the median answers what most of the line is.
+fn line_median_luma(
+    planes: &Planes,
+    column: bool,
+    position: usize,
+    start: usize,
+    end: usize,
+) -> f64 {
+    let (position_limit, span_limit) = if column {
+        (planes.width, planes.height)
+    } else {
+        (planes.height, planes.width)
+    };
+    if start >= end || position >= position_limit || end > span_limit {
+        return 0.0;
+    }
+    let step = ((end - start) / 160).max(1);
+    let mut values = Vec::with_capacity((end - start) / step + 1);
+    let mut along = start;
+    while along < end {
+        let (x, y) = if column {
+            (position, along)
+        } else {
+            (along, position)
+        };
+        values.push(planes.luma_at(x, y));
+        along += step;
+    }
+    values.sort_unstable();
+    f64::from(values[values.len() / 2])
+}
+
 /// Content is either saturated (colored bands, photos, video) or high-contrast
 /// non-black graphics.
 fn is_content(luma: f64, saturation: f64, deviation: f64) -> bool {
@@ -474,6 +512,15 @@ fn is_content(luma: f64, saturation: f64, deviation: f64) -> bool {
 /// Neutral, low-contrast pixels: window chrome, letterbox bars, panels.
 fn is_chrome(saturation: f64, deviation: f64) -> bool {
     saturation < 26.0 && deviation < 18.0
+}
+
+/// A dark, neutral band: a taskbar, a meeting toolbar, a participant panel.
+/// These carry icons and video tiles, so their luma deviation is high and
+/// `is_chrome` rejects them, yet they are window furniture rather than slide
+/// content. Saturation is the discriminator: the navy or teal band of a dark
+/// deck is colored, the chrome around it is not.
+fn is_dark_chrome(luma: f64, saturation: f64) -> bool {
+    luma < 78.0 && saturation < 45.0
 }
 
 /// Grow one rectangle edge outward across contiguous slide content, stopping at
@@ -955,8 +1002,25 @@ fn edge_band_has_content(
 /// colored band, a photo, or a detailed graphic. The luma floor keeps a
 /// near-black desktop background, whose relative saturation is high despite a
 /// tiny absolute color difference, from being mistaken for a slide band.
+///
+/// A dark band has to be clearly colored to count. Dark neutral detail — the
+/// video tiles of a participant panel, taskbar icons, a dark desktop wallpaper
+/// — is window chrome, and growing the slide across it is what leaves a large
+/// black area in the deck.
 fn line_is_slide_content(luma: f64, saturation: f64, deviation: f64) -> bool {
-    luma >= 24.0 && (saturation >= 40.0 || deviation >= 20.0)
+    /// Bands at least this bright may belong to the slide on detail alone: a
+    /// photo, a dimmed screenshot, a light gray sidebar.
+    const BRIGHT_BAND: f64 = 90.0;
+    /// A dark band needs a clearly saturated color to be slide content.
+    const DARK_BAND_MIN_SATURATION: f64 = 55.0;
+    if luma < 24.0 {
+        return false;
+    }
+    if luma < BRIGHT_BAND {
+        saturation >= DARK_BAND_MIN_SATURATION
+    } else {
+        saturation >= 40.0 || deviation >= 20.0
+    }
 }
 
 /// Extend one edge outward across contiguous slide content that touches it
@@ -1029,14 +1093,14 @@ fn expand_past_content_band(
         // Content reaches the picture border: the slide is flush with it.
         return if start { 0 } else { limit as u32 };
     }
-    let (_, far_saturation, far_deviation) = line_stats(
+    let (far_luma, far_saturation, far_deviation) = line_stats(
         planes,
         column,
         far as usize,
         perpendicular.0,
         perpendicular.1,
     );
-    if !is_chrome(far_saturation, far_deviation) {
+    if !is_chrome(far_saturation, far_deviation) && !is_dark_chrome(far_luma, far_saturation) {
         return edge;
     }
     if start {
@@ -1302,6 +1366,182 @@ fn trim_static_band(
     }
 }
 
+/// Trim a UI band that repeats identically across the session's screenshots
+/// from one crop edge: a meeting toolbar, a participant panel, a floating
+/// control strip. Single-frame detection cannot separate these from slide
+/// content when both are dark or both are light; the reference can, because
+/// slide content changes from slide to slide while window furniture does not.
+///
+/// The band must be neutral (window chrome is gray or black; a colored band is
+/// slide design) and must carry UI detail on every line (icons, video tiles,
+/// separators) rather than a flat margin. A flat white or black line ends the
+/// trim, so a slide that starts with a plain background keeps its edge. A trim
+/// is only kept when the remaining rectangle still contains changing content.
+fn trim_stable_chrome_band(
+    planes: &Planes,
+    reference: &FrameReference,
+    edge: u32,
+    start: bool,
+    column: bool,
+    perpendicular: (usize, usize),
+) -> u32 {
+    /// Window furniture can take a big share of a screenshot: a participant
+    /// panel plus the gap around it easily reaches a third of the width.
+    const MAX_BAND_SHARE: f64 = 0.40;
+    /// Controls are pixel-identical across captures; any change means the band
+    /// has slide content in it.
+    const MIN_STABLE_SHARE: f64 = 0.90;
+    /// A flat line is a margin, not a control. Icons and video tiles show up
+    /// as luma spread along the line.
+    const MIN_DETAIL: f64 = 4.0;
+    /// The band as a whole has to carry UI detail somewhere, or it is a plain
+    /// desktop background or a slide margin.
+    const MIN_DETAIL_LINES: usize = 3;
+    /// Window furniture is neutral. A colored band is slide design. The
+    /// threshold allows the warm gray of a video tile or a panel border.
+    const MAX_SATURATION: f64 = 45.0;
+    /// A line whose median is at least this bright is slide paper, not
+    /// chrome. A white toolbar is deliberately given up: trimming the top of a
+    /// white slide is worse than keeping a light control bar.
+    const PAPER_MEDIAN: f64 = 200.0;
+    const MIN_LINES: usize = 3;
+    /// The slide side of the edge must look different from the band, or start
+    /// changing between frames.
+    const MIN_STEP: f64 = 8.0;
+
+    let limit = if column { planes.width } else { planes.height };
+    if perpendicular.1.saturating_sub(perpendicular.0) < 8 || edge as usize >= limit {
+        return edge;
+    }
+    let cap = ((limit as f64 * MAX_BAND_SHARE) as usize).max(MIN_LINES);
+    // Scan from the picture border rather than from the candidate edge: the
+    // candidate may already cut through a panel, so the band has to be
+    // measured from where the chrome really starts.
+    let direction: i64 = if start { 1 } else { -1 };
+    let mut position = if start { 0i64 } else { limit as i64 - 1 };
+    let mut lines = 0usize;
+    let mut detail_lines = 0usize;
+    let mut luma_sum = 0.0;
+    let mut saturation_sum = 0.0;
+    while lines < cap && (0..limit as i64).contains(&position) {
+        let (luma, saturation, deviation) = line_stats(
+            planes,
+            column,
+            position as usize,
+            perpendicular.0,
+            perpendicular.1,
+        );
+        let stable_share = reference.line_stable_share(
+            column,
+            position as u32,
+            perpendicular.0 as u32,
+            perpendicular.1 as u32,
+        );
+        if saturation >= MAX_SATURATION || stable_share < MIN_STABLE_SHARE {
+            break;
+        }
+        let median = line_median_luma(
+            planes,
+            column,
+            position as usize,
+            perpendicular.0,
+            perpendicular.1,
+        );
+        if median >= PAPER_MEDIAN {
+            // Paper: most of the line is the bright slide surface. A white
+            // toolbar is given up rather than risk trimming the top of a
+            // white slide, whose rows also carry detail from whatever sits
+            // beside them. The median, not the mean, so a dark panel on the
+            // same row cannot hide a white slide.
+            break;
+        }
+        if deviation >= MIN_DETAIL {
+            detail_lines += 1;
+        }
+        luma_sum += luma;
+        saturation_sum += saturation;
+        position += direction;
+        lines += 1;
+    }
+    if lines < MIN_LINES || detail_lines < MIN_DETAIL_LINES || lines >= cap {
+        return edge;
+    }
+    if !(0..limit as i64).contains(&position) {
+        return edge;
+    }
+    let (stop_luma, stop_saturation, _) = line_stats(
+        planes,
+        column,
+        position as usize,
+        perpendicular.0,
+        perpendicular.1,
+    );
+    let stop_stable = reference.line_stable_share(
+        column,
+        position as u32,
+        perpendicular.0 as u32,
+        perpendicular.1 as u32,
+    );
+    let stepped = (stop_luma - luma_sum / lines as f64).abs() >= MIN_STEP
+        || (stop_saturation - saturation_sum / lines as f64).abs() >= MIN_STEP;
+    if stop_stable >= MIN_STABLE_SHARE && !stepped {
+        // The band continues into more static lines of the same appearance;
+        // there is no visible boundary to cut on.
+        return edge;
+    }
+    let boundary = if start {
+        position as u32
+    } else {
+        (position + 1) as u32
+    };
+    // The band may already be outside the candidate, in which case it has been
+    // trimmed earlier and nothing moves. A trim never grows the rectangle.
+    if (start && boundary > edge) || (!start && boundary < edge) {
+        boundary
+    } else {
+        edge
+    }
+}
+
+/// Apply `trim_stable_chrome_band` to every side. A trim is reverted when the
+/// rectangle left behind no longer contains content that changes between
+/// slides, which would mean the band was slide design.
+fn trim_stable_chrome_edges(
+    planes: &Planes,
+    rect: Rect,
+    reference: Option<&FrameReference>,
+) -> Rect {
+    let Some(reference) = reference else {
+        return rect;
+    };
+    let mut result = rect;
+    for _ in 0..2 {
+        let horizontal_span = (result.x0 as usize, result.x1 as usize);
+        let vertical_span = (result.y0 as usize, result.y1 as usize);
+        let next = Rect {
+            x0: trim_stable_chrome_band(planes, reference, result.x0, true, true, vertical_span),
+            y0: trim_stable_chrome_band(planes, reference, result.y0, true, false, horizontal_span),
+            x1: trim_stable_chrome_band(planes, reference, result.x1, false, true, vertical_span),
+            y1: trim_stable_chrome_band(
+                planes,
+                reference,
+                result.y1,
+                false,
+                false,
+                horizontal_span,
+            ),
+        };
+        if next == result || next.width() < 4 || next.height() < 4 {
+            break;
+        }
+        result = next;
+    }
+    if result != rect && reference.dynamic_share_inside(result) < 0.001 {
+        return rect;
+    }
+    result
+}
+
 /// Remove a dark, neutral border area that survived the earlier stages: a
 /// participant panel, a taskbar, a desktop wallpaper, or a letterbox bar that
 /// carries UI detail. Unlike `trim_letterbox_edges` this does not require a
@@ -1538,6 +1778,7 @@ fn guard_crop(planes: &Planes, rect: Rect, reference: Option<&FrameReference>) -
     guarded = trim_letterbox_edges(planes, guarded);
     guarded = trim_static_edges(planes, guarded, reference);
     guarded = trim_letterbox_edges(planes, guarded);
+    guarded = trim_stable_chrome_edges(planes, guarded, reference);
     guarded = trim_dark_area_edges(planes, guarded);
     if guarded.width() < 4 || guarded.height() < 4 {
         return None;
@@ -1545,6 +1786,17 @@ fn guard_crop(planes: &Planes, rect: Rect, reference: Option<&FrameReference>) -
     if (guarded.width() as f64 * guarded.height() as f64)
         > (planes.width * planes.height) as f64 * 0.985
     {
+        return None;
+    }
+    // A presentation fills a meaningful part of the screenshot and is never an
+    // extreme strip. This catches the case where a window layout happens to
+    // look like a canvas: a toolbar row of an application, a status bar, or a
+    // strip of UI text. Losing the real slide is worse than keeping the full
+    // screenshot.
+    let share =
+        (guarded.width() as f64 * guarded.height() as f64) / (planes.width * planes.height) as f64;
+    let aspect = guarded.width() as f64 / guarded.height() as f64;
+    if share < 0.15 || !(0.4..=4.0).contains(&aspect) {
         return None;
     }
     let horizontal_span = (guarded.x0 as usize, guarded.x1 as usize);
@@ -2432,6 +2684,18 @@ mod tests {
     }
 
     #[test]
+    fn ignores_a_wide_strip_of_application_ui() {
+        // A white toolbar row in a window, not a slide: the crop would be a
+        // thin strip of a few percent of the picture.
+        let (width, height) = (1200, 750);
+        let mut image = canvas(width, height, [236, 236, 238]);
+        fill(&mut image, 0, 300, 1200, 360, WHITE);
+        fill(&mut image, 20, 316, 120, 344, [150, 152, 158]);
+        fill(&mut image, 160, 316, 260, 344, [150, 152, 158]);
+        assert_eq!(detect(&image), None);
+    }
+
+    #[test]
     fn crops_a_non_standard_canvas() {
         let (width, height) = (800, 600);
         let mut image = canvas(width, height, DARK_CHROME);
@@ -2797,6 +3061,90 @@ mod tests {
             );
             x += 22;
         }
+    }
+
+    /// A full-screen meeting capture: slide with a colored title band, a
+    /// toolbar at the top and bottom, and a participant panel on the right
+    /// whose video tiles stay identical across frames.
+    fn meeting_screen(
+        frame: usize,
+        slide_color: [u8; 3],
+        title_band: Option<[u8; 3]>,
+    ) -> (image::RgbImage, (u32, u32, u32, u32)) {
+        let (width, height) = (1600u32, 1000u32);
+        let mut image = canvas(width, height, [10, 10, 12]);
+        fill(&mut image, 0, 0, 1220, 58, [32, 33, 36]);
+        for index in 0..6 {
+            let x = 40 + index * 54;
+            fill(&mut image, x, 18, x + 26, 40, [125, 126, 130]);
+        }
+        fill(&mut image, 0, 938, 1220, 1000, [30, 31, 34]);
+        for index in 0..7 {
+            let x = 560 + index * 62;
+            fill(&mut image, x, 954, x + 30, 984, [120, 122, 126]);
+        }
+        fill(
+            &mut image,
+            1220,
+            0,
+            width as i64,
+            height as i64,
+            [24, 24, 27],
+        );
+        for index in 0..5 {
+            let top = 40 + index * 186;
+            fill(&mut image, 1238, top, 1582, top + 150, [150, 140, 130]);
+            fill(&mut image, 1246, top + 158, 1340, top + 172, [90, 92, 96]);
+        }
+        let slide = (130, 92, 1180, 904);
+        fill(
+            &mut image,
+            slide.0 as i64,
+            slide.1 as i64,
+            slide.2 as i64,
+            slide.3 as i64,
+            slide_color,
+        );
+        if let Some(color) = title_band {
+            fill(&mut image, 130, 92, 1180, 214, color);
+        }
+        for block in 0..3 {
+            let y = 300 + block * 150;
+            let right = 500 + (frame as i64 + block) * 90;
+            fill(&mut image, 180, y, right, y + 26, [70, 78, 88]);
+        }
+        fill(&mut image, 180, 860, 520, 872, [150, 155, 162]);
+        (image, slide)
+    }
+
+    #[test]
+    fn keeps_the_slide_when_a_toolbar_and_participant_panel_surround_it() {
+        let mut frames = Vec::new();
+        for frame in 0..3 {
+            let (image, _) = meeting_screen(frame, WHITE, Some([38, 108, 162]));
+            frames.push(image);
+        }
+        let reference = frame_reference_of(&frames);
+        let detected = detect_presentation_with_reference(
+            &DynamicImage::ImageRgb8(frames[0].clone()),
+            Some(&reference),
+        );
+        assert_crop(detected, (130, 92, 1180, 904), 2);
+    }
+
+    #[test]
+    fn trims_a_static_panel_that_surrounds_a_dark_slide() {
+        let mut frames = Vec::new();
+        for frame in 0..3 {
+            let (image, _) = meeting_screen(frame, [28, 42, 70], Some([46, 86, 140]));
+            frames.push(image);
+        }
+        let reference = frame_reference_of(&frames);
+        let detected = detect_presentation_with_reference(
+            &DynamicImage::ImageRgb8(frames[0].clone()),
+            Some(&reference),
+        );
+        assert_crop(detected, (130, 92, 1180, 904), 2);
     }
 
     #[test]
