@@ -146,8 +146,9 @@ pub fn pick_folder(initial: Option<&Path>) -> Result<Option<PathBuf>, String> {
     let result = {
         let mut command = crate::platform::quiet_command("zenity");
         command.args(["--file-selection", "--directory"]);
-        if let Some(path) = initial {
-            command.arg(format!("--filename={}/", path.display()));
+        let start = initial_directory(initial);
+        if !start.as_os_str().is_empty() {
+            command.arg(format!("--filename={}/", start.display()));
         }
         command.output()
     };
@@ -188,8 +189,9 @@ pub fn pick_file(kind: ChooserKind, initial: Option<&Path>) -> Result<Option<Pat
     let result = {
         let mut command = crate::platform::quiet_command("zenity");
         command.args(["--file-selection", kind.zenity_filter()]);
-        if let Some(path) = initial {
-            command.arg(format!("--filename={}/", path.display()));
+        let start = initial_directory(initial);
+        if !start.as_os_str().is_empty() {
+            command.arg(format!("--filename={}/", start.display()));
         }
         command.output()
     };

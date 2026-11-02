@@ -251,6 +251,9 @@ pub fn t_selected(lang: Language) -> &'static str {
         Language::Chinese => "已选择：",
     }
 }
+/// Only the macOS window controls need this explanation, so other platforms see
+/// it as unused code rather than a missing feature.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn t_macos_window_controls_unavailable(lang: Language) -> &'static str {
     match lang {
         Language::English => "Moving or maximizing another app requires Accessibility permission and is not available in this macOS release.",
