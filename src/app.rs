@@ -179,7 +179,10 @@ impl PptAutoCaptureApp {
         app.output_panel.filename_is_custom = config.filename_is_custom;
         app.output_panel.page_ratio = config.page_ratio.clone();
         app.output_panel.image_fit = config.image_fit.clone();
-        app.output_panel.auto_crop = config.auto_crop;
+        // The capture-time crop is off on every launch: the detector is still
+        // being tuned, and a remembered setting kept producing decks with big
+        // black areas beside a small slide. The checkbox works for one run.
+        app.output_panel.auto_crop = false;
         app.output_panel.keep_previous = config.keep_previous;
         app.export_panel.settings = app.output_panel.clone();
         app.dashboard.minimize_on_start = config.minimize_on_start;
@@ -1087,7 +1090,6 @@ fn apply_output_to_config(panel: &OutputPanel, config: &mut AppConfig) {
     config.filename_is_custom = panel.filename_is_custom;
     config.page_ratio = panel.page_ratio.clone();
     config.image_fit = panel.image_fit.clone();
-    config.auto_crop = panel.auto_crop;
     config.keep_previous = panel.keep_previous;
 }
 
@@ -2053,7 +2055,6 @@ mod tests {
         assert_eq!(config.page_ratio, "4:3");
         assert_eq!(config.image_fit, "fill");
         assert!(!config.keep_previous);
-        assert!(config.auto_crop);
     }
 
     #[test]

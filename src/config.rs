@@ -66,8 +66,6 @@ pub struct AppConfig {
     pub page_ratio: String,
     /// Image fit mode: "fill" or "fit".
     pub image_fit: String,
-    #[serde(default)]
-    pub auto_crop: bool,
     /// Whether to preserve previous.pptx.
     pub keep_previous: bool,
     /// Last used capture source (serialized for persistence).
@@ -118,7 +116,6 @@ impl Default for AppConfig {
             filename_is_custom: false,
             page_ratio: "16:9".to_string(),
             image_fit: "fit".to_string(),
-            auto_crop: false,
             keep_previous: true,
             last_window_hwnd: 0,
             last_window_title: String::new(),
@@ -230,11 +227,17 @@ mod tests {
     }
 
     #[test]
-    fn old_config_without_crop_option_defaults_to_preserving_full_images() {
+    fn config_from_an_older_version_still_loads() {
+        // The capture-time crop is no longer remembered, so the key stays in
+        // config files written by older versions. It must not stop the file
+        // from loading.
         let mut value = serde_json::to_value(AppConfig::default()).unwrap();
-        value.as_object_mut().unwrap().remove("auto_crop");
+        value
+            .as_object_mut()
+            .unwrap()
+            .insert("auto_crop".into(), serde_json::Value::Bool(true));
         let restored: AppConfig = serde_json::from_value(value).unwrap();
-        assert!(!restored.auto_crop);
+        assert_eq!(restored.page_ratio, AppConfig::default().page_ratio);
     }
 
     #[test]

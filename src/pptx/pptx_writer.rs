@@ -726,6 +726,79 @@ mod tests {
         }
     }
 
+    /// Full-screen meeting capture: white slide on the left, a dark participant
+    /// panel with video tiles running to the right border of the picture.
+    fn write_full_screen_meeting_frame(path: &Path, frame: u32) {
+        let (width, height) = (1200u32, 750u32);
+        let mut image = image::RgbImage::from_pixel(width, height, image::Rgb([18, 18, 20]));
+        let fill = |image: &mut image::RgbImage, x0, y0, x1, y1, color: [u8; 3]| {
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    image.put_pixel(x, y, image::Rgb(color));
+                }
+            }
+        };
+        fill(&mut image, 0, 0, 900, height, [255, 255, 255]);
+        fill(&mut image, 916, 24, width, 174, [60, 62, 66]);
+        fill(&mut image, 916, 200, width, 350, [60, 62, 66]);
+        let body = 120 + frame * 60;
+        fill(&mut image, 80, body, 700, body + 26, [90, 100, 110]);
+        image.save(path).unwrap();
+    }
+
+    #[test]
+    fn full_screen_capture_drops_the_dark_participant_panel() {
+        let dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let slides_dir = dir.path().join("slides");
+        std::fs::create_dir_all(&slides_dir).unwrap();
+        for frame in 0..2u32 {
+            write_full_screen_meeting_frame(
+                &slides_dir.join(format!("slide_000{}.png", frame + 1)),
+                frame,
+            );
+        }
+        let record = |number: u32| {
+            SlideRecord::new(SlideRecordInput {
+                slide_number: number,
+                png_filename: format!("slide_{number:04}.png"),
+                png_relative_path: format!("slides/slide_{number:04}.png"),
+                frame_index: u64::from(number),
+                width: 1200,
+                height: 750,
+                content_hash: format!("hash{number}"),
+                source_name: "Test".into(),
+                monitor_name: "Monitor".into(),
+            })
+        };
+        let writer = PptxWriter::new(&dir.path().join("output.pptx"), "16:9", "fit");
+        writer
+            .with_auto_crop(true)
+            .write_slides(&[record(1), record(2)], &slides_dir)
+            .unwrap();
+        let mut zip =
+            ZipArchive::new(std::fs::File::open(dir.path().join("output.pptx")).unwrap()).unwrap();
+        let mut bytes = Vec::new();
+        zip.by_name("ppt/media/image1.png")
+            .unwrap()
+            .read_to_end(&mut bytes)
+            .unwrap();
+        let embedded = image::load_from_memory(&bytes).unwrap();
+        assert!(
+            (embedded.width() as i32 - 900).abs() <= 4,
+            "embedded image keeps the panel: {}x{}",
+            embedded.width(),
+            embedded.height()
+        );
+        assert!((embedded.height() as i32 - 750).abs() <= 4);
+        // The remaining picture must be the bright slide, not the dark panel.
+        let right = embedded.to_rgb8();
+        let column = right.width() - 4;
+        let bright = (0..right.height())
+            .filter(|&y| right.get_pixel(column, y).0[0] > 200)
+            .count();
+        assert_eq!(bright as u32, right.height(), "right edge is still dark");
+    }
+
     #[test]
     fn disabled_or_uncertain_crop_embeds_the_unchanged_png() {
         for enabled in [false, true] {

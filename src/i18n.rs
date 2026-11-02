@@ -400,8 +400,13 @@ pub fn t_auto_crop_label(lang: Language) -> &'static str {
 }
 pub fn t_auto_crop_hint(lang: Language) -> &'static str {
     match lang {
-        Language::English => "If the slide cannot be identified, the full frame is kept.",
-        Language::Chinese => "如果无法识别幻灯片，则保留完整画面。",
+        Language::English => {
+            "Off on every launch; tick it for the current run only. If the slide cannot be \
+             identified, the full frame is kept."
+        }
+        Language::Chinese => {
+            "每次启动都默认关闭，勾选只对本次录制生效。如果无法识别幻灯片，则保留完整画面。"
+        }
     }
 }
 pub fn t_output_notes_heading(lang: Language) -> &'static str {

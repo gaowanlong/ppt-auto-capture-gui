@@ -1302,6 +1302,108 @@ fn trim_static_band(
     }
 }
 
+/// Remove a dark, neutral border area that survived the earlier stages: a
+/// participant panel, a taskbar, a desktop wallpaper, or a letterbox bar that
+/// carries UI detail. Unlike `trim_letterbox_edges` this does not require a
+/// flat surface, so a panel full of small video tiles is still recognised as
+/// chrome: a line counts as chrome while its average stays dark and neutral.
+/// Only edges that sit on the picture border are trimmed, because that is
+/// where an over-eager expansion ends up and where dark pixels cannot be slide
+/// content; the trim also refuses to move when the picture itself is dark, so a
+/// full-bleed dark deck keeps its background.
+fn trim_dark_area_band(
+    planes: &Planes,
+    edge: u32,
+    start: bool,
+    column: bool,
+    perpendicular: (usize, usize),
+) -> u32 {
+    /// At most this share of an axis is trimmed, so a dark half of the picture
+    /// cannot swallow the slide.
+    const MAX_TRIM_SHARE: f64 = 0.45;
+    /// A line darker than this across the whole span is chrome, not slide.
+    const DARK_LINE_LUMA: f64 = 78.0;
+    /// Chrome is neutral. A dark colored band is a slide band (a navy deck).
+    const MAX_LINE_SATURATION: f64 = 45.0;
+    /// The first slide line must be clearly brighter than the band it replaces.
+    const MIN_CONTENT_CONTRAST: f64 = 30.0;
+
+    let limit = if column { planes.width } else { planes.height } as usize;
+    if perpendicular.1.saturating_sub(perpendicular.0) < 16 {
+        return edge;
+    }
+    // Only a crop edge on the picture border can be trimmed: everything the
+    // earlier stages already accepted lies inside the slide.
+    if edge != 0 && edge as usize != limit {
+        return edge;
+    }
+    let cap = ((limit as f64 * MAX_TRIM_SHARE) as usize).max(2);
+    let direction: i64 = if start { 1 } else { -1 };
+    let mut position = if start { edge as i64 } else { edge as i64 - 1 };
+    let mut band_luma = 0.0;
+    let mut dark_lines = 0usize;
+    while dark_lines < cap && (0..limit as i64).contains(&position) {
+        let (luma, saturation, _) = line_stats(
+            planes,
+            column,
+            position as usize,
+            perpendicular.0,
+            perpendicular.1,
+        );
+        if luma >= DARK_LINE_LUMA || saturation >= MAX_LINE_SATURATION {
+            break;
+        }
+        band_luma += luma;
+        position += direction;
+        dark_lines += 1;
+    }
+    if dark_lines == 0 || dark_lines >= cap {
+        return edge;
+    }
+    if !(0..limit as i64).contains(&position) {
+        return edge;
+    }
+    let (content_luma, _, _) = line_stats(
+        planes,
+        column,
+        position as usize,
+        perpendicular.0,
+        perpendicular.1,
+    );
+    if content_luma - band_luma / (dark_lines as f64) < MIN_CONTENT_CONTRAST {
+        return edge;
+    }
+    if start {
+        position as u32
+    } else {
+        (position + 1) as u32
+    }
+}
+
+/// Trim dark border areas from every side of a candidate crop. Two passes let
+/// one side expose a dark band on the next.
+fn trim_dark_area_edges(planes: &Planes, rect: Rect) -> Rect {
+    let mut result = rect;
+    for _ in 0..2 {
+        let horizontal_span = (result.x0 as usize, result.x1 as usize);
+        let vertical_span = (result.y0 as usize, result.y1 as usize);
+        let next = Rect {
+            x0: trim_dark_area_band(planes, result.x0, true, true, vertical_span),
+            y0: trim_dark_area_band(planes, result.y0, true, false, horizontal_span),
+            x1: trim_dark_area_band(planes, result.x1, false, true, vertical_span),
+            y1: trim_dark_area_band(planes, result.y1, false, false, horizontal_span),
+        };
+        if next == result {
+            break;
+        }
+        if next.width() < 4 || next.height() < 4 {
+            return rect;
+        }
+        result = next;
+    }
+    result
+}
+
 /// Trim static chrome from every side of a candidate crop. The result must
 /// still contain changing slide content; otherwise the once-static band was
 /// the slide itself (for example the same title slide captured repeatedly)
@@ -1436,6 +1538,7 @@ fn guard_crop(planes: &Planes, rect: Rect, reference: Option<&FrameReference>) -
     guarded = trim_letterbox_edges(planes, guarded);
     guarded = trim_static_edges(planes, guarded, reference);
     guarded = trim_letterbox_edges(planes, guarded);
+    guarded = trim_dark_area_edges(planes, guarded);
     if guarded.width() < 4 || guarded.height() < 4 {
         return None;
     }
@@ -2118,6 +2221,56 @@ mod tests {
     fn crops_the_white_slide_inside_dark_meeting_chrome() {
         let (image, slide) = dark_meeting_screenshot();
         assert_crop(detect(&image), slide, 2);
+    }
+
+    #[test]
+    fn trims_a_dark_panel_that_carries_video_tiles() {
+        // Full-screen capture of a meeting: the white slide sits on the left and
+        // a dark participant panel with video tiles runs to the right border.
+        // The panel is not a flat bar, so the flat-bar trimmer leaves it alone
+        // and the deck would end up with a large black area beside the slide.
+        let (width, height) = (1600u32, 1000u32);
+        let mut image = canvas(width, height, PANEL);
+        let panel_left = 1250i64;
+        fill(
+            &mut image,
+            panel_left,
+            0,
+            width as i64,
+            height as i64,
+            [18, 18, 20],
+        );
+        for index in 0..4i64 {
+            let top = 40 + index * 230;
+            fill(
+                &mut image,
+                panel_left + 16,
+                top,
+                width as i64 - 16,
+                top + 190,
+                [60, 62, 66],
+            );
+        }
+        fill(&mut image, 0, 0, panel_left, height as i64, WHITE);
+        assert_crop(detect(&image), (0, 0, panel_left as u32, height), 3);
+    }
+
+    #[test]
+    fn keeps_a_full_bleed_dark_deck_instead_of_trimming_its_background() {
+        // Nothing around the slide is chrome here: the picture is the deck. A
+        // dark border trimmer must leave it alone.
+        let (width, height) = (1200u32, 675u32);
+        let mut image = canvas(width, height, [18, 20, 24]);
+        fill(&mut image, 100, 80, 700, 130, [235, 235, 235]);
+        fill(&mut image, 100, 180, 900, 220, [200, 205, 210]);
+        let area = (width * height) as f64;
+        if let Some((x, y, w, h)) = detect(&image) {
+            assert!(
+                (w as f64 * h as f64) > area * 0.9,
+                "dark deck trimmed to {:?}",
+                (x, y, w, h)
+            );
+        }
     }
 
     #[test]
