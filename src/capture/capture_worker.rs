@@ -706,22 +706,16 @@ impl WorkerLoop {
         }
 
         if self.state == CaptureState::ProtectedOrBlack {
-            self.state = CaptureState::Running;
-            let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
-
-            // Just exited a black/protected transition (e.g. PPT slide change).
-            // The current frame is almost certainly the new slide content.
-            // Force-save it immediately (save_frame handles duplicates internally).
-            self.change_detector.detect_change(frame);
+            // A fade or a transition often passes through black. The first
+            // visible frame is usually a half-drawn slide, so treat it like any
+            // other change: wait until the picture stops moving before saving.
+            self.state = CaptureState::WaitingForStable;
+            self.animation_timer = Some(std::time::Instant::now());
+            self.stability_detector.reset();
             self.change_detector.update_reference(frame);
-            if let Err(e) = self.save_frame(frame) {
-                error!("Failed to save frame after black recovery: {}", e);
-                let _ = self.event_tx.send(WorkerEvent::Error(format!(
-                    "Black-recovery save failed: {}",
-                    e
-                )));
-            }
-            return Ok(());
+            self.first_frame_saved = true;
+            let _ = self.event_tx.send(WorkerEvent::StateChanged(self.state));
+            // Fall through: the settle block below saves the settled page.
         }
 
         let broad_transition = self.motion_filter.observe(frame);
@@ -754,36 +748,21 @@ impl WorkerLoop {
                 || broad_transition
                 || self.stability_detector.get_pending_frame().is_some())
         {
-            // If we were already stabilizing a previous slide, save it before resetting.
-            // This prevents rapid PPT slide transitions from losing intermediate slides.
-            // Save the partially-stabilized slide before a new transition resets everything.
-            // Without this, rapid PPT transitions cause intermediate slides to be lost.
+            // A page that had already settled before this change is a real
+            // slide; save it before the settle window restarts.
+            //
+            // Only a settled frame qualifies: a frame that was still moving when
+            // the next change arrived is a transition (morph, wipe, push, fade)
+            // and must never reach the deck. Waiting for at least one quiet
+            // sample is what separates "the presenter clicked" from "the slide
+            // is still animating".
             if self.state == CaptureState::WaitingForStable {
-                // First try: stability detector has a pending stable frame (stable_count > 0)
-                let mut saved = false;
                 let pending_frame = self.stability_detector.get_pending_frame().cloned();
                 if let Some(ref pframe) = pending_frame {
-                    log::info!("Saving pending stable frame before rapid transition");
+                    log::info!("Saving settled frame before the next transition");
                     if let Err(e) = self.save_frame(pframe) {
-                        self.report_rapid_transition_save_failure("pending stable frame", e);
+                        self.report_settled_frame_save_failure(e);
                         return Ok(());
-                    } else {
-                        saved = true;
-                    }
-                }
-                // Fallback: save the change detector's reference frame (last known good frame).
-                // This catches the case where stability was just reset (stable_count = 0).
-                if !saved {
-                    if let Some(ref ref_frame) = self.change_detector.get_reference_frame().cloned()
-                    {
-                        log::info!("Saving reference frame as fallback before rapid transition");
-                        if let Err(e) = self.save_frame(ref_frame) {
-                            self.report_rapid_transition_save_failure(
-                                "fallback reference frame",
-                                e,
-                            );
-                            return Ok(());
-                        }
                     }
                 }
             }
@@ -845,8 +824,8 @@ impl WorkerLoop {
         }
     }
 
-    fn report_rapid_transition_save_failure(&self, frame_kind: &str, error: anyhow::Error) {
-        let message = format!("Rapid-transition {frame_kind} save failed: {error:#}");
+    fn report_settled_frame_save_failure(&self, error: anyhow::Error) {
+        let message = format!("Settled slide save failed: {error:#}");
         error!("{message}");
         let _ = self.event_tx.send(WorkerEvent::Error(message));
     }
@@ -869,6 +848,16 @@ impl WorkerLoop {
     }
 
     fn finish_session(&mut self) -> bool {
+        // Stopping inside the settle window must not drop the page that is
+        // already on screen; only a settled frame qualifies here.
+        if let Some(frame) = self.stability_detector.get_pending_frame().cloned() {
+            if let Err(error) = self.save_frame(&frame) {
+                let _ = self.event_tx.send(WorkerEvent::Error(format!(
+                    "Settled slide could not be saved: {error}"
+                )));
+                return false;
+            }
+        }
         if let Some(frame) = self.pending_save.clone() {
             if let Err(error) = self.save_frame(&frame) {
                 let _ = self.event_tx.send(WorkerEvent::Error(format!(
@@ -1912,7 +1901,7 @@ mod tests {
     }
 
     #[test]
-    fn broad_rapid_slide_changes_keep_intermediate_pages() {
+    fn a_page_replaced_before_it_settles_counts_as_a_transition_frame() {
         let dir = tempfile::tempdir().unwrap();
         let (_tx, rx) = crossbeam_channel::unbounded();
         let (tx, _events) = worker_event_channel();
@@ -1925,7 +1914,82 @@ mod tests {
                 .process_frame(&Frame::new(vec![value; 64 * 36 * 4], 64, 36, 256, 1, 0))
                 .unwrap();
         }
-        assert_eq!(worker.slide_count, 3);
+        // The 128 page was on screen for a single sample, so it is
+        // indistinguishable from a half-drawn transition and is skipped.
+        assert_eq!(worker.slide_count, 2);
+    }
+
+    fn solid(value: u8, index: u64) -> Frame {
+        Frame::new(vec![value; 64 * 36 * 4], 64, 36, 256, index, 0)
+    }
+
+    fn worker_with_session(dir: &tempfile::TempDir) -> WorkerLoop {
+        let (_tx, rx) = crossbeam_channel::unbounded();
+        let (tx, _events) = worker_event_channel();
+        let mut worker = WorkerLoop::new(rx, tx);
+        worker.session =
+            Some(SessionStore::create(dir.path(), "deck.pptx", "16:9", "fit").unwrap());
+        worker.state = CaptureState::Running;
+        worker
+    }
+
+    #[test]
+    fn transition_animation_is_skipped_until_the_slide_settles() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut worker = worker_with_session(&dir);
+        worker.process_frame(&solid(20, 1)).unwrap();
+        assert_eq!(worker.slide_count, 1);
+        // A morph: every sample is a different, half-drawn picture.
+        for (index, value) in [60u8, 100, 140, 180, 220].into_iter().enumerate() {
+            worker
+                .process_frame(&solid(value, index as u64 + 2))
+                .unwrap();
+            assert_eq!(
+                worker.slide_count, 1,
+                "mid-transition frame {value} was saved"
+            );
+        }
+        // The settled slide stays on screen and is saved once.
+        for index in 0..4 {
+            worker.process_frame(&solid(220, index + 10)).unwrap();
+        }
+        assert_eq!(worker.slide_count, 2);
+        worker.finish_session();
+    }
+
+    #[test]
+    fn a_fade_through_black_saves_only_the_settled_slide() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut worker = worker_with_session(&dir);
+        worker.process_frame(&solid(200, 1)).unwrap();
+        assert_eq!(worker.slide_count, 1);
+        worker.process_frame(&solid(0, 2)).unwrap();
+        assert_eq!(worker.state, CaptureState::ProtectedOrBlack);
+        let mut index = 3;
+        for value in [30u8, 90, 150, 240] {
+            worker.process_frame(&solid(value, index)).unwrap();
+            index += 1;
+            assert_eq!(worker.slide_count, 1, "fade-in frame {value} was saved");
+        }
+        for _ in 0..4 {
+            worker.process_frame(&solid(240, index)).unwrap();
+            index += 1;
+        }
+        assert_eq!(worker.slide_count, 2);
+        worker.finish_session();
+    }
+
+    #[test]
+    fn stopping_keeps_the_settled_page_before_the_window_ends() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut worker = worker_with_session(&dir);
+        worker.process_frame(&solid(20, 1)).unwrap();
+        worker.process_frame(&solid(200, 2)).unwrap();
+        worker.process_frame(&solid(200, 3)).unwrap();
+        assert_eq!(worker.slide_count, 1);
+        assert!(worker.finish_session());
+        assert_eq!(worker.slide_count, 2);
+        assert_eq!(worker.session.as_ref().unwrap().records.len(), 2);
     }
 
     #[test]
@@ -2119,38 +2183,20 @@ mod tests {
     }
 
     #[test]
-    fn rapid_transition_save_failure_emits_complete_worker_error() {
+    fn settled_frame_save_failure_emits_complete_worker_error() {
         let (_command_tx, command_rx) = crossbeam_channel::unbounded();
         let (event_tx, event_rx) = worker_event_channel();
         let worker = WorkerLoop::new(command_rx, event_tx);
         let error = anyhow::Error::msg("disk full").context("writing slide PNG");
 
-        worker.report_rapid_transition_save_failure("pending stable frame", error);
+        worker.report_settled_frame_save_failure(error);
 
         let WorkerEvent::Error(message) = event_rx.try_recv().expect("worker error event") else {
             panic!("expected a worker error event");
         };
         assert_eq!(
             message,
-            "Rapid-transition pending stable frame save failed: writing slide PNG: disk full"
-        );
-    }
-
-    #[test]
-    fn rapid_transition_fallback_failure_emits_complete_worker_error() {
-        let (_command_tx, command_rx) = crossbeam_channel::unbounded();
-        let (event_tx, event_rx) = worker_event_channel();
-        let worker = WorkerLoop::new(command_rx, event_tx);
-        let error = anyhow::Error::msg("permission denied").context("saving fallback PNG");
-
-        worker.report_rapid_transition_save_failure("fallback reference frame", error);
-
-        let WorkerEvent::Error(message) = event_rx.try_recv().expect("worker error event") else {
-            panic!("expected a worker error event");
-        };
-        assert_eq!(
-            message,
-            "Rapid-transition fallback reference frame save failed: saving fallback PNG: permission denied"
+            "Settled slide save failed: writing slide PNG: disk full"
         );
     }
 

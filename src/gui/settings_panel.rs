@@ -78,8 +78,8 @@ impl SettingsPanel {
                 let response = theme::slider(ui, &mut frames, 1.0..=10.0, 1.0, 0, unit);
                 self.stability_frames = frames.round() as u32;
                 let response = response.on_hover_text(match language {
-                    Language::English => "Consecutive identical frames required before saving. Higher values reduce accidental captures.",
-                    Language::Chinese => "保存前需要连续相同帧的数量。数值越高，误捕获越少。",
+                    Language::English => "Consecutive identical frames required before saving. Transition animations keep the counter at zero, so only the settled slide is captured.",
+                    Language::Chinese => "保存前需要连续相同的帧数。过渡动画期间计数会归零，只截取动画结束后的画面。",
                 });
                 if response.changed() {
                     self.changed = true;
