@@ -94,7 +94,7 @@ The **Settings** page decides what counts as a new slide. The defaults suit an o
 
 ## Appearance
 
-The **Appearance** page sets how the window looks; every change applies as you click and is remembered in `ppt-auto-capture-config.json`, which the app reads and writes in its working directory (the folder it was launched from).
+The **Appearance** page sets how the window looks; every change applies as you click and is remembered in `ppt-auto-capture-config.json`. The file lives in the per-user settings directory for each platform — `~/Library/Application Support/PPT Auto Capture/` on macOS, `%APPDATA%\PPT Auto Capture\` on Windows, and `$XDG_CONFIG_HOME/ppt-auto-capture/` (usually `~/.config/`) on Linux. A settings file left next to the executable by an older release is read once and copied into that directory.
 
 - **Light / Dark / Match system** — the palette covers the workspace, sidebar, cards, banners, and controls, so recorded screenshots are the only thing that stays untouched. *Match system* re-checks the operating system's appearance while the window is open.
 - **Background picture** — choose a PNG, JPEG, BMP, or WebP file and it is scaled to fill the workspace behind the cards. The cards themselves stay opaque, so text keeps its contrast. The picture is downscaled to at most 2560 px on its longest side before it reaches the GPU, and the file is only read: moving it later just brings back the solid background with a note on the page.

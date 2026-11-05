@@ -8,6 +8,29 @@
 内容作为 GitHub Release 正文发布，缺少这一节的分支在 preflight 直接失败，所以
 Releases 页面上的说明始终与实际改动一致。
 
+## [2.15.0] - 2026-11-05
+
+### 修复
+
+- **macOS 上设置存不下来，重启后外观、语言、输出目录全部还原。** 配置文件原先写在工作目录里：
+  Windows 双击 exe 时工作目录就是 exe 所在目录，一切正常；但 macOS 从访达或启动台打开 `.app`
+  时工作目录是 `/`，写入直接失败，于是每次启动都从默认值开始，点「开始」还会报
+  `Unable to save recording settings for recovery`。
+- **配置文件改到固定的用户目录**：macOS 为 `~/Library/Application Support/PPT Auto Capture/`，
+  Windows 为 `%APPDATA%\PPT Auto Capture\`，Linux 为 `$XDG_CONFIG_HOME/ppt-auto-capture/`
+  （未设置时是 `~/.config/`）。保存时自动创建目录；平台给不出可用目录时退回原来的工作目录，
+  不会因为取不到路径就拒绝保存。
+
+### 变更
+
+- 旧版本留在工作目录（exe 旁边）的 `ppt-auto-capture-config.json` 会在首次启动时读取并复制到新目录，
+  再写入配置就不再依赖启动目录，升级不会丢设置。新目录里的文件优先，旧文件不会被删除。
+
+### 测试
+
+- 新增：三个平台的配置目录解析、缺少家目录时回退到工作目录、保存自动建目录并读回、
+  旧位置迁移、新位置优先、配置路径必须是绝对路径而不是工作目录。
+
 ## [2.14.1] - 2026-11-05
 
 ### 修复
