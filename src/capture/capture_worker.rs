@@ -50,6 +50,8 @@ pub enum WorkerEvent {
         slide_number: u32,
         png_filename: String,
     },
+    /// Screenshots deleted while recording were left out of the deck.
+    SlidesSkipped(usize),
     MonitorLost(String),
     Error(String),
     TestFrame(Vec<u8>, u32, u32),
@@ -879,11 +881,24 @@ impl WorkerLoop {
             if session.completed {
                 return true;
             }
-            if let Err(error) = session.finish() {
-                let _ = self.event_tx.send(WorkerEvent::Error(format!(
-                    "Session finalization failed: {error:#}"
-                )));
-                return false;
+            match session.finish() {
+                Ok(report) => {
+                    if report.skipped > 0 {
+                        warn!(
+                            "{} screenshot(s) were removed while recording; the deck was built from the remaining {} page(s)",
+                            report.skipped, report.published
+                        );
+                        let _ = self
+                            .event_tx
+                            .send(WorkerEvent::SlidesSkipped(report.skipped));
+                    }
+                }
+                Err(error) => {
+                    let _ = self.event_tx.send(WorkerEvent::Error(format!(
+                        "Session finalization failed: {error:#}"
+                    )));
+                    return false;
+                }
             }
         }
         true
@@ -1014,6 +1029,42 @@ fn capture_backend_unavailable_message() -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_screenshot_deleted_while_recording_does_not_block_stopping() {
+        let root = tempfile::tempdir().unwrap();
+        let (commands, rx) = crossbeam_channel::unbounded();
+        let (events, received) = worker_event_channel();
+        let mut worker = WorkerLoop::new(rx, events);
+        let session = SessionStore::create(root.path(), "deck.pptx", "16:9", "fit").unwrap();
+        let folder = session.directory.clone();
+        worker.session = Some(session);
+        for value in [10u8, 200u8] {
+            worker
+                .save_frame(&Frame::new(
+                    vec![value, 0, 0, 255],
+                    1,
+                    1,
+                    4,
+                    value as u64,
+                    0,
+                ))
+                .unwrap();
+        }
+        // The user removes a duplicate page from the folder while recording.
+        std::fs::remove_file(folder.join("slides/slide_0001.png")).unwrap();
+        commands.send(WorkerCommand::Stop).unwrap();
+        worker.process_commands();
+        assert_eq!(worker.state, CaptureState::Stopped);
+        assert!(SessionStore::open(&folder).unwrap().completed);
+        assert!(received
+            .try_iter()
+            .any(|event| matches!(event, WorkerEvent::SlidesSkipped(1))));
+        let mut zip =
+            zip::ZipArchive::new(std::fs::File::open(folder.join("deck.pptx")).unwrap()).unwrap();
+        assert!(zip.by_name("ppt/slides/slide1.xml").is_ok());
+        assert!(zip.by_name("ppt/slides/slide2.xml").is_err());
+    }
 
     #[test]
     fn failed_pptx_generation_can_stop_and_preserve_a_recoverable_session() {

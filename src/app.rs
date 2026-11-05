@@ -888,6 +888,15 @@ impl PptAutoCaptureApp {
                         message,
                     ));
                 }
+                WorkerEvent::SlidesSkipped(count) => {
+                    let message = i18n::t_slides_skipped(self.language, count);
+                    warn!("{message}");
+                    self.diagnostic_history.push(DiagnosticEntry::new(
+                        DiagnosticLevel::Warning,
+                        "session",
+                        message,
+                    ));
+                }
                 WorkerEvent::FinalizationFailed => {
                     self.dashboard.stopping = false;
                     self.close_after_stop = false;

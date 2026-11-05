@@ -64,8 +64,14 @@ pub fn recover_session(output_dir: &Path) -> Result<Vec<PathBuf>> {
     let mut recovered = Vec::new();
     for mut session in sessions(output_dir)? {
         if !session.completed && !session.records.is_empty() {
-            session.recover()?;
-            recovered.extend(session.output_paths());
+            let report = session.recover()?;
+            info!(
+                "Session recovery wrote {} slide(s), skipped {}",
+                report.published, report.skipped
+            );
+            // A part whose pages were all removed keeps no deck; report only
+            // what this recovery actually wrote.
+            recovered.extend(report.decks.iter().filter(|p| p.is_file()).cloned());
         }
     }
     let Some(records) = legacy_incomplete_session(output_dir)? else {
@@ -227,13 +233,15 @@ mod tests {
     }
 
     #[test]
-    fn missing_image_never_marks_recovery_complete_or_replaces_good_deck() {
+    fn deleted_screenshot_is_skipped_so_recovery_can_finish_and_keeps_the_good_deck() {
         let root = tempfile::tempdir().unwrap();
         let session = captured_session(root.path());
         let old = std::fs::read(session.output_path()).unwrap();
         std::fs::remove_file(session.directory.join("slides/slide_0001.png")).unwrap();
-        assert!(recover_session(root.path()).is_err());
-        assert!(!SessionStore::open(&session.directory).unwrap().completed);
+        // The only page was deleted, so nothing is rebuilt and no path is
+        // advertised; the session still completes instead of blocking forever.
+        assert!(recover_session(root.path()).unwrap().is_empty());
+        assert!(SessionStore::open(&session.directory).unwrap().completed);
         assert_eq!(std::fs::read(session.output_path()).unwrap(), old);
     }
 

@@ -2,10 +2,32 @@ use super::ImageStore;
 use crate::model::{Frame, SlideRecord};
 use crate::pptx::PptxWriter;
 use anyhow::{ensure, Context, Result};
+use log::warn;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
 pub(super) const SLIDES_PER_DECK: usize = 50;
+
+/// What a finalization actually wrote.
+///
+/// A screenshot the user removed from the session folder is not a failure: the
+/// deck is built from the pages that are still there and `skipped` reports how
+/// many were left out.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct PublishReport {
+    pub published: usize,
+    pub skipped: usize,
+    /// Decks written by this call, so recovery never reports a stale file.
+    pub decks: Vec<PathBuf>,
+}
+
+impl PublishReport {
+    fn merge(&mut self, other: Self) {
+        self.published += other.published;
+        self.skipped += other.skipped;
+        self.decks.extend(other.decks);
+    }
+}
 
 /// Durable source of truth: images first, journal second, published deck last.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -59,6 +81,30 @@ fn png_matches_frame(path: &Path, frame: &Frame) -> bool {
             })
             .is_some_and(|bgr| bgr == [pixel[2], pixel[1], pixel[0]])
     })
+}
+
+/// A cheap integrity probe: the PNG signature plus a trailing IEND chunk.
+///
+/// A page that fails this is treated as gone, so a manual deletion — or a
+/// half-written file — can never wedge the stop.
+fn screenshot_readable(path: &Path) -> bool {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut header = [0u8; 8];
+    if file.read_exact(&mut header).is_err() || header != *b"\x89PNG\r\n\x1a\n" {
+        return false;
+    }
+    let Ok(length) = file.metadata().map(|m| m.len()) else {
+        return false;
+    };
+    if length < 16 || file.seek(SeekFrom::End(-8)).is_err() {
+        return false;
+    }
+    // The final eight bytes are the IEND chunk type followed by its CRC.
+    let mut trailer = [0u8; 8];
+    file.read_exact(&mut trailer).is_ok() && trailer.starts_with(b"IEND")
 }
 
 impl SessionStore {
@@ -135,28 +181,19 @@ impl SessionStore {
         self.output_path_for_part(part)
     }
 
-    pub fn output_paths(&self) -> Vec<PathBuf> {
-        let limit = self
-            .max_slides_per_deck
-            .unwrap_or(self.records.len().max(1));
-        self.records
-            .chunks(limit)
-            .enumerate()
-            .map(|(part, _)| self.output_path_for_part(part))
-            .collect()
-    }
-
     pub fn checkpoint_for_recovery(&self) -> Result<()> {
         ensure!(!self.completed, "Session is already completed");
         for record in &self.records {
             let path = self.directory.join("slides").join(&record.png_filename);
-            let metadata = std::fs::metadata(&path)
-                .with_context(|| format!("Missing saved screenshot: {}", path.display()))?;
-            ensure!(
-                metadata.is_file() && metadata.len() > 0,
-                "Invalid saved screenshot: {}",
-                path.display()
-            );
+            // The journal stays valid even when a page was deleted by hand; the
+            // deck simply leaves it out. Refusing here would trap the user in a
+            // recording that cannot be stopped.
+            if !screenshot_readable(&path) {
+                warn!(
+                    "Screenshot {} is missing or unreadable; keeping it out of the deck",
+                    path.display()
+                );
+            }
         }
         let expected = serde_json::to_vec(self)?;
         if std::fs::read(self.directory.join("session.json"))
@@ -200,7 +237,7 @@ impl SessionStore {
         if self.version >= 3 {
             Ok(())
         } else {
-            self.publish_at(index)
+            self.publish_at(index).map(|_| ())
         }
     }
 
@@ -240,17 +277,19 @@ impl SessionStore {
         Ok(())
     }
 
-    pub fn publish(&self) -> Result<()> {
+    pub fn publish(&self) -> Result<PublishReport> {
         let limit = self
             .max_slides_per_deck
             .unwrap_or(self.records.len().max(1));
+        let mut report = PublishReport::default();
         for (part, records) in self.records.chunks(limit).enumerate() {
-            self.publish_part(part, records)?;
+            let part_report = self.publish_part(part, records)?;
+            report.merge(part_report);
         }
-        Ok(())
+        Ok(report)
     }
 
-    fn publish_at(&self, index: usize) -> Result<()> {
+    fn publish_at(&self, index: usize) -> Result<PublishReport> {
         let limit = self.max_slides_per_deck.unwrap_or(self.records.len());
         let part = index / limit;
         let start = part * limit;
@@ -258,32 +297,58 @@ impl SessionStore {
         self.publish_part(part, &self.records[start..end])
     }
 
-    fn publish_part(&self, part: usize, records: &[SlideRecord]) -> Result<()> {
-        let records: Vec<_> = records
+    fn publish_part(&self, part: usize, records: &[SlideRecord]) -> Result<PublishReport> {
+        let slides_dir = self.directory.join("slides");
+        let mut report = PublishReport::default();
+        let mut available = Vec::with_capacity(records.len());
+        for record in records {
+            let path = slides_dir.join(&record.png_filename);
+            if screenshot_readable(&path) {
+                available.push(record);
+            } else {
+                warn!(
+                    "Skipping slide {}: {} is missing or unreadable",
+                    record.slide_number,
+                    path.display()
+                );
+                report.skipped += 1;
+            }
+        }
+        if available.is_empty() {
+            return Ok(report);
+        }
+        let records: Vec<_> = available
             .iter()
             .enumerate()
             .map(|(index, record)| {
-                let mut local = record.clone();
+                let mut local = (*record).clone();
                 local.slide_number = (index + 1) as u32;
                 local
             })
             .collect();
-        PptxWriter::new(&self.output_path_for_part(part), &self.ratio, &self.fit)
-            .write_slides(&records, &self.directory.join("slides"))
+        report.published = records.len();
+        let output = self.output_path_for_part(part);
+        PptxWriter::new(&output, &self.ratio, &self.fit).write_slides(&records, &slides_dir)?;
+        report.decks.push(output);
+        Ok(report)
     }
 
-    pub fn finish(&mut self) -> Result<()> {
-        if self.version >= 3 {
-            self.publish()?;
+    pub fn finish(&mut self) -> Result<PublishReport> {
+        let report = if self.version >= 3 {
+            self.publish()?
         } else if !self.records.is_empty() {
-            self.publish_at(self.records.len() - 1)?;
-        }
-        self.mark_completed()
+            self.publish_at(self.records.len() - 1)?
+        } else {
+            PublishReport::default()
+        };
+        self.mark_completed()?;
+        Ok(report)
     }
 
-    pub fn recover(&mut self) -> Result<()> {
-        self.publish()?;
-        self.mark_completed()
+    pub fn recover(&mut self) -> Result<PublishReport> {
+        let report = self.publish()?;
+        self.mark_completed()?;
+        Ok(report)
     }
 
     fn mark_completed(&mut self) -> Result<()> {
@@ -326,6 +391,83 @@ mod tests {
                 .by_name(&format!("ppt/slides/slide{}.xml", count + 1))
                 .is_err());
         }
+    }
+
+    #[test]
+    fn finish_skips_a_screenshot_deleted_while_recording() {
+        let root = tempfile::tempdir().unwrap();
+        let mut session = SessionStore::create(root.path(), "deck.pptx", "16:9", "fit").unwrap();
+        for page in 1..=3 {
+            let mut entry = record();
+            entry.slide_number = page;
+            entry.png_filename = format!("slide_{page:04}.png");
+            entry.png_relative_path = format!("slides/slide_{page:04}.png");
+            entry.content_hash = format!("{page}");
+            session.save(&frame(), entry).unwrap();
+        }
+        std::fs::remove_file(session.directory.join("slides/slide_0002.png")).unwrap();
+        let report = session.finish().unwrap();
+        assert_eq!((report.published, report.skipped), (2, 1));
+        assert_eq!(report.decks, vec![session.output_path()]);
+        assert!(session.completed);
+        let mut zip =
+            zip::ZipArchive::new(std::fs::File::open(session.output_path()).unwrap()).unwrap();
+        assert!(zip.by_name("ppt/slides/slide2.xml").is_ok());
+        assert!(zip.by_name("ppt/slides/slide3.xml").is_err());
+    }
+
+    #[test]
+    fn an_empty_screenshot_file_is_skipped_too() {
+        let root = tempfile::tempdir().unwrap();
+        let mut session = SessionStore::create(root.path(), "deck.pptx", "16:9", "fit").unwrap();
+        let mut entry = record();
+        entry.frame_index = 9;
+        session.save(&frame(), entry).unwrap();
+        std::fs::write(session.directory.join("slides/slide_0001.png"), b"").unwrap();
+        let report = session.finish().unwrap();
+        assert_eq!((report.published, report.skipped), (0, 1));
+        assert!(report.decks.is_empty());
+        assert!(session.completed);
+        assert!(!session.output_path().exists());
+    }
+
+    #[test]
+    fn a_truncated_screenshot_is_skipped_instead_of_blocking_the_stop() {
+        let root = tempfile::tempdir().unwrap();
+        let mut session = SessionStore::create(root.path(), "deck.pptx", "16:9", "fit").unwrap();
+        let mut entry = record();
+        entry.frame_index = 11;
+        session.save(&frame(), entry).unwrap();
+        let path = session.directory.join("slides/slide_0001.png");
+        let bytes = std::fs::read(&path).unwrap();
+        std::fs::write(&path, &bytes[..bytes.len() / 2]).unwrap();
+        let report = session.finish().unwrap();
+        assert_eq!((report.published, report.skipped), (0, 1));
+        assert!(session.completed);
+    }
+
+    #[test]
+    fn deleted_screenshot_does_not_block_preserving_the_session() {
+        let root = tempfile::tempdir().unwrap();
+        let mut session = SessionStore::create(root.path(), "deck.pptx", "16:9", "fit").unwrap();
+        for page in 1..=2 {
+            let mut entry = record();
+            entry.slide_number = page;
+            entry.png_filename = format!("slide_{page:04}.png");
+            entry.png_relative_path = format!("slides/slide_{page:04}.png");
+            entry.content_hash = format!("{page}");
+            session.save(&frame(), entry).unwrap();
+        }
+        std::fs::remove_file(session.directory.join("slides/slide_0001.png")).unwrap();
+        session.checkpoint_for_recovery().unwrap();
+        assert!(!session.completed);
+        assert_eq!(
+            SessionStore::open(&session.directory)
+                .unwrap()
+                .records
+                .len(),
+            2
+        );
     }
 
     #[test]

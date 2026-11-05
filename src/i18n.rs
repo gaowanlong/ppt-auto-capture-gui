@@ -162,6 +162,17 @@ pub fn t_delete_folder_failed(lang: Language) -> &'static str {
         Language::Chinese => "录制文件夹仍被占用，请关闭占用它的程序后重试。",
     }
 }
+
+pub fn t_slides_skipped(lang: Language, count: usize) -> String {
+    match lang {
+        Language::English => format!(
+            "{count} screenshot(s) were deleted while recording; those pages were left out of the deck."
+        ),
+        Language::Chinese => {
+            format!("录制期间有 {count} 张截图被删除，成稿已跳过这些页面；其余页面已正常生成。")
+        }
+    }
+}
 pub fn t_manage_recording_folders(lang: Language) -> &'static str {
     match lang {
         Language::English => "Manage recording folders…",
