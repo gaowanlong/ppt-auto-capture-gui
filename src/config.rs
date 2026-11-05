@@ -444,9 +444,11 @@ mod tests {
             .join(AppConfig::CONFIG_FILE);
         assert!(!path.parent().unwrap().exists());
 
-        let mut config = AppConfig::default();
-        config.sample_interval_ms = 500;
-        config.theme_mode = ThemeMode::Dark;
+        let config = AppConfig {
+            sample_interval_ms: 500,
+            theme_mode: ThemeMode::Dark,
+            ..AppConfig::default()
+        };
         config.save_to(&path).unwrap();
 
         let restored = AppConfig::read(&path).expect("saved settings should load");
@@ -486,8 +488,10 @@ mod tests {
             .join("config")
             .join("ppt-auto-capture-config.json");
 
-        let mut old = AppConfig::default();
-        old.stability_frames = 5;
+        let old = AppConfig {
+            stability_frames: 5,
+            ..AppConfig::default()
+        };
         old.save_to(&legacy).unwrap();
         assert!(!current.exists());
 
@@ -507,11 +511,15 @@ mod tests {
         let legacy = dir.path().join("old.json");
         let current = dir.path().join("new.json");
 
-        let mut old = AppConfig::default();
-        old.stability_frames = 5;
+        let old = AppConfig {
+            stability_frames: 5,
+            ..AppConfig::default()
+        };
         old.save_to(&legacy).unwrap();
-        let mut new = AppConfig::default();
-        new.stability_frames = 3;
+        let new = AppConfig {
+            stability_frames: 3,
+            ..AppConfig::default()
+        };
         new.save_to(&current).unwrap();
 
         let loaded = AppConfig::load_migrating(&current, &legacy).expect("current settings");
