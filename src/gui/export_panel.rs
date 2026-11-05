@@ -31,6 +31,9 @@ pub struct ExportPanel {
     pub source_dir: String,
     pub source_pptx: String,
     pub placement: CropPlacement,
+    /// Gates the trimming run. The option only exists on this page, which turns
+    /// one PPTX into another, so the checkbox is the operation itself.
+    pub crop_enabled: bool,
     pub status: String,
     pub output_to_open: Option<PathBuf>,
     open_requested: bool,
@@ -61,6 +64,7 @@ impl ExportPanel {
             source_dir: String::new(),
             source_pptx: String::new(),
             placement: CropPlacement::FillArea,
+            crop_enabled: true,
             status: String::new(),
             output_to_open: None,
             open_requested: false,
@@ -189,7 +193,7 @@ impl ExportPanel {
         });
     }
 
-    fn deck_settings_card(&mut self, ui: &mut egui::Ui, language: Language, cropped: bool) {
+    fn deck_settings_card(&mut self, ui: &mut egui::Ui, language: Language, from_deck: bool) {
         theme::card().show(ui, |ui| {
             ui.set_width(ui.available_width());
             theme::section_title(ui, i18n::t_export_deck_card(language));
@@ -219,7 +223,7 @@ impl ExportPanel {
                         .clicked()
                     {
                         self.settings.filename_is_custom = false;
-                        self.settings.output_filename = if cropped {
+                        self.settings.output_filename = if from_deck {
                             self.cropped_filename()
                         } else {
                             format!(
@@ -232,8 +236,14 @@ impl ExportPanel {
             });
             ui.add_space(8.0);
 
-            if cropped {
+            if from_deck {
                 theme::divider(ui);
+                ui.checkbox(&mut self.crop_enabled, i18n::t_trim_crop_label(language));
+                ui.label(theme::muted(i18n::t_trim_crop_hint(language), 11.5));
+                if !self.crop_enabled {
+                    return;
+                }
+                ui.add_space(8.0);
                 let wide = ui.available_width() >= 560.0;
                 field_row(ui, wide, i18n::t_export_placement(language), |ui| {
                     ui.vertical(|ui| {
@@ -313,26 +323,26 @@ impl ExportPanel {
                     &fit_options,
                 );
             }
-
-            theme::divider(ui);
-            ui.checkbox(
-                &mut self.settings.auto_crop,
-                i18n::t_export_crop_label(language),
-            );
-            ui.label(theme::muted(i18n::t_export_crop_hint(language), 11.5));
         });
+    }
+
+    /// Whether the page's primary action may run. Only the deck page trims, and
+    /// there the checkbox is the operation, so the action stays disabled until
+    /// it is ticked.
+    fn can_start(&self) -> bool {
+        match self.mode {
+            ExportMode::Images => !self.source_dir.trim().is_empty(),
+            ExportMode::Deck => {
+                self.crop_enabled
+                    && !self.source_pptx.trim().is_empty()
+                    && Path::new(self.source_pptx.trim()).is_file()
+            }
+        }
     }
 
     fn actions(&mut self, ui: &mut egui::Ui, language: Language) {
         ui.horizontal(|ui| {
-            let ready = self.export.is_none()
-                && match self.mode {
-                    ExportMode::Images => !self.source_dir.trim().is_empty(),
-                    ExportMode::Deck => {
-                        !self.source_pptx.trim().is_empty()
-                            && Path::new(self.source_pptx.trim()).is_file()
-                    }
-                };
+            let ready = self.export.is_none() && self.can_start();
             let label = match self.mode {
                 ExportMode::Images => i18n::t_export_generate(language),
                 ExportMode::Deck => i18n::t_export_crop_generate(language),
@@ -360,6 +370,8 @@ impl ExportPanel {
                     && !Path::new(self.source_pptx.trim()).is_file()
                 {
                     ui.label(theme::muted(i18n::t_export_pptx_missing(language), 12.0));
+                } else if self.mode == ExportMode::Deck && !self.crop_enabled {
+                    ui.label(theme::muted(i18n::t_trim_crop_required(language), 12.0));
                 }
             }
             if self.export.is_some() {
@@ -436,6 +448,10 @@ impl ExportPanel {
             self.status = i18n::t_export_pptx_missing(language).to_string();
             return;
         }
+        if !self.crop_enabled {
+            self.status = i18n::t_trim_crop_required(language).to_string();
+            return;
+        }
         let destination = PathBuf::from(self.settings.output_dir.trim());
         let filename = if self.settings.filename_is_custom {
             self.settings.output_filename.clone()
@@ -497,7 +513,6 @@ impl ExportPanel {
         self.settings.output_filename = filename.clone();
         let ratio = self.settings.page_ratio.clone();
         let fit = self.settings.image_fit.clone();
-        let auto_crop = self.settings.auto_crop;
         let (tx, rx) = mpsc::sync_channel(32);
         let spawned = std::thread::Builder::new()
             .name("pptx-import".into())
@@ -509,7 +524,6 @@ impl ExportPanel {
                         &filename,
                         &ratio,
                         &fit,
-                        auto_crop,
                         |done, total| {
                             if done == total {
                                 let _ = tx.send(ExportMessage::Progress(done, total));
@@ -930,6 +944,37 @@ mod tests {
         assert!(status_is_error("Export failed: disk full"));
         assert!(status_is_error("生成失败：磁盘已满"));
         assert!(!status_is_error("Generated 2 PPTX file(s)"));
+    }
+
+    #[test]
+    fn deck_page_only_starts_once_the_crop_option_is_ticked() {
+        let work = tempfile::tempdir().unwrap();
+        let mut settings = OutputPanel::new_with_filename("deck.pptx");
+        settings.output_dir = work.path().display().to_string();
+        let source = work.path().join("input.pptx");
+        std::fs::write(&source, b"placeholder").unwrap();
+        let mut panel = ExportPanel::new(&settings);
+        panel.mode = ExportMode::Deck;
+        panel.source_pptx = source.display().to_string();
+        assert!(panel.crop_enabled, "the deck page starts ready to trim");
+        assert!(panel.can_start());
+        panel.crop_enabled = false;
+        assert!(!panel.can_start());
+        panel.start(Language::Chinese);
+        assert_eq!(panel.status, i18n::t_trim_crop_required(Language::Chinese));
+        assert!(!panel.is_busy());
+    }
+
+    #[test]
+    fn images_page_has_no_crop_option_to_gate_it() {
+        let source = tempfile::tempdir().unwrap();
+        let mut panel = ExportPanel::new(&OutputPanel::new_with_filename("deck.pptx"));
+        panel.mode = ExportMode::Images;
+        panel.source_dir = source.path().display().to_string();
+        // The flag belongs to the deck page; it must not block a build from
+        // screenshots, where no trimming is offered at all.
+        panel.crop_enabled = false;
+        assert!(panel.can_start());
     }
 
     #[test]

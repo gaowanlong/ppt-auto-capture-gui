@@ -139,7 +139,14 @@ pub fn crop_deck_images(
         }
     }
     if candidates.is_empty() {
-        bail!("No embedded slide screenshots were found in this PPTX");
+        let pictures: usize = edits.iter().map(|slide| slide.pictures.len()).sum();
+        if pictures == 0 {
+            bail!("This PPTX has no pictures on its slides, so there is nothing to trim");
+        }
+        bail!(
+            "Nothing to trim: none of the {pictures} pictures on these slides is a slide \
+             screenshot (already cropped, rotated, too small, or off the page)"
+        );
     }
 
     let reference = build_reference(&mut archive, &candidates);
@@ -169,14 +176,17 @@ pub fn crop_deck_images(
             CropPlacement::KeepScale => candidate.geometry.trimmed(crop),
             CropPlacement::FillArea => candidate.geometry.filled(crop, slide_size),
         };
-        if geometry == candidate.geometry {
-            continue;
-        }
-        if let Some(slide) = edits
-            .iter_mut()
-            .find(|slide| slide.index == candidate.slide)
-        {
-            slide.fixes.push((candidate.position, geometry));
+        // A full-bleed picture keeps its frame: the trimmed pixels already
+        // have the page's aspect, so only the media part changes. Counting
+        // geometry changes alone reported "nothing to trim" for exactly those
+        // decks while the images had in fact been rewritten.
+        if geometry != candidate.geometry {
+            if let Some(slide) = edits
+                .iter_mut()
+                .find(|slide| slide.index == candidate.slide)
+            {
+                slide.fixes.push((candidate.position, geometry));
+            }
         }
         cropped += 1;
     }
@@ -938,6 +948,17 @@ mod tests {
 
     /// Build a minimal PPTX whose slides each embed one screenshot.
     fn build_deck(path: &Path, geometry: Geometry, slide_count: usize) {
+        build_deck_with(path, geometry, slide_count, |number| {
+            screenshot(number as u8)
+        });
+    }
+
+    fn build_deck_with(
+        path: &Path,
+        geometry: Geometry,
+        slide_count: usize,
+        media: impl Fn(u32) -> Vec<u8>,
+    ) {
         let file = File::create(path).unwrap();
         let mut zip = ZipWriter::new(file);
         let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
@@ -976,7 +997,7 @@ mod tests {
             zip.write_all(rels.as_bytes()).unwrap();
             zip.start_file(format!("ppt/media/image{number}.png"), options)
                 .unwrap();
-            zip.write_all(&screenshot(number as u8)).unwrap();
+            zip.write_all(&media(number as u32)).unwrap();
         }
         zip.finish().unwrap();
     }
@@ -1215,6 +1236,64 @@ mod tests {
         assert_eq!(attribute(tag, "y").as_deref(), Some("34"));
         assert!(attribute(tag, "cx").is_none());
     }
+
+    /// A 16:9 screenshot inside a 16:9 page: trimming leaves a picture whose
+    /// frame is still the whole page, so only the media part changes.
+    fn full_bleed_frame(number: u32) -> Vec<u8> {
+        let mut canvas = image::RgbImage::from_pixel(1600, 900, image::Rgb([34, 34, 34]));
+        let fill =
+            |canvas: &mut image::RgbImage, x0: u32, y0: u32, x1: u32, y1: u32, c: [u8; 3]| {
+                for y in y0..y1 {
+                    for x in x0..x1 {
+                        canvas.put_pixel(x, y, image::Rgb(c));
+                    }
+                }
+            };
+        fill(&mut canvas, 80, 45, 1520, 855, [255, 255, 255]);
+        fill(&mut canvas, 80, 45, 1520, 165, [38, 108, 162]);
+        for block in 0..3u32 {
+            let y = 300 + block * 120;
+            let right = 500 + (block + number) * 80;
+            fill(&mut canvas, 160, y, right, y + 26, [90, 100, 112]);
+        }
+        let mut bytes = Vec::new();
+        canvas
+            .write_to(&mut Cursor::new(&mut bytes), ImageFormat::Png)
+            .unwrap();
+        bytes
+    }
+
+    #[test]
+    fn a_full_bleed_picture_counts_as_trimmed_when_its_frame_stays() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("deck.pptx");
+        build_deck_with(&source, full_page(), 2, full_bleed_frame);
+        let summary = crop_deck_images(
+            &source,
+            dir.path(),
+            "trimmed.pptx",
+            CropPlacement::FillArea,
+            |_, _| {},
+        )
+        .unwrap();
+        assert_eq!(
+            summary.cropped, 2,
+            "a rewritten media part is a trimmed slide even when the frame stays"
+        );
+        let image =
+            image::load_from_memory(&read_media(&summary.output, "ppt/media/image1.png")).unwrap();
+        assert!(
+            image.width() < 1600,
+            "media keeps the window edges: {}x{}",
+            image.width(),
+            image.height()
+        );
+        let slide = read_text(&summary.output, "ppt/slides/slide1.xml");
+        assert!(
+            slide.contains(r#"<a:off x="0" y="0"/>"#),
+            "the page-sized frame must stay put: {slide}"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1259,7 +1338,6 @@ mod pipeline_tests {
             "capture.pptx",
             "16:9",
             "fit",
-            false,
             |_, _| {},
         )
         .unwrap();
@@ -1342,7 +1420,6 @@ mod pipeline_tests {
             "capture.pptx",
             "16:9",
             "fit",
-            false,
             |_, _| {},
         )
         .unwrap();
@@ -1403,7 +1480,6 @@ mod pipeline_tests {
             "blank.pptx",
             "16:9",
             "fit",
-            false,
             |_, _| {},
         )
         .unwrap();

@@ -514,11 +514,7 @@ impl WorkerLoop {
                                 &source.output_filename,
                                 &source.page_ratio,
                                 &source.image_fit,
-                            )
-                            .and_then(|mut session| {
-                                session.set_auto_crop(source.auto_crop)?;
-                                Ok(session)
-                            }) {
+                            ) {
                                 Ok(store) => store,
                                 Err(e) => {
                                     let msg =

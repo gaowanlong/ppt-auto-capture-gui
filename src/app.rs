@@ -179,10 +179,6 @@ impl PptAutoCaptureApp {
         app.output_panel.filename_is_custom = config.filename_is_custom;
         app.output_panel.page_ratio = config.page_ratio.clone();
         app.output_panel.image_fit = config.image_fit.clone();
-        // The capture-time crop is off on every launch: the detector is still
-        // being tuned, and a remembered setting kept producing decks with big
-        // black areas beside a small slide. The checkbox works for one run.
-        app.output_panel.auto_crop = false;
         app.output_panel.keep_previous = config.keep_previous;
         app.export_panel.settings = app.output_panel.clone();
         app.dashboard.minimize_on_start = config.minimize_on_start;
@@ -1060,7 +1056,6 @@ fn apply_output_to_source(panel: &OutputPanel, source: &mut CaptureSource) {
     };
     source.page_ratio = panel.page_ratio.clone();
     source.image_fit = panel.image_fit.clone();
-    source.auto_crop = panel.auto_crop;
 }
 
 fn output_path(panel: &OutputPanel) -> String {
@@ -1709,13 +1704,10 @@ mod tests {
             warning: None,
         }));
         app.output_panel.output_dir = "recording-root".into();
-        app.output_panel.auto_crop = false;
         app.export_panel.settings.output_dir = "export-root".into();
-        app.export_panel.settings.auto_crop = true;
         let mut source = CaptureSource::new(0, String::new(), 1, String::new());
         apply_output_to_source(&app.output_panel, &mut source);
         assert_eq!(source.output_dir, "recording-root");
-        assert!(!source.auto_crop);
     }
 
     #[test]
@@ -2037,7 +2029,6 @@ mod tests {
         panel.page_ratio = "4:3".into();
         panel.image_fit = "fill".into();
         panel.keep_previous = false;
-        panel.auto_crop = true;
 
         let mut source = CaptureSource::new(1, "Slides".into(), 2, "Display".into());
         apply_output_to_source(&panel, &mut source);
@@ -2045,7 +2036,6 @@ mod tests {
         assert_eq!(source.output_filename, "configured.pptx");
         assert_eq!(source.page_ratio, "4:3");
         assert_eq!(source.image_fit, "fill");
-        assert!(source.auto_crop);
         assert_eq!(output_path(&panel), "/tmp/captures/configured.pptx");
 
         let mut config = AppConfig::default();

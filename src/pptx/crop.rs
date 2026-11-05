@@ -2323,6 +2323,14 @@ fn detect_edge_fallback(
     let refined = trim_letterbox_edges(full, refined);
     let refined = trim_static_edges(full, refined, reference);
     let refined = trim_letterbox_edges(full, refined);
+    // A dark deck on dark chrome reaches its slide boundary on the strength of
+    // the reference alone: the slide is navy, the panel around it is gray, and
+    // the edge finder stops on the stronger edges inside the panel. Trimming
+    // the static chrome and the dark border here keeps the ambiguity check
+    // below meaningful instead of discarding the whole screenshot.
+    let refined = trim_dark_area_edges(full, refined);
+    let refined = trim_stable_chrome_edges(full, refined, reference);
+    let refined = trim_letterbox_edges(full, refined);
     if has_chrome_border(full, refined) {
         None
     } else {
@@ -3130,6 +3138,57 @@ mod tests {
             Some(&reference),
         );
         assert_crop(detected, (130, 92, 1180, 904), 2);
+    }
+
+    /// A dark deck inside dark meeting chrome: the slide is navy, the toolbars
+    /// and the participant panel are gray, and almost nothing in the picture is
+    /// bright. This is the layout the edge finder used to give up on.
+    fn dark_deck_frame(frame: usize) -> image::RgbImage {
+        let (width, height) = (1512i64, 982i64);
+        let mut image = canvas(width as u32, height as u32, [10, 10, 12]);
+        fill(&mut image, 1392, 0, width, height, [24, 25, 28]);
+        for row in 0..3 {
+            let top = 40 + row * 300;
+            fill(
+                &mut image,
+                1406,
+                top,
+                width - 14,
+                top + 250,
+                [148, 138, 126],
+            );
+        }
+        fill(&mut image, 0, 0, width, 64, [42, 42, 46]);
+        for icon in 0..11 {
+            let x = 40 + icon * 56;
+            fill(&mut image, x, 18, x + 28, 44, [120, 122, 128]);
+        }
+        fill(&mut image, 0, 869, width, 915, [38, 39, 43]);
+        for icon in 0..13 {
+            let x = 560 + icon * 58;
+            fill(&mut image, x, 884, x + 30, 904, [150, 152, 158]);
+        }
+        fill(&mut image, 0, 0, 120, 915, [26, 27, 30]);
+        fill(&mut image, 120, 154, 1392, 869, [28, 42, 70]);
+        fill(&mut image, 120, 154, 1392, 274, [46, 86, 140]);
+        fill(&mut image, 170, 194, 780, 242, [240, 244, 252]);
+        for block in 0..3i64 {
+            let y = 304 + block * 140;
+            let right = 480 + (frame as i64 + block) * 120;
+            fill(&mut image, 180, y, right, y + 26, [210, 216, 226]);
+        }
+        image
+    }
+
+    #[test]
+    fn crops_a_dark_slide_between_dark_chrome_bands() {
+        let frames: Vec<_> = (0..3).map(dark_deck_frame).collect();
+        let reference = frame_reference_of(&frames);
+        let detected = detect_presentation_with_reference(
+            &DynamicImage::ImageRgb8(frames[0].clone()),
+            Some(&reference),
+        );
+        assert_crop(detected, (120, 154, 1392, 869), 3);
     }
 
     #[test]

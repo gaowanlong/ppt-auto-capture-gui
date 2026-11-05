@@ -9,7 +9,6 @@ pub struct OutputPanel {
     pub filename_is_custom: bool,
     pub page_ratio: String,
     pub image_fit: String,
-    pub auto_crop: bool,
     pub keep_previous: bool,
     pub open_output_requested: bool,
     pub manage_folders_requested: bool,
@@ -24,7 +23,6 @@ impl OutputPanel {
             filename_is_custom: false,
             page_ratio: "16:9".into(),
             image_fit: "fit".into(),
-            auto_crop: false,
             keep_previous: true,
             open_output_requested: false,
             manage_folders_requested: false,
@@ -192,10 +190,6 @@ impl OutputPanel {
                     &fit_options,
                 );
             }
-
-            theme::divider(ui);
-            ui.checkbox(&mut self.auto_crop, i18n::t_auto_crop_label(language));
-            ui.label(theme::muted(i18n::t_auto_crop_hint(language), 11.5));
         });
     }
 

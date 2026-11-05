@@ -19,8 +19,6 @@ pub struct SessionStore {
     // Older v1 journals have no limit and must recover into their original single deck.
     #[serde(default)]
     max_slides_per_deck: Option<usize>,
-    #[serde(default)]
-    auto_crop: bool,
     pub completed: bool,
     pub records: Vec<SlideRecord>,
 }
@@ -85,7 +83,6 @@ impl SessionStore {
             ratio: ratio.into(),
             fit: fit.into(),
             max_slides_per_deck: Some(SLIDES_PER_DECK),
-            auto_crop: false,
             completed: false,
             records: Vec::new(),
         };
@@ -129,20 +126,6 @@ impl SessionStore {
 
     pub fn output_path(&self) -> PathBuf {
         self.output_path_at_count(self.records.len())
-    }
-
-    pub fn set_auto_crop(&mut self, enabled: bool) -> Result<()> {
-        ensure!(
-            self.records.is_empty(),
-            "Cannot change crop settings after capture starts"
-        );
-        let previous = self.auto_crop;
-        self.auto_crop = enabled;
-        if let Err(error) = self.persist() {
-            self.auto_crop = previous;
-            return Err(error);
-        }
-        Ok(())
     }
 
     pub fn output_path_at_count(&self, count: usize) -> PathBuf {
@@ -286,7 +269,6 @@ impl SessionStore {
             })
             .collect();
         PptxWriter::new(&self.output_path_for_part(part), &self.ratio, &self.fit)
-            .with_auto_crop(self.auto_crop)
             .write_slides(&records, &self.directory.join("slides"))
     }
 
@@ -347,11 +329,10 @@ mod tests {
     }
 
     #[test]
-    fn recovery_keeps_crop_setting_and_never_alters_the_original_screenshot() {
+    fn recovery_keeps_the_embedded_image_identical_to_the_screenshot() {
         use std::io::Read;
         let root = tempfile::tempdir().unwrap();
         let mut session = SessionStore::create(root.path(), "deck.pptx", "16:9", "fit").unwrap();
-        session.set_auto_crop(true).unwrap();
         let mut pixels = vec![35u8; 400 * 300 * 4];
         for y in 60..240 {
             for x in 40..360 {
@@ -375,10 +356,12 @@ mod tests {
             .unwrap()
             .read_to_end(&mut embedded)
             .unwrap();
-        let image = image::load_from_memory(&embedded).unwrap();
-        assert!((image.width() as i32 - 320).abs() <= 5);
-        assert!((image.height() as i32 - 180).abs() <= 5);
+        // Recording never trims: the deck has to carry the screenshot as it
+        // was captured, whatever the picture contains.
+        assert_eq!(embedded, original);
         assert_eq!(std::fs::read(original_path).unwrap(), original);
+        let image = image::load_from_memory(&embedded).unwrap();
+        assert_eq!((image.width(), image.height()), (400, 300));
     }
 
     #[test]

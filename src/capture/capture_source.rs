@@ -19,8 +19,6 @@ pub struct CaptureSource {
     pub page_ratio: String,
     /// Image fit mode: "fill" or "fit".
     pub image_fit: String,
-    #[serde(default)]
-    pub auto_crop: bool,
 }
 
 impl CaptureSource {
@@ -40,7 +38,6 @@ impl CaptureSource {
             output_filename: String::from("output.pptx"),
             page_ratio: String::from("16:9"),
             image_fit: String::from("fit"),
-            auto_crop: false,
         }
     }
 

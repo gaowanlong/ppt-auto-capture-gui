@@ -13,7 +13,6 @@ pub fn import_directory(
     filename: &str,
     ratio: &str,
     fit: &str,
-    auto_crop: bool,
     mut progress: impl FnMut(usize, usize),
 ) -> Result<Vec<PathBuf>> {
     let mut images = Vec::new();
@@ -113,7 +112,6 @@ pub fn import_directory(
             .collect();
         let path = directory.join(part_filename(filename, part));
         PptxWriter::new(&path, ratio, fit)
-            .with_auto_crop(auto_crop)
             .write_slides(&records, &directory.join("slides"))
             .with_context(|| format!("Cannot generate PPTX in {}", directory.display()))?;
         paths.push(path);
@@ -186,7 +184,6 @@ mod tests {
             "slides.pptx",
             "16:9",
             "fit",
-            false,
             |done, total| updates.push((done, total)),
         )
         .unwrap();
@@ -230,7 +227,6 @@ mod tests {
             "slides.pptx",
             "16:9",
             "fit",
-            false,
             |_, _| {}
         )
         .is_err());
@@ -251,7 +247,6 @@ mod tests {
             "slides.pptx",
             "16:9",
             "fit",
-            false,
             |_, _| {}
         )
         .is_err());
@@ -277,7 +272,6 @@ mod tests {
             "slides.pptx",
             "16:9",
             "fit",
-            false,
             |_, _| {},
         )
         .unwrap();

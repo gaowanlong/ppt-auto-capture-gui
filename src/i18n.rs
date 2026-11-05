@@ -392,21 +392,27 @@ pub fn t_automatic_name(lang: Language) -> &'static str {
         Language::Chinese => "自动命名",
     }
 }
-pub fn t_auto_crop_label(lang: Language) -> &'static str {
+pub fn t_trim_crop_label(lang: Language) -> &'static str {
     match lang {
-        Language::English => "Auto-crop the slide area when building the PPTX",
-        Language::Chinese => "生成 PPTX 时自动裁剪幻灯片区域",
+        Language::English => "Trim the screenshot edges in this PPTX",
+        Language::Chinese => "裁剪 PPTX 中截图的边缘",
     }
 }
-pub fn t_auto_crop_hint(lang: Language) -> &'static str {
+pub fn t_trim_crop_hint(lang: Language) -> &'static str {
     match lang {
         Language::English => {
-            "Off on every launch; tick it for the current run only. If the slide cannot be \
-             identified, the full frame is kept."
+            "Only offered for a PPTX that stays a PPTX: every screenshot is trimmed to the \
+             presentation area, and the source file is never modified."
         }
         Language::Chinese => {
-            "每次启动都默认关闭，勾选只对本次录制生效。如果无法识别幻灯片，则保留完整画面。"
+            "仅在「输入 PPTX、输出也是 PPTX」时提供：把每张截图裁到演示区域，源文件不会被修改。"
         }
+    }
+}
+pub fn t_trim_crop_required(lang: Language) -> &'static str {
+    match lang {
+        Language::English => "Tick the crop option to start.",
+        Language::Chinese => "勾选裁剪选项后才能开始。",
     }
 }
 pub fn t_output_notes_heading(lang: Language) -> &'static str {
@@ -543,20 +549,6 @@ pub fn t_export_open_folder(lang: Language) -> &'static str {
     match lang {
         Language::English => "Open generated folder",
         Language::Chinese => "打开生成文件夹",
-    }
-}
-pub fn t_export_crop_label(lang: Language) -> &'static str {
-    match lang {
-        Language::English => "Detect and crop the presentation area",
-        Language::Chinese => "识别并裁剪演示区域",
-    }
-}
-pub fn t_export_crop_hint(lang: Language) -> &'static str {
-    match lang {
-        Language::English => {
-            "If detection is uncertain the full image is kept. Originals are unchanged; check the result."
-        }
-        Language::Chinese => "识别不确定时保留完整图片；原始截图不会被修改。请检查生成结果。",
     }
 }
 pub fn t_export_ready_hint(lang: Language) -> &'static str {
