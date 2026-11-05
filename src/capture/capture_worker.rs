@@ -849,13 +849,17 @@ impl WorkerLoop {
 
     fn finish_session(&mut self) -> bool {
         // Stopping inside the settle window must not drop the page that is
-        // already on screen; only a settled frame qualifies here.
-        if let Some(frame) = self.stability_detector.get_pending_frame().cloned() {
-            if let Err(error) = self.save_frame(&frame) {
-                let _ = self.event_tx.send(WorkerEvent::Error(format!(
-                    "Settled slide could not be saved: {error}"
-                )));
-                return false;
+        // already on screen; only a settled frame qualifies here, and only
+        // while a change is actually settling (after a save the detector still
+        // holds the saved frame, which must not be written twice).
+        if self.state == CaptureState::WaitingForStable {
+            if let Some(frame) = self.stability_detector.get_pending_frame().cloned() {
+                if let Err(error) = self.save_frame(&frame) {
+                    let _ = self.event_tx.send(WorkerEvent::Error(format!(
+                        "Settled slide could not be saved: {error}"
+                    )));
+                    return false;
+                }
             }
         }
         if let Some(frame) = self.pending_save.clone() {
@@ -1977,6 +1981,23 @@ mod tests {
         }
         assert_eq!(worker.slide_count, 2);
         worker.finish_session();
+    }
+
+    #[test]
+    fn stopping_after_a_save_never_writes_the_page_twice() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut worker = worker_with_session(&dir);
+        // Duplicate filtering is off, so nothing else would reject a repeat.
+        worker.config.filter_duplicates = false;
+        worker.process_frame(&solid(20, 1)).unwrap();
+        worker.process_frame(&solid(120, 2)).unwrap();
+        for index in 0..4 {
+            worker.process_frame(&solid(120, index + 3)).unwrap();
+        }
+        assert_eq!(worker.slide_count, 2);
+        assert!(worker.finish_session());
+        assert_eq!(worker.slide_count, 2);
+        assert_eq!(worker.session.as_ref().unwrap().records.len(), 2);
     }
 
     #[test]
