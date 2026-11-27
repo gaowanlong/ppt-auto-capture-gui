@@ -8,6 +8,32 @@
 内容作为 GitHub Release 正文发布，缺少这一节的分支在 preflight 直接失败，所以
 Releases 页面上的说明始终与实际改动一致。
 
+## [2.16.0] - 2026-11-27
+
+### 新增
+
+- **鸿蒙电脑（HarmonyOS PC / 2in1）版本工程。** 新增独立的 `ohos/` 工程：ArkUI 卡片式界面（录制 / 设置 / 外观 / 创建 PPTX 四页，浅色与深色），
+  Stage 模型 Ability，构建脚本 `scripts/build-ohos.sh`，以及可在本机跑的共享 Rust 核心测试。
+- **核心逻辑直接复用，不做复制。** `ohos/rust_core` 通过 `#[path]` 引入桌面版同一份 `src/pptx`、`src/detection`、
+  `src/storage`、`src/model` 源码；新增 `engine.rs` 复刻桌面采集状态机（首帧保存、重复过滤、过渡动画跳过、动画超时兜底、
+  停止时补存稳定页），`napi_bridge.rs` 导出 `OhosSession`、`openSession`、`recoverSession`、`trimDeck` 给 ArkTS。
+  鸿蒙侧的 PPTX 生成、裁剪、检测行为因此与桌面版一致。
+- **鸿蒙权限与文件适配。** 记录页申请 `ohos.permission.CUSTOM_SCREEN_CAPTURE`（user_grant，API 14+，仅平板/2in1），
+  静默检查与弹窗申请分开；截图走 `screenshot.capture()` 按采样间隔取 BGRA 帧，录制期间自动最小化应用窗口避免自拍。
+  会话写在 `context.filesDir` 沙箱，输出目录经 `DocumentViewPicker` + `fileShare.persistPermission` 持久化，
+  成稿通过 URI 拷到用户目录，不再假设可以直接写公共路径。
+
+### 说明
+
+- 该版本需要提供调试签名的 HAP，可在真机调试；尚未做应用市场签名与上架，也不作为 GitHub Release 的桌面产物发布。
+- ArkTS 工程需由 DevEco Studio 生成 hvigor wrapper 与调试签名；`build-ohos.sh` 只负责 Rust 核心交叉编译和 `.so` 拷贝。
+
+### 测试
+
+- `cargo test --manifest-path ohos/rust_core/Cargo.toml`：168 通过（含桌面版复用模块的测试，以及首帧、重复过滤、
+  过渡帧跳过、停止发布、短帧拒绝五个引擎用例）。
+- `cargo check --manifest-path ohos/rust_core/Cargo.toml --target aarch64-unknown-linux-ohos` 通过。
+
 ## [2.15.0] - 2026-11-05
 
 ### 修复

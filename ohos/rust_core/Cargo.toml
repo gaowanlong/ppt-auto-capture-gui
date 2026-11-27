@@ -1,0 +1,33 @@
+[package]
+name = "ppt-capture-ohos-core"
+version = "2.16.0"
+edition = "2021"
+description = "Shared Rust core and NAPI bridge for the HarmonyOS PC build"
+
+[lib]
+crate-type = ["lib", "cdylib"]
+name = "ppt_capture_ohos_core"
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "webp"] }
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+# N-API crates are OHOS-only. Keeping them behind a target gate lets the shared
+# engine and its tests run on the host, where no HarmonyOS SDK is installed.
+[target.'cfg(target_env = "ohos")'.dependencies]
+napi-ohos = "1.2"
+napi-derive-ohos = "1.2"
+
+[target.'cfg(target_env = "ohos")'.build-dependencies]
+napi-build-ohos = "1.2"
+
+[dev-dependencies]
+tempfile = "3"
+quick-xml = "0.38"

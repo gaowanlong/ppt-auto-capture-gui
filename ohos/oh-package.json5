@@ -1,0 +1,7 @@
+{
+  "modelVersion": "5.0.0",
+  "name": "ppt-capture-ohos",
+  "version": "2.16.0",
+  "description": "HarmonyOS PC build of ppt-auto-capture-gui",
+  "dependencies": {}
+}

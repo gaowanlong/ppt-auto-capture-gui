@@ -1,0 +1,7 @@
+{
+  "string": [
+    { "name": "app_name", "value": "PPT Auto Capture" },
+    { "name": "app_description", "value": "Automatic PowerPoint slide capture" },
+    { "name": "reason_screen_capture", "value": "Captures the presentation screen at a fixed interval so slide changes can be saved into a PPTX. Screenshots are processed on this device." }
+  ]
+}

@@ -206,6 +206,77 @@ CI gates every push to `main` and every tag: the full test suite, a rustfmt chec
 
 On macOS the capture step is `xcap` (CoreGraphics) instead of DXGI/GDI; everything after it — detection, storage, PPTX writing — is the same code. The **Create PPTX** and **Appearance** pages sit beside the panels in the GUI box.
 
+## HarmonyOS PC (2in1)
+
+The `ohos/` directory holds a HarmonyOS PC build that keeps the same capture
+pipeline but replaces the desktop shell:
+
+| Layer | Windows / macOS | HarmonyOS PC |
+|---|---|---|
+| UI | eframe/egui | ArkUI (Stage model), card layout, system font, light/dark |
+| Screen capture | DXGI/GDI, xcap | `screenshot.capture()` on the primary display, sampled at the configured interval |
+| Detection / PPTX / storage | `src/pptx`, `src/detection`, `src/storage`, `src/model` | the **same source files**, compiled into a NAPI `cdylib` |
+| Files | working directory / user path | app sandbox (`context.filesDir`), exported via `DocumentViewPicker` URI |
+| Package | exe / tar.gz / dmg | HAP (`arm64-v8a`) |
+
+`ohos/rust_core/src/lib.rs` includes the four shared modules with `#[path]`, so
+a bug fix to slide detection or PPTX packaging applies to every platform.
+`engine.rs` mirrors the desktop frame-decision state machine: first frame is
+saved on start, duplicates are filtered, transition frames are dropped, an
+animation timeout forces a save for long-running motion, and Stop flushes a
+settled page before publishing. `napi_bridge.rs` exports `OhosSession`,
+`openSession`, `recoverSession` and `trimDeck` to ArkTS.
+
+HarmonyOS applies two platform constraints the desktop build never sees:
+
+- Full-screen capture needs `ohos.permission.CUSTOM_SCREEN_CAPTURE`, a
+  `user_grant` permission available on 2in1/tablet from API 14. The UI checks
+  it silently with `checkAccessTokenSync` and only calls
+  `requestPermissionsFromUser` from a foreground button click. A declined
+  request can be retried from the Record page.
+- Apps cannot write public paths directly. Sessions and generated decks live
+  in `context.filesDir`. The output folder is a `DocumentViewPicker` folder
+  URI with `fileShare.persistPermission` so it survives an app restart; the
+  finished PPTX is copied to a user-chosen file URI. Picker URIs are opaque —
+  never concatenate a path onto them.
+
+### Build and debug
+
+```bash
+export OHOS_SDK=/path/to/ohos-sdk      # contains darwin/native or linux/native
+bash scripts/build-ohos.sh             # NAPI .so + (if hvigorw is present) HAP
+```
+
+Without `hvigorw`, open `ohos/` in DevEco Studio, let it generate the debug
+signature, and run **Build > Build HAP(s)**. Install on the 2in1 device with
+`hdc install <.../entry-default-signed.hap>`. No release certificate is needed
+for a locally debuggable HAP; store submission still needs a real signing
+profile. The desktop release workflow is unchanged — the HAP is not published
+as a GitHub Release asset.
+
+### Verify on a HarmonyOS PC
+
+1. First launch: grant `CUSTOM_SCREEN_CAPTURE` from the Record page; the status
+   line turns green and stays green after a restart.
+2. Start recording with a PPT slideshow on the primary display; the app window
+   minimizes. Flip through three slides, including one with a transition
+   animation, then Stop.
+3. Check the activity log: no half-drawn transition frames, duplicate pages
+   filtered, slide count matches the number of distinct slides. Open the PPTX
+   in WPS/PowerPoint and confirm page size, order and images.
+4. Choose an output folder with the picker, export a PPTX there, kill and
+   restart the app: the folder is still accessible and a second export lands
+   in the same place.
+5. Trim an existing PPTX from **Create PPTX**; verify black borders are gone,
+   the source file is unchanged, and the exported copy opens correctly.
+6. Stability: record for 30 minutes, stop and confirm every slide is present;
+   delete one PNG from `sessions/<id>/slides/` during a recording and confirm
+   Stop still publishes the remaining pages with a skipped count.
+
+`cargo test --manifest-path ohos/rust_core/Cargo.toml` runs the shared core
+tests on any host; `cargo check --manifest-path ohos/rust_core/Cargo.toml
+--target aarch64-unknown-linux-ohos` checks the NAPI module without a device.
+
 ## License
 
 MIT
