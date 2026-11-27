@@ -8,3 +8,10 @@ ppt-auto-capture-config.json
 *.swo
 *~
 .worktrees/
+
+# HarmonyOS build outputs
+/ohos/rust_core/target/
+/ohos/entry/build/
+/ohos/entry/src/main/libs/arm64-v8a/*.so
+/ohos/.hvigor/
+/ohos/node_modules/
